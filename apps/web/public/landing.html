@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="MindEd AA-OS — local-first analytical workspace for real, traceable data analysis.">
+  <title>MindEd AA-OS — Analytical Intelligence</title>
+  <style>
+    :root{--bg:#211207;--surface:#2b1709;--surface2:#351c0b;--border:#694015;--fg:#fff8ed;--muted:#d2b28b;--accent:#e9a23b;--accent2:#f5b84f}
+    [data-theme="light"]{--bg:#eef8ea;--surface:#f6fbf3;--surface2:#e5f2df;--border:#b6d0ad;--fg:#18331d;--muted:#4f6752;--accent:#3c7d4a;--accent2:#286138}
+    *{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 15% 0%,color-mix(in srgb,var(--accent) 14%,transparent),transparent 35%),var(--bg);color:var(--fg);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh}
+    .wrap{max-width:1120px;margin:auto;padding:24px}.nav{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:10px 0 28px}.brand{display:flex;gap:12px;align-items:center;font-weight:800}.mark{width:38px;height:38px;border-radius:12px;background:var(--accent);color:var(--bg);display:grid;place-items:center;font-weight:900}.controls{display:flex;gap:10px}.btn{border:1px solid var(--border);background:var(--surface);color:var(--fg);border-radius:12px;padding:10px 14px;text-decoration:none;font-weight:700;cursor:pointer}.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}.hero{display:grid;grid-template-columns:1.35fr .9fr;gap:24px;align-items:stretch;padding:52px 0}.eyebrow{color:var(--accent2);text-transform:uppercase;letter-spacing:.14em;font-size:12px;font-weight:800}.hero h1{font-size:clamp(42px,7vw,78px);line-height:.98;margin:14px 0 22px;max-width:840px}.hero p{font-size:18px;color:var(--muted);max-width:760px}.card{background:color-mix(in srgb,var(--surface) 90%,transparent);border:1px solid var(--border);border-radius:22px;padding:22px;box-shadow:0 20px 70px color-mix(in srgb,var(--accent) 10%,transparent)}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:24px}.metric strong{display:block;font-size:22px;margin-top:8px}.metric span{color:var(--muted);font-size:13px}.footer{padding:44px 0 18px;color:var(--muted);font-size:12px}@media(max-width:820px){.hero{grid-template-columns:1fr;padding:34px 0}.grid{grid-template-columns:1fr}.nav{align-items:flex-start}.hero h1{font-size:48px}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="nav">
+      <div class="brand"><div class="mark">M</div><div>MindEd AA-OS</div></div>
+      <div class="controls"><button class="btn" id="theme" type="button">☀ Light</button><a class="btn primary" href="/">Open workspace</a></div>
+    </nav>
+    <main>
+      <section class="hero">
+        <div>
+          <div class="eyebrow">Autonomous Analytical Intelligence Operating System</div>
+          <h1>Start with the data. See the evidence immediately.</h1>
+          <p>MindEd is a local-first analytical workspace designed to turn real business data into traceable observations, statistical analysis, verification, and decision support.</p>
+          <p><strong>Every displayed metric should be traceable to an ingested dataset version.</strong> Instant profiling is deterministic; deeper investigations remain evidence-gated.</p>
+          <div class="controls" style="margin-top:26px"><a class="btn primary" href="/datasets">Ingest a dataset</a><a class="btn" href="/analyst">Open analyst</a></div>
+        </div>
+        <div class="card">
+          <div class="eyebrow">After ingestion</div>
+          <h2 style="margin:8px 0 10px">Instant numeric profile</h2>
+          <div class="grid" style="grid-template-columns:1fr 1fr">
+            <div class="metric"><span>Mean</span><strong>Observed</strong></div>
+            <div class="metric"><span>Mode</span><strong>Observed</strong></div>
+            <div class="metric"><span>Variance</span><strong>Observed</strong></div>
+            <div class="metric"><span>Min / Max</span><strong>Observed</strong></div>
+          </div>
+          <p style="color:var(--muted);font-size:12px;margin-bottom:0">Population variance; missing numeric values are excluded. Source version and SHA-256 remain visible in the workspace.</p>
+        </div>
+      </section>
+      <section class="grid">
+        <div class="card metric"><span>Local-first</span><strong>Your data stays in your workspace</strong><span>No hosted analysis service is required for the core workflow.</span></div>
+        <div class="card metric"><span>Deterministic first pass</span><strong>Real calculations</strong><span>Descriptive statistics are computed from the ingested data, not generated from a language model.</span></div>
+        <div class="card metric"><span>Evidence-led</span><strong>Claims have a trail</strong><span>Investigation results can expose execution, verification, provenance, and limitations.</span></div>
+      </section>
+    </main>
+    <footer class="footer">MindEd AA-OS · local analytical intelligence · <a href="/" style="color:var(--accent2)">Open workspace</a></footer>
+  </div>
+  <script>
+    const key='minded-theme';
+    const root=document.documentElement;
+    const stored=localStorage.getItem(key);
+    if(stored==='light'||stored==='dark') root.dataset.theme=stored;
+    const btn=document.getElementById('theme');
+    const label=()=>btn.textContent=root.dataset.theme==='dark'?'☀ Light':'🌙 Dark';
+    label();
+    btn.addEventListener('click',()=>{root.dataset.theme=root.dataset.theme==='dark'?'light':'dark';localStorage.setItem(key,root.dataset.theme);label();});
+  </script>
+</body>
+</html>

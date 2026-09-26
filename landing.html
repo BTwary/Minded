@@ -1,0 +1,1544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MindEd AA-OS — Autonomous Analytical Intelligence Operating System</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" href="/favicon.ico">
+<link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap'>
+<script src='https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js'></script>
+<script src='https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js'></script>
+<script src='https://cdn.jsdelivr.net/npm/lenis@1.3.13/dist/lenis.min.js'></script>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --jungle-deep:      #020904;
+  --jungle-primary:   #05150a;
+  --jungle-mid:       #0a2212;
+  --jungle-surface:   #0e2d19;
+  --jungle-border:    rgba(212, 175, 55, 0.25);
+  --gold:             #D4AF37;
+  --gold-light:       #F3E5AB;
+  --gold-dark:        #AA820A;
+  --gold-spark:       #FFD700;
+  --ivory:            #F7F7E8;
+  --moss:             #88C28D;
+  --laser-cyan:       #38ef7d;
+  --laser-glow:       rgba(56, 239, 125, 0.35);
+  --serif: 'Cormorant Garamond', 'Times New Roman', serif;
+  --sans: 'Inter', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+  --ease-quiet:    cubic-bezier(.22, 1, .36, 1);
+  --ease-emphasis: cubic-bezier(.16, 1, .3, 1);
+}
+
+html { scroll-behavior: auto; }
+
+body {
+  background: var(--jungle-deep);
+  color: var(--ivory);
+  font-family: var(--sans);
+  font-weight: 300;
+  line-height: 1.6;
+  font-size: 15px;
+  overflow-x: hidden;
+  cursor: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@media (pointer: coarse) { body { cursor: auto; } }
+
+::selection { background: var(--gold); color: var(--jungle-deep); }
+
+/* Ambient Laser & Seismic Grid Background */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(56, 239, 125, 0.08), transparent 60%),
+    radial-gradient(ellipse at 80% 100%, rgba(212, 175, 55, 0.09), transparent 60%),
+    radial-gradient(circle at 50% 50%, rgba(5, 21, 10, 0.6), transparent 85%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(247, 247, 232, 0.015) 3px, rgba(247, 247, 232, 0.015) 4px);
+  pointer-events: none;
+  z-index: 2;
+  mix-blend-mode: overlay;
+}
+
+.cursor-canvas {
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 99999;
+}
+
+/* ==========================================================================
+   TOP SOFTWARE OS CHROME / TELEMETRY BAR
+   ========================================================================== */
+.os-topbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 48px;
+  background: rgba(2, 9, 4, 0.92);
+  border-bottom: 1px solid var(--jungle-border);
+  backdrop-filter: blur(12px);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 1.75rem;
+  z-index: 1000;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.os-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--ivory);
+  text-decoration: none;
+}
+
+.brand-prism {
+  width: 24px; height: 24px;
+  background: var(--jungle-surface);
+  border: 1px solid var(--gold);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 10px rgba(212, 175, 55, 0.3);
+}
+
+.brand-prism svg { width: 14px; height: 14px; color: var(--gold); }
+
+.os-brand__title {
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--ivory);
+}
+
+.os-brand__title em {
+  font-family: var(--sans);
+  font-weight: 800;
+  font-style: normal;
+  background: linear-gradient(135deg, var(--gold), var(--laser-cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.os-telemetry {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.tele-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(14, 45, 25, 0.6);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--gold-light);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.tele-pill--active {
+  color: var(--laser-cyan);
+  border-color: rgba(56, 239, 125, 0.4);
+}
+
+.pulse-dot {
+  width: 6px; height: 6px;
+  background: var(--laser-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--laser-cyan);
+  animation: pulse-glow 1.8s infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.6); opacity: 0.4; }
+}
+
+.os-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.btn-os {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  border-radius: 4px;
+  text-decoration: none;
+  transition: all 0.3s var(--ease-quiet);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-os--primary {
+  background: linear-gradient(135deg, var(--gold), var(--gold-dark));
+  color: var(--jungle-deep);
+  font-weight: 700;
+  border: 1px solid var(--gold-light);
+  box-shadow: 0 0 15px rgba(212, 175, 55, 0.35);
+}
+
+.btn-os--primary:hover {
+  background: linear-gradient(135deg, #FFF, var(--gold));
+  box-shadow: 0 0 25px rgba(212, 175, 55, 0.6);
+  transform: translateY(-1px);
+}
+
+.btn-os--ghost {
+  background: transparent;
+  color: var(--ivory);
+  border: 1px solid rgba(247, 247, 232, 0.2);
+}
+
+.btn-os--ghost:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: rgba(212, 175, 55, 0.08);
+}
+
+/* ==========================================================================
+   HERO / LIVE MINING COCKPIT
+   ========================================================================== */
+.hero-cockpit {
+  padding-top: 80px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-left: 2rem;
+  padding-right: 2rem;
+  padding-bottom: 2rem;
+  position: relative;
+  z-index: 3;
+  max-width: 1500px;
+  margin: 0 auto;
+}
+
+.cockpit-header {
+  text-align: center;
+  padding: 2rem 0 1.5rem;
+}
+
+.cockpit-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: var(--gold);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 1rem;
+}
+
+.cockpit-title {
+  font-family: var(--serif);
+  font-size: clamp(2.8rem, 6.5vw, 6rem);
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  color: var(--ivory);
+  margin-bottom: 1rem;
+}
+
+.cockpit-title span {
+  background: linear-gradient(180deg, #FFFFFF 10%, var(--gold-light) 60%, var(--gold) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.cockpit-sub {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: clamp(1.2rem, 2.2vw, 1.65rem);
+  color: var(--gold-light);
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.cockpit-sub em {
+  font-style: normal;
+  color: var(--laser-cyan);
+  text-shadow: 0 0 12px var(--laser-glow);
+}
+
+/* ==========================================================================
+   INTERACTIVE LIVE MINING WORKSTATION (4-PANE SOFTWARE UI)
+   ========================================================================== */
+.workstation {
+  background: var(--jungle-primary);
+  border: 1px solid var(--jungle-border);
+  border-radius: 8px;
+  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.9), inset 0 0 30px rgba(0,0,0,0.5);
+  overflow: hidden;
+  margin: 2rem 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Software Command Bar */
+.command-bar {
+  background: var(--jungle-deep);
+  border-bottom: 1px solid var(--jungle-border);
+  padding: 1rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.prompt-input-wrap {
+  flex: 1;
+  min-width: 320px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.prompt-input-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--gold);
+  font-family: var(--mono);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.prompt-input {
+  width: 100%;
+  background: var(--jungle-surface);
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-radius: 6px;
+  padding: 10px 16px 10px 38px;
+  color: var(--ivory);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  transition: all 0.3s;
+}
+
+.prompt-input:focus {
+  border-color: var(--laser-cyan);
+  box-shadow: 0 0 15px rgba(56, 239, 125, 0.25);
+  background: rgba(14, 45, 25, 0.9);
+}
+
+.quick-prompts {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.quick-pill {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--gold-light);
+  background: rgba(212, 175, 55, 0.1);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: none;
+  transition: all 0.2s;
+}
+
+.quick-pill:hover {
+  background: rgba(212, 175, 55, 0.25);
+  border-color: var(--gold);
+  color: #FFF;
+}
+
+.btn-mine-run {
+  background: linear-gradient(135deg, var(--laser-cyan), #22c55e);
+  color: var(--jungle-deep);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 10px 22px;
+  border-radius: 6px;
+  border: none;
+  cursor: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 0 20px rgba(56, 239, 125, 0.4);
+  transition: all 0.3s;
+}
+
+.btn-mine-run:hover {
+  box-shadow: 0 0 30px rgba(56, 239, 125, 0.7);
+  transform: scale(1.02);
+}
+
+/* 4-PANE COCKPIT GRID */
+.cockpit-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr 380px;
+  grid-template-rows: auto auto;
+  min-height: 560px;
+}
+
+@media (max-width: 1150px) {
+  .cockpit-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+}
+
+/* PANE 1: SEMANTIC GRAIN & DATA MATRIX */
+.pane-strata {
+  background: var(--jungle-deep);
+  border-right: 1px solid var(--jungle-border);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.pane-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--gold);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.2);
+}
+
+.dataset-badge {
+  background: rgba(14, 45, 25, 0.8);
+  border: 1px solid var(--jungle-border);
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+}
+
+.dataset-badge__name {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ivory);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dataset-badge__meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--moss);
+  margin-top: 4px;
+}
+
+.matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.matrix-table th {
+  text-align: left;
+  color: var(--gold);
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.2);
+  font-weight: 500;
+}
+
+.matrix-table td {
+  padding: 6px 8px;
+  color: var(--ivory);
+  border-bottom: 1px solid rgba(247, 247, 232, 0.05);
+}
+
+.matrix-table tr.highlighted td {
+  background: rgba(56, 239, 125, 0.12);
+  color: var(--laser-cyan);
+  font-weight: 600;
+}
+
+/* PANE 2: LIVE EXTRACTION CANVAS / SEISMIC RADAR */
+.pane-visualizer {
+  background: var(--jungle-primary);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.visualizer-stage {
+  flex: 1;
+  min-height: 380px;
+  position: relative;
+  background: var(--jungle-deep);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  border-radius: 6px;
+  padding: 1rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+/* Mining Laser Sweep Line */
+.laser-line {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--laser-cyan), transparent);
+  box-shadow: 0 0 20px var(--laser-cyan);
+  animation: laser-sweep 4s ease-in-out infinite;
+  z-index: 10;
+  pointer-events: none;
+}
+
+@keyframes laser-sweep {
+  0% { top: 0%; opacity: 0.3; }
+  50% { top: 96%; opacity: 1; }
+  100% { top: 0%; opacity: 0.3; }
+}
+
+.mining-canvas {
+  width: 100%;
+  height: 280px;
+}
+
+.mining-hud {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(5, 21, 10, 0.85);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  padding: 8px 14px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--gold-light);
+}
+
+/* PANE 3: HYPOTHESIS & SCIENTIFIC LEDGER */
+.pane-ledger {
+  background: var(--jungle-deep);
+  border-left: 1px solid var(--jungle-border);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.hyp-card {
+  background: var(--jungle-surface);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  border-left: 3px solid var(--gold);
+  border-radius: 4px;
+  padding: 1rem;
+  transition: all 0.3s;
+}
+
+.hyp-card.hyp-active {
+  border-left-color: var(--laser-cyan);
+  background: rgba(14, 45, 25, 0.95);
+  box-shadow: 0 0 20px rgba(56, 239, 125, 0.15);
+}
+
+.hyp-card__header {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--gold);
+  margin-bottom: 0.4rem;
+}
+
+.hyp-card__claim {
+  font-family: var(--serif);
+  font-size: 1.15rem;
+  color: var(--ivory);
+  line-height: 1.3;
+}
+
+.hyp-card__claim em {
+  color: var(--gold-light);
+  font-style: italic;
+}
+
+.hyp-card__posterior {
+  margin-top: 0.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.posterior-bar-wrap {
+  flex: 1;
+  height: 4px;
+  background: rgba(247, 247, 232, 0.1);
+  border-radius: 2px;
+  margin: 0 10px;
+  overflow: hidden;
+}
+
+.posterior-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold), var(--laser-cyan));
+  width: 94%;
+}
+
+/* BOTTOM WORKBENCH TERMINAL BAR */
+.workbench-bottom {
+  grid-column: 1 / -1;
+  background: var(--jungle-deep);
+  border-top: 1px solid var(--jungle-border);
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 2rem;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.sql-snippet {
+  color: var(--laser-cyan);
+  background: rgba(2, 9, 4, 0.8);
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(56, 239, 125, 0.2);
+}
+
+/* ==========================================================================
+   DRAGGABLE DATA STRATA SPECIMENS (PHYSICAL DESK)
+   ========================================================================== */
+.specimens-section {
+  padding: 6rem 2rem;
+  max-width: 1500px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 3;
+}
+
+.section-head {
+  text-align: center;
+  margin-bottom: 3.5rem;
+}
+
+.section-head__title {
+  font-family: var(--serif);
+  font-size: clamp(2.5rem, 5.5vw, 4.5rem);
+  font-weight: 400;
+  color: var(--ivory);
+  font-style: italic;
+}
+
+.section-head__title em {
+  color: var(--gold);
+  font-style: normal;
+}
+
+.desk-surface {
+  position: relative;
+  height: 720px;
+  background:
+    radial-gradient(ellipse at center, rgba(14, 45, 25, 0.7), transparent 75%),
+    var(--jungle-deep);
+  border: 1px solid var(--jungle-border);
+  border-radius: 8px;
+  overflow: hidden;
+  touch-action: none;
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.85);
+}
+
+.desk-surface::before {
+  content: '';
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(212, 175, 55, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(212, 175, 55, 0.05) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+
+.desk-hint {
+  position: absolute;
+  bottom: 1.5rem; left: 1.5rem;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--ivory); opacity: 0.55;
+  pointer-events: none;
+}
+
+.desk-hint span { color: var(--laser-cyan); }
+
+/* Draggable Cards */
+.specimen-card {
+  position: absolute;
+  width: 320px;
+  background: var(--ivory);
+  color: var(--jungle-deep);
+  border-radius: 6px;
+  cursor: none;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  box-shadow:
+    0 2px 0 rgba(0,0,0,0.3),
+    0 30px 60px -15px rgba(0,0,0,0.7),
+    0 12px 24px -5px rgba(0,0,0,0.5);
+  transition: box-shadow 0.3s;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+@media (pointer: coarse) { .specimen-card { cursor: grab; } }
+.specimen-card.is-dragging { cursor: none; box-shadow: 0 45px 90px -10px rgba(0,0,0,0.85); }
+@media (pointer: coarse) { .specimen-card.is-dragging { cursor: grabbing; } }
+
+.specimen-card__inner {
+  padding: 1.5rem;
+  position: relative;
+}
+
+.specimen-card__top {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--jungle-deep); opacity: 0.7;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid rgba(3, 13, 6, 0.2);
+  margin-bottom: 0.75rem;
+}
+
+.specimen-card__formula {
+  font-family: var(--serif);
+  font-size: 2.2rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--jungle-deep);
+  text-align: center;
+  padding: 0.75rem 0;
+}
+
+.specimen-card__formula em {
+  color: var(--gold-dark);
+  font-style: italic;
+}
+
+.specimen-card__body {
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--jungle-deep);
+  padding: 0.6rem 0;
+  border-top: 1px solid rgba(3, 13, 6, 0.15);
+  border-bottom: 1px solid rgba(3, 13, 6, 0.15);
+  margin-bottom: 0.75rem;
+}
+
+.specimen-card__footer {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #0d6b38;
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   STRATA FILMSTRIP SCRUBBER (8-PHASE SCIENTIFIC LOOP)
+   ========================================================================== */
+.palette {
+  position: relative;
+  z-index: 3;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  padding: 6rem 0;
+}
+
+.palette__head {
+  position: absolute;
+  top: 4rem; left: 2.5rem; right: 2.5rem;
+  display: flex; justify-content: space-between; align-items: flex-end;
+  z-index: 4;
+}
+
+.palette__title {
+  font-family: var(--serif);
+  font-size: clamp(2rem, 5vw, 3.8rem);
+  font-weight: 400;
+  font-style: italic;
+  color: var(--ivory);
+  line-height: 1;
+}
+
+.palette__title em { color: var(--gold); font-style: normal; }
+
+.palette__count {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--laser-cyan);
+  text-align: right;
+}
+
+.palette__progress {
+  position: absolute;
+  bottom: 3.5rem; left: 2.5rem; right: 2.5rem;
+  height: 1px;
+  background: rgba(247, 247, 232, 0.15);
+  z-index: 4;
+}
+
+.palette__progress-bar {
+  position: absolute;
+  top: 0; left: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold), var(--laser-cyan));
+  width: 0%;
+  box-shadow: 0 0 10px var(--laser-cyan);
+}
+
+.filmstrip {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 4rem 0;
+  will-change: transform;
+}
+
+.filmframe {
+  flex-shrink: 0;
+  width: 350px;
+  height: 460px;
+  margin: 0 0.75rem;
+  background: var(--jungle-primary);
+  border: 1px solid var(--jungle-border);
+  border-radius: 6px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 2rem 1.75rem;
+  transition: border-color 0.4s;
+}
+
+.filmframe:hover {
+  border-color: var(--laser-cyan);
+}
+
+.filmframe__swatch {
+  width: 100%;
+  height: 170px;
+  background: var(--swatch);
+  margin-bottom: 1.5rem;
+  border: 1px solid rgba(247, 247, 232, 0.12);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ivory);
+}
+
+.filmframe__num {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--gold);
+  margin-bottom: 0.5rem;
+}
+
+.filmframe__name {
+  font-family: var(--serif);
+  font-size: 1.6rem;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--ivory);
+  line-height: 1.15;
+  margin-bottom: 0.5rem;
+}
+
+.filmframe__hex {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--laser-cyan);
+  margin-bottom: 1rem;
+}
+
+.filmframe__pant {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--ivory); opacity: 0.6;
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(247, 247, 232, 0.1);
+  display: flex;
+  justify-content: space-between;
+}
+
+/* ==========================================================================
+   FOOTER / SYSTEM TELEMETRY
+   ========================================================================== */
+.footer-software {
+  border-top: 1px solid var(--jungle-border);
+  padding: 4rem 2rem 5rem;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ivory); opacity: 0.75;
+  position: relative;
+  z-index: 3;
+}
+
+.footer-actions {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-bottom: 2.5rem;
+  flex-wrap: wrap;
+}
+</style>
+</head>
+<body>
+
+<canvas class="cursor-canvas" id="cursor-canvas"></canvas>
+
+<!-- ========== TOP SOFTWARE OS CHROME ========== -->
+<header class="os-topbar">
+  <a href="/" class="os-brand">
+    <div class="brand-prism">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" />
+      </svg>
+    </div>
+    <span class="os-brand__title">Mind<em>ed</em> OS</span>
+  </a>
+
+  <div class="os-telemetry">
+    <span class="tele-pill tele-pill--active">
+      <span class="pulse-dot"></span>
+      DUCKDB OLAP · READY
+    </span>
+    <span class="tele-pill">
+      ENTROPY DELTA: -1.48 BITS
+    </span>
+    <span class="tele-pill">
+      SCIENTIFIC COHERENCE: 100%
+    </span>
+  </div>
+
+  <div class="os-nav-actions">
+    <a href="/analyst" class="btn-os btn-os--primary">Launch Workspace &rarr;</a>
+    <a href="/datasets" class="btn-os btn-os--ghost">Datasets</a>
+    <a href="/query" class="btn-os btn-os--ghost">SQL</a>
+  </div>
+</header>
+
+<!-- ========== HERO COCKPIT ========== -->
+<section class="hero-cockpit">
+  <div class="cockpit-header">
+    <div class="cockpit-eyebrow">
+      <span>◆ AUTONOMOUS ANALYTICAL INTELLIGENCE OPERATING SYSTEM</span>
+    </div>
+    <h1 class="cockpit-title">
+      Autonomous <span>Data Mining</span> &amp; Causal OS
+    </h1>
+    <p class="cockpit-sub">
+      Minded formulates competing hypotheses, optimizes experiments via <em>Expected Information Gain</em>, and mines causal proofs in DuckDB with zero hallucinations.
+    </p>
+  </div>
+
+  <!-- INTERACTIVE WORKSTATION COCKPIT -->
+  <div class="workstation" id="workstation">
+    <!-- Command Bar -->
+    <div class="command-bar">
+      <div class="prompt-input-wrap">
+        <span class="prompt-input-icon">&gt;</span>
+        <input
+          type="text"
+          class="prompt-input"
+          id="investigation-prompt"
+          value="Why did revenue drop across enterprise customer segments in Q3?"
+        />
+      </div>
+
+      <div class="quick-prompts">
+        <button class="quick-pill" onclick="setPrompt(0)">$42M Churn Anomaly</button>
+        <button class="quick-pill" onclick="setPrompt(1)">Simpson's Paradox Gate</button>
+        <button class="quick-pill" onclick="setPrompt(2)">Regional Volatility</button>
+      </div>
+
+      <button class="btn-mine-run" id="btn-run-mining" onclick="simulateLiveMining()">
+        <span>⚡ EXECUTE KERNEL</span>
+      </button>
+    </div>
+
+    <!-- 4-Pane Grid -->
+    <div class="cockpit-grid">
+      <!-- Pane 1: Data Strata -->
+      <div class="pane-strata">
+        <div class="pane-title">
+          <span>01 · DATA STRATA</span>
+          <span style="color: var(--laser-cyan);">1.48M ROWS</span>
+        </div>
+
+        <div class="dataset-badge">
+          <div class="dataset-badge__name">
+            <span>📊 enterprise_sales.parquet</span>
+          </div>
+          <div class="dataset-badge__meta">Grain: customer_id &times; quarter</div>
+        </div>
+
+        <table class="matrix-table">
+          <thead>
+            <tr><th>Segment</th><th>Q3 Rev</th><th>Trend</th></tr>
+          </thead>
+          <tbody id="matrix-tbody">
+            <tr class="highlighted"><td>Electronics</td><td>$842,100</td><td>+44% ★</td></tr>
+            <tr><td>Apparel</td><td>$142,300</td><td>-12%</td></tr>
+            <tr><td>Home</td><td>$89,200</td><td>-4%</td></tr>
+            <tr><td>Beauty</td><td>$67,400</td><td>+2%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pane 2: Live Mining Visualizer -->
+      <div class="pane-visualizer">
+        <div class="pane-title" style="margin-bottom: 1rem;">
+          <span>02 · EXTRACTION RADAR</span>
+          <span id="mining-status-text" style="color: var(--laser-cyan);">SCANNING STRATA...</span>
+        </div>
+
+        <div class="visualizer-stage">
+          <div class="laser-line"></div>
+          
+          <svg class="mining-canvas" viewBox="0 0 500 240" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="laserGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#38ef7d" stop-opacity="0.2" />
+                <stop offset="50%" stop-color="#D4AF37" stop-opacity="1" />
+                <stop offset="100%" stop-color="#38ef7d" stop-opacity="0.2" />
+              </linearGradient>
+            </defs>
+            <!-- Strata Grid Lines -->
+            <path d="M 0,40 Q 120,60 250,30 T 500,50" fill="none" stroke="rgba(212,175,55,0.25)" stroke-width="1.5" />
+            <path d="M 0,90 Q 180,50 320,110 T 500,80" fill="none" stroke="url(#laserGrad)" stroke-width="2" />
+            <path d="M 0,140 Q 100,180 250,130 T 500,160" fill="none" stroke="rgba(56,239,125,0.4)" stroke-width="1.5" />
+            <path d="M 0,190 Q 200,150 360,210 T 500,180" fill="none" stroke="rgba(212,175,55,0.3)" stroke-width="1.5" />
+
+            <!-- Dynamic Mined Gold Crystals -->
+            <g id="crystal-nodes">
+              <circle cx="250" cy="30" r="5" fill="#D4AF37" />
+              <circle cx="320" cy="110" r="6" fill="#38ef7d" />
+              <circle cx="250" cy="130" r="5" fill="#FFD700" />
+              <circle cx="360" cy="210" r="6" fill="#38ef7d" />
+            </g>
+          </svg>
+
+          <div class="mining-hud">
+            <span>EIG: 0.547 BITS</span>
+            <span>ANOVA &eta;&sup2;: 59.6%</span>
+            <span>SHANNON ENTROPY: 0.42 BITS</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pane 3: Hypotheses & Bayesian Ledger -->
+      <div class="pane-ledger">
+        <div class="pane-title">
+          <span>03 · BAYESIAN LEDGER</span>
+          <span style="color: var(--gold);">3 HYPOTHESES</span>
+        </div>
+
+        <div class="hyp-card hyp-active" id="hyp-1">
+          <div class="hyp-card__header">
+            <span>HYP-01 · CONCENTRATION</span>
+            <span>P = 0.94</span>
+          </div>
+          <div class="hyp-card__claim">
+            Electronics concentration drives <em>59.6% net variance</em>.
+          </div>
+          <div class="hyp-card__posterior">
+            <span>Posterior</span>
+            <div class="posterior-bar-wrap">
+              <div class="posterior-bar-fill" id="post-bar-1"></div>
+            </div>
+            <span>94%</span>
+          </div>
+        </div>
+
+        <div class="hyp-card" id="hyp-2">
+          <div class="hyp-card__header">
+            <span>HYP-02 · SIMPSON'S PARADOX</span>
+            <span>P = 0.04</span>
+          </div>
+          <div class="hyp-card__claim">
+            Regional confounder inversion hypothesis.
+          </div>
+          <div class="hyp-card__posterior">
+            <span>Posterior</span>
+            <div class="posterior-bar-wrap">
+              <div class="posterior-bar-fill" style="width: 4%;"></div>
+            </div>
+            <span>4%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Toolbar -->
+      <div class="workbench-bottom">
+        <div>
+          <span style="color: var(--gold);">EXECUTED OLAP:</span>
+          <span class="sql-snippet" id="active-sql">SELECT segment, SUM(revenue) FROM sales_table GROUP BY segment ORDER BY 2 DESC</span>
+        </div>
+        <div>
+          <span style="color: var(--moss);">STATUS:</span>
+          <span style="color: var(--laser-cyan);">PROVENANCE MANIFEST SECURED &check;</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== DRAGGABLE DATA STRATA SPECIMENS ========== -->
+<section class="specimens-section">
+  <div class="section-head">
+    <div class="cockpit-eyebrow">◆ TACTILE DISCOVERY BENCH</div>
+    <h2 class="section-head__title">Extracted <em>Evidence Chips</em>, Loose on the Desk.</h2>
+    <p style="font-family: var(--serif); font-style: italic; font-size: 1.2rem; color: var(--gold-light); margin-top: 0.75rem;">
+      Drag, inspect, or scale active hypotheses mined from live multi-turn investigations.
+    </p>
+  </div>
+
+  <div class="desk-surface" id="desk-surface">
+    <div class="desk-hint">
+      <span>↑ DRAG TO REARRANGE · SCROLL WHEEL TO SCALE SPECIMENS ↓</span>
+    </div>
+
+    <div class="specimen-card" style="left: 6%; top: 12%;" data-id="01">
+      <div class="specimen-card__inner">
+        <div class="specimen-card__top">
+          <span>SPEC-01 / CONCENTRATION</span>
+          <span>&Delta;H = -1.48 BITS</span>
+        </div>
+        <div class="specimen-card__formula">
+          E<em>[IG]</em> = 0.547
+        </div>
+        <div class="specimen-card__body">
+          Top 3.2% customer cohort accounts for 59.6% of gross variance. Falsification criteria tested and verified.
+        </div>
+        <div class="specimen-card__footer">
+          <span>POSTERIOR: 0.94</span>
+          <span>&check; SUPPORTED</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="specimen-card" style="left: 38%; top: 8%;" data-id="02">
+      <div class="specimen-card__inner">
+        <div class="specimen-card__top">
+          <span>SPEC-02 / CAUSAL DAG</span>
+          <span>DO-CALCULUS</span>
+        </div>
+        <div class="specimen-card__formula">
+          P<em>(Y|do(X))</em>
+        </div>
+        <div class="specimen-card__body">
+          Regional mix shift identified as valid backdoor confounder. Simpson's paradox mathematically resolved.
+        </div>
+        <div class="specimen-card__footer">
+          <span>ROBUSTNESS: 98.6%</span>
+          <span>&check; IDENTIFIED</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="specimen-card" style="left: 68%; top: 16%;" data-id="03">
+      <div class="specimen-card__inner">
+        <div class="specimen-card__top">
+          <span>SPEC-03 / MULTIVERSE</span>
+          <span>1,024 SPECS</span>
+        </div>
+        <div class="specimen-card__formula">
+          &eta;&sup2; = <em>59.6%</em>
+        </div>
+        <div class="specimen-card__body">
+          Specification curve evaluated across 1,024 plausible outlier handling and filtering branches simultaneously.
+        </div>
+        <div class="specimen-card__footer">
+          <span>STABILITY: 99.1%</span>
+          <span>&check; INVARIANT</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== STRATA FILMSTRIP SCRUBBER ========== -->
+<section class="palette" id="palette">
+  <div class="palette__head">
+    <div>
+      <span class="cockpit-eyebrow">EPISTEMIC PIPELINE · 8 STRATA</span>
+      <h2 class="palette__title">The <em>strata</em> of Minded.</h2>
+    </div>
+    <div class="palette__count">
+      <span id="palette-current">01</span> / 08
+    </div>
+  </div>
+
+  <div class="palette__progress">
+    <div class="palette__progress-bar" id="palette-bar"></div>
+  </div>
+
+  <div class="filmstrip" id="filmstrip">
+    <div class="filmframe" style="--swatch: #05150a">
+      <div class="filmframe__swatch">INTENT COMPILER</div>
+      <div class="filmframe__num">STRATA 01</div>
+      <div class="filmframe__name">Semantic World Model</div>
+      <div class="filmframe__hex">GRAIN &amp; ONTOLOGY RESOLUTION</div>
+      <div class="filmframe__pant"><span>SCHEMA BINDING</span><span>PHASE 1</span></div>
+    </div>
+    
+    <div class="filmframe" style="--swatch: #0a2212">
+      <div class="filmframe__swatch">HYPOTHESIS SYNTHESIZER</div>
+      <div class="filmframe__num">STRATA 02</div>
+      <div class="filmframe__name">Predictive Hypotheses</div>
+      <div class="filmframe__hex">FALSIFICATION SPECS</div>
+      <div class="filmframe__pant"><span>COMPETING CLAIMS</span><span>PHASE 2</span></div>
+    </div>
+
+    <div class="filmframe" style="--swatch: #0e2d19">
+      <div class="filmframe__swatch">EIG OPTIMIZER</div>
+      <div class="filmframe__num">STRATA 03</div>
+      <div class="filmframe__name">Experiment Planner</div>
+      <div class="filmframe__hex">EXPECTED INFO GAIN</div>
+      <div class="filmframe__pant"><span>RANKING LATTICE</span><span>PHASE 3</span></div>
+    </div>
+
+    <div class="filmframe" style="--swatch: #134226">
+      <div class="filmframe__swatch">DUCKDB ENGINE</div>
+      <div class="filmframe__num">STRATA 04</div>
+      <div class="filmframe__name">Deterministic OLAP</div>
+      <div class="filmframe__hex">IN-PROCESS QUERYING</div>
+      <div class="filmframe__pant"><span>ZERO HALLUCINATION</span><span>PHASE 4</span></div>
+    </div>
+
+    <div class="filmframe" style="--swatch: #195431">
+      <div class="filmframe__swatch">DUAL-ENGINE VERIFIER</div>
+      <div class="filmframe__num">STRATA 05</div>
+      <div class="filmframe__name">Scientific Verification</div>
+      <div class="filmframe__hex">SCIPY + SYMPY CALCULATIONS</div>
+      <div class="filmframe__pant"><span>STATISTICAL PROOF</span><span>PHASE 5</span></div>
+    </div>
+
+    <div class="filmframe" style="--swatch: #AA820A">
+      <div class="filmframe__swatch">ADVERSARIAL ATTACK</div>
+      <div class="filmframe__num">STRATA 06</div>
+      <div class="filmframe__name">Falsification Challenge</div>
+      <div class="filmframe__hex">SIMPSON'S PARADOX TEST</div>
+      <div class="filmframe__pant"><span>STRESS TESTING</span><span>PHASE 6</span></div>
+    </div>
+
+    <div class="filmframe" style="--swatch: #D4AF37">
+      <div class="filmframe__swatch">BAYESIAN UPDATER</div>
+      <div class="filmframe__num">STRATA 07</div>
+      <div class="filmframe__name">Belief Convergence</div>
+      <div class="filmframe__hex">SHANNON ENTROPY REDUCTION</div>
+      <div class="filmframe__pant"><span>POSTERIOR PROBABILITY</span><span>PHASE 7</span></div>
+    </div>
+
+    <div class="filmframe" style="--swatch: #38ef7d">
+      <div class="filmframe__swatch">VERDICT ENGINE</div>
+      <div class="filmframe__num">STRATA 08</div>
+      <div class="filmframe__name">Epistemic Report</div>
+      <div class="filmframe__hex">ACTIONABLE CERTAINTY</div>
+      <div class="filmframe__pant"><span>DECISION FINALITY</span><span>PHASE 8</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== FOOTER ========== -->
+<footer class="footer-software">
+  <div class="footer-actions">
+    <a href="/analyst" class="btn-os btn-os--primary" style="padding: 12px 28px; font-size: 12px;">
+      ⚡ Launch Minded Analyst Cockpit
+    </a>
+    <a href="/datasets" class="btn-os btn-os--ghost" style="padding: 12px 24px; font-size: 12px;">
+      Upload Parquet / CSV Datasets
+    </a>
+    <a href="/query" class="btn-os btn-os--ghost" style="padding: 12px 24px; font-size: 12px;">
+      Direct DuckDB SQL Workbench
+    </a>
+  </div>
+  <div>
+    — MINDED v2.4 // AUTONOMOUS ANALYTICAL INTELLIGENCE OPERATING SYSTEM —
+  </div>
+</footer>
+
+<script>
+/* ========== LENIS SMOOTH SCROLL ========== */
+const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isTouch = window.matchMedia('(pointer: coarse)').matches;
+
+if (typeof Lenis !== 'undefined' && !reduced) {
+  const lenis = new Lenis({
+    duration: 1.1,
+    easing: t => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+    smoothWheel: true,
+  });
+  function raf(time) { lenis.raf(time); requestAnimationFrame(raf); }
+  requestAnimationFrame(raf);
+  lenis.on('scroll', () => { if (window.ScrollTrigger) ScrollTrigger.update(); });
+}
+
+if (window.gsap && window.ScrollTrigger) {
+  gsap.registerPlugin(ScrollTrigger);
+}
+
+/* ========== GOLDEN EXTRACTION / DATA SPARK CURSOR TRAIL ========== */
+(function cursorTrail() {
+  if (isTouch || reduced) return;
+  const canvas = document.getElementById('cursor-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const dots = [];
+  let lastX = window.innerWidth / 2, lastY = window.innerHeight / 2;
+
+  window.addEventListener('mousemove', e => {
+    lastX = e.clientX; lastY = e.clientY;
+    const count = 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < count; i++) {
+      dots.push({
+        x: e.clientX + (Math.random() - 0.5) * 8,
+        y: e.clientY + (Math.random() - 0.5) * 8,
+        r: 0.9 + Math.random() * 2.4,
+        life: 1,
+        decay: 0.015 + Math.random() * 0.025,
+        hue: Math.random() > 0.35 ? (42 + Math.random() * 10) : (140 + Math.random() * 20),
+        sat: 80 + Math.random() * 20,
+        lig: 55 + Math.random() * 20,
+      });
+    }
+    if (dots.length > 700) dots.splice(0, dots.length - 700);
+  });
+
+  function tick() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let i = dots.length - 1; i >= 0; i--) {
+      const d = dots[i];
+      d.life -= d.decay;
+      if (d.life <= 0) { dots.splice(i, 1); continue; }
+      const alpha = d.life * 0.7;
+      ctx.fillStyle = `hsla(${d.hue}, ${d.sat}%, ${d.lig}%, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, d.r * Math.max(0.2, d.life), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    ctx.fillStyle = 'rgba(56, 239, 125, 0.9)';
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(212, 175, 55, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 7, 0, Math.PI * 2);
+    ctx.stroke();
+
+    requestAnimationFrame(tick);
+  }
+  tick();
+})();
+
+/* ========== INTERACTIVE LIVE MINING SIMULATOR ========== */
+const samplePrompts = [
+  "Why did revenue drop across enterprise customer segments in Q3?",
+  "Test Simpson's Paradox confounding in regional retention rates",
+  "Isolate anomalous latency spikes across payment gateway nodes"
+];
+
+function setPrompt(idx) {
+  const input = document.getElementById('investigation-prompt');
+  if (input) input.value = samplePrompts[idx];
+  simulateLiveMining();
+}
+
+function simulateLiveMining() {
+  const statusEl = document.getElementById('mining-status-text');
+  const sqlEl = document.getElementById('active-sql');
+  const btn = document.getElementById('btn-run-mining');
+
+  if (btn) btn.innerHTML = '<span>⏳ MINING IN-PROCESS...</span>';
+  if (statusEl) statusEl.textContent = 'EXECUTING DUCKDB OLAP...';
+
+  setTimeout(() => {
+    if (sqlEl) sqlEl.textContent = "SELECT segment, region, SUM(revenue), AVG(margin) FROM sales_table GROUP BY 1, 2 ORDER BY 3 DESC";
+    if (statusEl) statusEl.textContent = 'ANOVA EFFECT SIZE ISOLATED: eta² = 59.6%';
+  }, 700);
+
+  setTimeout(() => {
+    if (statusEl) statusEl.textContent = 'BAYESIAN ENTROPY RESOLVED: P(HYP-01) = 0.94';
+    if (btn) btn.innerHTML = '<span>⚡ EXECUTE KERNEL</span>';
+  }, 1400);
+}
+
+/* ========== DRAGGABLE CARDS DESK ========== */
+(function specimenDrag() {
+  const desk = document.getElementById('desk-surface');
+  if (!desk) return;
+  const cards = desk.querySelectorAll('.specimen-card');
+
+  cards.forEach(card => {
+    let scale = 1;
+    let dragX = 0, dragY = 0;
+    let startX, startY;
+    let isDragging = false;
+    let activePointerId = null;
+    let zIndex = 5;
+
+    function applyTransform() {
+      card.style.transform = `translate(${dragX}px, ${dragY}px) scale(${scale})`;
+    }
+
+    card.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (activePointerId !== null && activePointerId !== e.pointerId) return;
+      isDragging = true;
+      activePointerId = e.pointerId;
+      startX = e.clientX;
+      startY = e.clientY;
+      card.classList.add('is-dragging');
+      zIndex += 1;
+      card.style.zIndex = zIndex;
+      card.setPointerCapture(e.pointerId);
+    });
+
+    card.addEventListener('pointermove', e => {
+      if (!isDragging || e.pointerId !== activePointerId) return;
+      dragX += e.clientX - startX;
+      dragY += e.clientY - startY;
+      startX = e.clientX;
+      startY = e.clientY;
+      applyTransform();
+    });
+
+    function endDrag(e) {
+      if (e.pointerId !== activePointerId) return;
+      isDragging = false;
+      activePointerId = null;
+      card.classList.remove('is-dragging');
+      try { card.releasePointerCapture(e.pointerId); } catch(_){}
+    }
+    card.addEventListener('pointerup', endDrag);
+    card.addEventListener('pointercancel', endDrag);
+
+    card.addEventListener('wheel', e => {
+      e.preventDefault();
+      scale = Math.max(0.7, Math.min(2.0, scale - e.deltaY * 0.0015));
+      applyTransform();
+    }, { passive: false });
+  });
+})();
+
+/* ========== FILMSTRIP SCRUBBER ========== */
+(function filmstrip() {
+  const strip = document.getElementById('filmstrip');
+  const section = document.getElementById('palette');
+  const bar = document.getElementById('palette-bar');
+  const current = document.getElementById('palette-current');
+
+  if (!strip || !section) return;
+
+  function getTotalScroll() {
+    return Math.max(0, strip.scrollWidth - window.innerWidth + 200);
+  }
+
+  let progress = 0;
+  let targetProgress = 0;
+
+  function setStrip() {
+    const total = getTotalScroll();
+    strip.style.transform = `translateX(${-progress * total}px)`;
+    if (bar) bar.style.width = (progress * 100) + '%';
+    const idx = Math.min(7, Math.floor(progress * 8));
+    if (current) current.textContent = String(idx + 1).padStart(2, '0');
+  }
+
+  if (window.ScrollTrigger && window.gsap && !reduced) {
+    ScrollTrigger.create({
+      trigger: section,
+      start: 'top top',
+      end: () => '+=' + (window.innerHeight * 2.5),
+      pin: true,
+      scrub: 1,
+      onUpdate: self => { targetProgress = self.progress; }
+    });
+  }
+
+  function loop() {
+    progress += (targetProgress - progress) * 0.09;
+    setStrip();
+    requestAnimationFrame(loop);
+  }
+  loop();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+customer_id,company_name,segment,region
+C001,Company_001,Enterprise,North America
+C002,Company_002,Enterprise,EMEA
+C003,Company_003,Enterprise,APAC
+C004,Company_004,Enterprise,North America
+C005,Company_005,Enterprise,EMEA
+C006,Company_006,Enterprise,APAC
+C007,Company_007,Enterprise,North America
+C008,Company_008,Enterprise,EMEA
+C009,Company_009,Mid-Market,APAC
+C010,Company_010,Mid-Market,North America
+C011,Company_011,Mid-Market,EMEA
+C012,Company_012,Mid-Market,APAC
+C013,Company_013,Mid-Market,North America
+C014,Company_014,Mid-Market,EMEA
+C015,Company_015,Mid-Market,APAC
+C016,Company_016,Mid-Market,North America
+C017,Company_017,Mid-Market,EMEA
+C018,Company_018,Mid-Market,APAC
+C019,Company_019,Mid-Market,North America
+C020,Company_020,Mid-Market,EMEA
+C021,Company_021,SMB,APAC
+C022,Company_022,SMB,North America
+C023,Company_023,SMB,EMEA
+C024,Company_024,SMB,APAC
+C025,Company_025,SMB,North America
+C026,Company_026,SMB,EMEA
+C027,Company_027,SMB,APAC
+C028,Company_028,SMB,North America
+C029,Company_029,SMB,EMEA
+C030,Company_030,SMB,APAC

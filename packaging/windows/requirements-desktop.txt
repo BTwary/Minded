@@ -1,0 +1,14 @@
+# Build-time and runtime dependencies specific to the native Windows desktop
+# shell. These are additive to the root requirements.txt (which alone still
+# defines the deterministic offline analytical engine) and must be present
+# in the certified local wheelhouse before running build_exe_scope.ps1.
+#
+# pywebview: opens the app as a native OS window (Microsoft Edge WebView2 on
+#   Windows) instead of the user's default web browser. This is what makes
+#   the packaged .exe open and close like an ordinary installed program with
+#   no visible browser tab, address bar, or port number.
+# pyinstaller: freezes the Python application (backend + this desktop shell)
+#   into MindedAAOS.exe with no Python installation required on the target
+#   machine.
+pywebview>=5.2
+pyinstaller>=6.10.0

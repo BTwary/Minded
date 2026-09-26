@@ -1,0 +1,6 @@
+# Optional: only needed if you deploy AA-OS against a shared Postgres server
+# and/or a distributed queue instead of the default local SQLite + in-process
+# worker. Not required for the local, zero-infra installation.
+psycopg2-binary>=2.9.9
+redis>=5.0.0
+sqlglot==30.18.0
