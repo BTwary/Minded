@@ -179,3 +179,64 @@ def test_nl_resolves_common_metric_alias_when_schema_has_single_candidate():
     plan = UniversalQuestionCompiler.compile("Show sales by region", semantic=sem, df=df)
     assert plan.semantics.target_column == "net_revenue"
     assert plan.semantics.grouping_columns == ["region"]
+
+def test_intent_parser_extracts_natural_ranking_metric_group_and_direction():
+    from packages.analytics_core.src.engines.intent import IntentEngine
+
+    intent = IntentEngine.parse_intent(
+        "Which region made the most money?",
+        available_columns=["order_id", "customer_id", "revenue", "region"],
+    )
+    assert intent.intent_type == "PERFORMANCE"
+    assert intent.target_metric_hint == "revenue"
+    assert intent.dimension_hint == "region"
+    assert intent.ranking_direction == "DESC"
+
+
+def test_intent_parser_extracts_least_and_explicit_aggregation():
+    from packages.analytics_core.src.engines.intent import IntentEngine
+
+    intent = IntentEngine.parse_intent(
+        "Which region generated the least total sales?",
+        available_columns=["revenue", "region"],
+    )
+    assert intent.intent_type == "PERFORMANCE"
+    assert intent.target_metric_hint == "revenue"
+    assert intent.dimension_hint == "region"
+    assert intent.ranking_direction == "ASC"
+    assert intent.aggregation_hint == "sum"
+
+
+def test_intent_parser_preserves_relation_roles_and_missing_predictor():
+    from packages.analytics_core.src.engines.intent import IntentEngine
+
+    intent = IntentEngine.parse_intent(
+        "Did discount percentage affect quantity sold?",
+        available_columns=["quantity", "revenue"],
+    )
+    assert intent.intent_type == "CORRELATION"
+    assert intent.target_metric_hint == "quantity"
+    assert intent.relation_predictor_phrases == ["discount percentage"]
+
+
+def test_intent_parser_does_not_call_best_or_worst_a_numeric_direction():
+    from packages.analytics_core.src.engines.intent import IntentEngine
+
+    intent = IntentEngine.parse_intent(
+        "Which product is best by profit?",
+        available_columns=["product", "profit"],
+    )
+    assert intent.ranking_direction is None
+
+
+def test_intent_parser_understands_common_time_horizon_without_inventing_time_column():
+    from packages.analytics_core.src.engines.intent import IntentEngine
+
+    intent = IntentEngine.parse_intent(
+        "What will revenue look like next quarter?",
+        available_columns=["revenue", "order_date"],
+    )
+    assert intent.intent_type == "FORECAST"
+    assert intent.target_metric_hint == "revenue"
+    assert intent.time_horizon_hint == "next quarter"
+\n

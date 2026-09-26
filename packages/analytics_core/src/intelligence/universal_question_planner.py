@@ -99,6 +99,7 @@ class SemanticContract:
     notes: List[str] = field(default_factory=list)
     resolution_confidence: float = 0.0
     semantic_evidence: Dict[str, Any] = field(default_factory=dict)
+    ranking_direction: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -111,6 +112,7 @@ class SemanticContract:
             "notes": list(self.notes),
             "resolution_confidence": float(self.resolution_confidence),
             "semantic_evidence": dict(self.semantic_evidence),
+            "ranking_direction": self.ranking_direction,
         }
 
 
@@ -738,6 +740,15 @@ class UniversalQuestionCompiler:
             if getattr(proposal, "limitations", None):
                 unresolved_pairs.extend(list(proposal.limitations))
 
+        ranking_direction: Optional[str] = None
+        if task == "COMPARISON":
+            rank_high = bool(re.search(r"\b(highest|most|largest|best|top|biggest)\b", ql, re.I))
+            rank_low = bool(re.search(r"\b(lowest|least|smallest|worst|bottom|fewest)\b", ql, re.I))
+            if rank_high and not rank_low:
+                ranking_direction = "DESC"
+            elif rank_low and not rank_high:
+                ranking_direction = "ASC"
+
         grain = getattr(semantic, "table_grain", None)
         notes: List[str] = []
         if explicit_pair:
@@ -768,11 +779,12 @@ class UniversalQuestionCompiler:
             notes=notes,
             resolution_confidence=confidence,
             semantic_evidence=semantic_evidence,
+            ranking_direction=ranking_direction,
         )
 
     @staticmethod
     def _estimand(task: str, s: SemanticContract, quality: Any) -> Dict[str, Any]:
-        base = {"task": task, "target": s.target_column, "grouping": s.grouping_columns, "time": s.time_column, "unit_of_analysis": s.grain}
+        base = {"task": task, "target": s.target_column, "grouping": s.grouping_columns, "time": s.time_column, "unit_of_analysis": s.grain, "ranking_direction": s.ranking_direction}
         if task == "ASSOCIATION":
             base.update({"estimand": "population association between explanatory and target variables", "claim_ceiling": "association"})
         elif task == "COMPARISON":
