@@ -16,7 +16,7 @@ from packages.shared.src.constants import MAX_AUTONOMOUS_RELATIONAL_HOPS
 
 # Conceptual synonym clusters for schema-agnostic matching
 SEMANTIC_SYNONYMS = {
-    "revenue": {"revenue", "sales", "net_sales", "gross_sales", "turnover", "income", "gross_value", "arr_value", "arr", "mrr", "amount", "total_amount", "subtotal", "order_value", "ticket_size", "spend", "gmv", "realized_value", "realized", "economic_value", "economic", "contract_value"},
+    "revenue": {"revenue", "sales", "net_sales", "gross_sales", "turnover", "income", "gross_value", "arr_value", "arr", "mrr", "amount", "total_amount", "subtotal", "order_value", "ticket_size", "spend", "gmv", "realized_value", "realized", "economic_value", "economic", "contract_value", "money"},
     "cost": {"cost", "infrastructure_cost", "expense", "spend", "ad_spend", "operating_expense", "operating_cost", "cogs", "loss", "budget", "outflow_value", "outflow", "campaign_cost", "expense_bucket"},
     "profit": {"profit", "margin", "gross_margin", "net_margin", "profitability", "ebitda", "gain"},
     "churn": {"churn", "cancellation", "is_churn", "churn_flag", "is_cancelled", "cancelled", "canceled", "attrition", "lost", "status", "attrition_event", "churn_event", "dropoff", "terminated", "churned", "is_churned"},
@@ -289,6 +289,28 @@ class SemanticEngine:
         return cls().resolve_schema(intent, datasets_map)
 
     @staticmethod
+    @staticmethod
+    def _unresolved_correlation_concepts(question_tokens: Set[str], numeric_cols: List[str]) -> List[str]:
+        """Return explicitly named metric concepts that cannot be grounded."""
+        numeric_concepts = ("revenue", "cost", "profit", "volume", "delay", "discount", "conversion")
+        q = {str(token).lower() for token in question_tokens}
+        unresolved: List[str] = []
+        for concept in numeric_concepts:
+            synonyms = SEMANTIC_SYNONYMS.get(concept, set())
+            if not q.intersection(synonyms):
+                continue
+            grounded = False
+            for col in numeric_cols:
+                clean = str(col).lower().replace("-", "_")
+                parts = set(re.findall(r"[a-zA-Z0-9]+", clean))
+                normalized = clean.replace("_", " ")
+                if normalized in synonyms or parts.intersection(synonyms):
+                    grounded = True
+                    break
+            if not grounded:
+                unresolved.append(concept)
+        return sorted(unresolved)
+
     def _match_column_score(col_name: str, question_tokens: Set[str]) -> float:
         """Computes semantic affinity between a physical column name and question tokens."""
         col_clean = col_name.lower().replace("-", "_")
@@ -438,10 +460,18 @@ class SemanticEngine:
             elif len(named) >= 2:
                 correlation_named_pair = [named[0][1], named[1][1]]
 
+        unresolved_correlation_concepts = (
+            SemanticEngine._unresolved_correlation_concepts(q_tokens, numeric_cols)
+            if getattr(intent, "intent_type", None) == "CORRELATION"
+            else []
+        )
+
         if relation_target:
             target_col = relation_target
         elif correlation_named_pair:
             target_col = correlation_named_pair[0]
+        elif unresolved_correlation_concepts:
+            target_col = None
         elif scored_metrics and scored_metrics[0][0] > 0 and (len(scored_metrics) == 1 or scored_metrics[0][0] > scored_metrics[1][0]):
             target_col = scored_metrics[0][1]
         elif [m for m in world_model.metrics if m.table_name == primary_table]:
@@ -617,7 +647,7 @@ class SemanticEngine:
                 candidates.sort(key=lambda x: (-x[0], x[1]))
                 if candidates and candidates[0][0] > 0 and (len(candidates) == 1 or candidates[0][0] > candidates[1][0]):
                     secondary_metric_col = candidates[0][1]
-                elif other_numeric:
+                elif other_numeric and not unresolved_correlation_concepts:
                     # No explicit second-variable mention in the question --
                     # fall back to the numeric column with the highest variance
                     # (most likely to be analytically interesting), skipping any
