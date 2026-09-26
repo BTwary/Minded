@@ -1,68 +1,221 @@
 """
-IntentEngine: Parses natural language analytical questions into formal investigation intent.
-Extracts target outcomes, candidate dimensions, comparison operations, and uncertainty bounds.
+Deterministic natural-language intent parser for AA-OS.
+
+The parser extracts analytical operation, roles, explicit ranking direction,
+aggregation hints, temporal phrases, and schema-grounded column hints. It is
+deliberately conservative: when two physical columns are equally plausible it
+returns no winner rather than guessing.
 """
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
-# Q6.1 (v20-C3.1a follow-up): the CORRELATION keyword check below used to be
-# a literal-substring list (`w in q_lower for w in [...]`). Substring
-# matching against a fixed word list means every inflection of a root word
-# has to be spelled out individually, and it is easy to miss one -- the
-# audited gap was "association" being listed but not its "-ed" inflection
-# "associated", so "Is price associated with sales?" / "Are sales and price
-# associated?" fell through every branch to GENERAL and never reached the
-# CORRELATION method family at all (see
-# tests/independent_release/test_c3_1_q6_real_compiler_symmetry.py,
-# TestQ6RealCompilerPathDocumentedLimitation, C3.1's documented limitation).
-#
-# Fixed by switching the single-root words (correlat-, relationship-,
-# coupl-, depend-, associat-, impact-, affect-, link-, influenc-, connect-)
-# to `\b<stem>\w*\b` regex matching -- the same inflection-robust approach
-# already used elsewhere in this codebase for the identical problem (see
-# `_ASSOC` in intelligence/universal_question_planner.py and the
-# `associat\w*` pattern in intelligence/question_intelligence.py and
-# intelligence/nl_semantic_interpreter.py). This one regex subsumes what
-# used to be separate literal entries for "affect"/"affects"/"affected",
-# "linked"/"linkage", and "connection"/"connected" -- those are now all
-# matched by their shared stem instead of needing to be listed individually
-# (and along with them, other inflections that were never listed at all,
-# e.g. "correlates", "depends", "impacted", "influencing"). Multi-word
-# phrases ("tied to", "move(s) together", "effect of") are not single-root
-# words and are kept as literal alternatives.
-#
-# v20-C4.2.2c.1: widened `relationship\w*` to the bare `relat\w*` stem.
-# C4.2.2c made UniversalQuestionCompiler._ASSOC a direct alias of this
-# regex (see universal_question_planner.py) so that both consumers read
-# from exactly one place. That swap was scope-checked beforehand and found
-# one real, intentional narrowing: the compiler's OLD, separately
-# maintained `_ASSOC` matched a bare `relat\w*` stem (covering "relate" /
-# "related" without requiring the "-ship" suffix), which this regex did
-# not. That gap was flagged explicitly in
-# AAOS_V20C4_2_2C_SHARED_VOCABULARY_AND_ADMISSIBILITY_INTEGRITY.md as a
-# deliberate, checked trade-off rather than an oversight, with a
-# regression-restore left as the very next step (C4.2.2c.1) rather than
-# being silently reintroduced inside the same pass as the alias swap.
-# `relat\w*` matching is a strict superset of `relationship\w*` (it also
-# covers "relate", "relates", "related", "relation", "relational", etc.,
-# in addition to every "relationship*" inflection already covered), so
-# this is a pure widening: nothing that matched before stops matching.
 _CORRELATION_KEYWORD_RE = re.compile(
-    r"\b(correlat\w*|relat\w*|coupl\w*|depend\w*|associat\w*|impact\w*|"
-    r"affect\w*|link\w*|influenc\w*|connect\w*)\b"
+    r"\b(correlat\w*|relat\w*|coupl\w*|depend\w*|associat\w*|"
+    r"impact\w*|affect\w*|link\w*|influenc\w*|connect\w*)\b"
     r"|\b(tied to|moves? together|effect of)\b",
     re.IGNORECASE,
 )
 
+_METRIC_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "revenue": (
+        "revenue", "sales", "net sales", "gross sales", "turnover", "income",
+        "money", "proceeds", "takings", "amount", "total amount", "order value",
+        "gmv",
+    ),
+    "aov": (
+        "average order value", "aov", "average basket value", "average basket",
+    ),
+    "quantity": (
+        "quantity", "qty", "units", "unit count", "items sold", "volume sold",
+    ),
+    "cost": (
+        "cost", "costs", "expense", "expenses", "spend", "expenditure",
+    ),
+    "profit": (
+        "profit", "profits", "margin", "gross margin", "net margin", "earnings",
+    ),
+    "discount": (
+        "discount", "discount rate", "discount percentage", "discount percent",
+        "markdown", "rebate",
+    ),
+    "price": (
+        "price", "unit price", "selling price", "list price",
+    ),
+    "conversion": (
+        "conversion", "conversion rate", "conversion percentage",
+    ),
+    "delay": (
+        "delay", "delivery delay", "latency", "wait time",
+    ),
+    "churn": (
+        "churn", "churn rate", "attrition", "retention", "cancellation",
+    ),
+}
+
+_DIMENSION_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "region": ("region", "regions", "territory", "market", "market area", "zone"),
+    "segment": ("segment", "segments", "customer segment", "tier", "plan tier"),
+    "category": ("category", "categories", "product category", "product categories"),
+    "channel": ("channel", "channels", "acquisition channel", "source", "medium"),
+    "product": ("product", "products", "sku", "item"),
+    "customer": ("customer", "customers", "client", "clients", "account", "accounts", "user", "users"),
+    "order": ("order", "orders", "transaction", "transactions"),
+}
+
+_RELATION_BOUNDARY = (
+    r"(?=,|;|\bwhile\b|\bwhereas\b|\bcontrolling for\b|\bgiven\b|"
+    r"\bafter accounting for\b|\bholding\b|\?|$)"
+)
+
+_RANK_HIGH_RE = re.compile(r"\b(highest|most|largest|biggest|top)\b", re.I)
+_RANK_LOW_RE = re.compile(r"\b(lowest|least|smallest|bottom|fewest)\b", re.I)
+_RANK_AMBIGUOUS_RE = re.compile(r"\b(best|worst)\b", re.I)
+
+_CAUSAL_RE = re.compile(
+    r"\b(caus(?:e|ed|es|ing|al|ally)|causal|treatment effect|randomi[sz]ed|"
+    r"intervention|counterfactual|what happens if|would .+ if)\b",
+    re.I,
+)
+_PREDICTION_RE = re.compile(
+    r"\b(predict\w*|prediction\w*|likely|probabilit\w*|odds|chance|risk|"
+    r"at risk|will .*(?:churn|cancel|convert|buy|leave))\b",
+    re.I,
+)
+_FORECAST_RE = re.compile(
+    r"\b(forecast\w*|project\w*|projection\w*|outlook|trajectory|"
+    r"next month|next quarter|next year|next week|future|going forward|"
+    r"this month|this quarter|this year|will .*\b(?:increase|decrease|grow|"
+    r"decline|rise|fall)\b)\b",
+    re.I,
+)
+_DIAGNOSTIC_RE = re.compile(
+    r"\b(why|driver\w*|root cause|explain\w*|what caused|what drove|"
+    r"what is behind|reason behind|account for|what happened to|what changed)\b",
+    re.I,
+)
+_SEGMENTATION_RE = re.compile(
+    r"\b(cluster\w*|persona\w*|discover groups?|find groups?|"
+    r"identify groups?|build groups?|create groups?)\b",
+    re.I,
+)
+_DATA_QUALITY_RE = re.compile(
+    r"\b(data quality|clean|cleaning|missing|duplicate|invalid|malformed|"
+    r"outlier\w*|anomal\w*|inconsistent|corrupt|repair|remediat\w*)\b",
+    re.I,
+)
+_RECONCILIATION_RE = re.compile(
+    r"\b(discrep\w*|reconcil\w*|formula\w*|mathematical|mismatch\w*|"
+    r"tie(?:s|d)? out|add(?:s|ed)? up|reconcile)\b",
+    re.I,
+)
+_GOVERNANCE_RE = re.compile(
+    r"\b(privacy|pii|gdpr|ccpa|ethical|ethics|legal|compliance|fairness|"
+    r"disparate|harmful|harm|data protection)\b",
+    re.I,
+)
+_PRESCRIPTIVE_RE = re.compile(
+    r"\b(what should we do|what should i do|recommend\w*|recommendation\w*|"
+    r"action\w*|optimi[sz]\w*|best intervention|how should we|what action)\b",
+    re.I,
+)
+_COMPARISON_RE = re.compile(
+    r"\b(compare|comparison|difference|different|higher|lower|greater|less|"
+    r"more|fewer|versus|vs\.?|between|vary|varies|outperform\w*|underperform\w*|"
+    r"best|worst)\b",
+    re.I,
+)
+_DESCRIPTIVE_RE = re.compile(
+    r"\b(total|sum|average|mean|median|count|number of|how many|how much|"
+    r"typical|usual|distribution|summary|summar(?:y|ize)|describe|show|list)\b",
+    re.I,
+)
+_CHURN_RE = re.compile(
+    r"\b(churn\w*|attrition\w*|cancel\w*|retention\w*|dropoff\w*|"
+    r"at risk of leaving)\b",
+    re.I,
+)
+
+
+def _normalize_phrase(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    p = _normalize_phrase(phrase)
+    if not p:
+        return False
+    return bool(re.search(rf"(?<!\w){re.escape(p)}(?!\w)", _normalize_phrase(text)))
+
+
+def _schema_phrase_matches(phrase: str, columns: Sequence[str]) -> List[str]:
+    pn = _normalize_phrase(phrase)
+    if not pn:
+        return []
+    exact = [str(c) for c in columns if _normalize_phrase(str(c)) == pn]
+    if exact:
+        return exact
+    return [
+        str(c) for c in columns
+        if re.search(rf"(?<!\w){re.escape(pn)}(?!\w)", _normalize_phrase(str(c)))
+    ]
+
+
+def _alias_candidates(phrase: str, columns: Sequence[str], aliases: Dict[str, Tuple[str, ...]]) -> List[str]:
+    pn = _normalize_phrase(phrase)
+    concepts = [
+        concept for concept, values in aliases.items()
+        if any(_normalize_phrase(v) == pn for v in values)
+    ]
+    if not concepts:
+        return []
+
+    candidates: List[str] = []
+    for col in columns:
+        cn = _normalize_phrase(str(col))
+        parts = set(cn.split())
+        for concept in concepts:
+            synonym_set = {_normalize_phrase(v) for v in aliases[concept]} | {concept}
+            if cn in synonym_set or parts.intersection(synonym_set):
+                candidates.append(str(col))
+                break
+    return sorted(set(candidates))
+
+
+def _resolve_phrase(phrase: str, columns: Sequence[str], aliases: Dict[str, Tuple[str, ...]]) -> Optional[str]:
+    exact = _schema_phrase_matches(phrase, columns)
+    if len(exact) == 1:
+        return exact[0]
+    alias = _alias_candidates(phrase, columns, aliases)
+    if len(alias) == 1:
+        return alias[0]
+    return None
+
+
+def _extract_time_hint(question: str) -> Optional[str]:
+    patterns = (
+        r"\b(?:today|yesterday|this week|last week|next week|this month|last month|next month|"
+        r"this quarter|last quarter|next quarter|this year|last year|next year)\b",
+        r"\b(?:q[1-4](?:\s+of\s+20\d{2})?)\b",
+        r"\b(?:trailing|last)\s+\d+\s+(?:days?|weeks?|months?|quarters?|years?)\b",
+        r"\b(?:since|from)\s+[a-z]+(?:\s+20\d{2})?(?:\s+(?:to|through|until)\s+[a-z]+(?:\s+20\d{2})?)?\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, question, re.I)
+        if match:
+            return match.group(0)
+    return None
+
 
 @dataclass
 class InvestigationIntent:
-    """Formal structured intent representation extracted from a business question."""
+    """Canonical deterministic interpretation of a business question."""
     raw_question: str
-    intent_type: str  # ROOT_CAUSE, CORRELATION, FORECAST, SEGMENTATION, PERFORMANCE, GENERAL
-    comparison_type: str = "GENERAL_INVESTIGATION"  # PERIOD_OVER_PERIOD, SEGMENT_CONTRAST, ANOMALY_ROOT_CAUSE, CORRELATION_SEARCH, DISTRIBUTION_SHIFT
+    intent_type: str
+    comparison_type: str = "GENERAL_INVESTIGATION"
     target_metric_hint: Optional[str] = None
     dimension_hint: Optional[str] = None
     comparison_period_hint: Optional[str] = None
@@ -71,233 +224,266 @@ class InvestigationIntent:
     keywords: List[str] = field(default_factory=list)
     constraints: Dict[str, Any] = field(default_factory=dict)
     business_objective: str = ""
-    uncertainty_score: float = 0.0  # 0.0 (certain) to 1.0 (ambiguous)
+    uncertainty_score: float = 0.0
     assumptions: List[str] = field(default_factory=list)
-    # Direction of the change the question is actually asking about (e.g.
-    # "why did revenue FALL" -> decrease). This is resolved ONCE here, from
-    # the question itself, and threaded through SemanticResolution to every
-    # hypothesis in the investigation -- it is deliberately not re-derived
-    # per-hypothesis from each hypothesis's own generated claim text, since
-    # hypothesis claim templates don't consistently restate it and doing so
-    # would make "direction" an unreliable, wording-dependent identity axis.
     direction_hint: str = "unspecified"
+    ranking_direction: Optional[str] = None
+    aggregation_hint: Optional[str] = None
+    time_horizon_hint: Optional[str] = None
+    relation_target_phrase: Optional[str] = None
+    relation_predictor_phrases: List[str] = field(default_factory=list)
 
 
 class IntentEngine:
-    """Extracts analytical objectives and target candidates without hardcoded business assumptions."""
+    """Deterministic parser; schema evidence wins over linguistic guesses."""
+
+    @staticmethod
+    def _relation_sides(question: str) -> Tuple[Optional[str], List[str]]:
+        patterns = (
+            (r"\b(?:is|are|do|does|can|whether)\s+(.+?)\s+"
+             r"(?:affect\w*|influenc\w*|impact\w*)\s+(.+?)" + _RELATION_BOUNDARY, "object"),
+            (r"\b(?:is|are|do|does|can|whether)\s+(.+?)\s+"
+             r"(?:depend\w*)\s+on\s+(.+?)" + _RELATION_BOUNDARY, "subject"),
+            (r"\b(?:correlation|relationship|association)\s+between\s+(.+?)\s+and\s+(.+?)" + _RELATION_BOUNDARY, "symmetric"),
+            (r"\b(.+?)\s+(?:associated|correlated|related|linked|connected)\s+with\s+(.+?)" + _RELATION_BOUNDARY, "symmetric"),
+            (r"\b(?:effect|impact)\s+of\s+(.+?)\s+on\s+(.+?)" + _RELATION_BOUNDARY, "object"),
+        )
+        for pattern, mode in patterns:
+            match = re.search(pattern, question, re.I)
+            if not match:
+                continue
+            left, right = match.group(1).strip(" ,?"), match.group(2).strip(" ,?")
+            if mode == "object":
+                return right, [left]
+            if mode == "subject":
+                return left, [right]
+            if mode == "symmetric":
+                return None, [left, right]
+        return None, []
 
     @staticmethod
     def parse_intent(question: str, available_columns: Optional[List[str]] = None) -> InvestigationIntent:
-        q_lower = question.lower()
+        q = " ".join((question or "").split())
+        q_lower = q.lower()
         words = re.findall(r"\b[a-zA-Z0-9_]+\b", q_lower)
-        
-        # 1. Intent Classification
-        #
-        # BUGFIX (DEFECT-005): CORRELATION and FORECAST are checked BEFORE
-        # ROOT_CAUSE now. Previously ROOT_CAUSE was checked first, and its
-        # keyword list includes generic words ("driver", "cause") that
-        # legitimately co-occur in correlation/forecast phrasing too --
-        # e.g. "What are the correlation drivers of revenue?" contains both
-        # "correlation" (unambiguous) and "driver" (ambiguous, ROOT_CAUSE
-        # list), and used to be misclassified as ROOT_CAUSE purely because
-        # ROOT_CAUSE's elif branch ran first. CORRELATION's and FORECAST's
-        # own keyword lists ("correlation", "correlated", "forecast",
-        # "predict", "trajectory", etc.) are far more specific and rarely if
-        # ever legitimately mean root-cause, so checking them first resolves
-        # the ambiguity in favor of the more specific, less ambiguous signal.
-        if _CORRELATION_KEYWORD_RE.search(q_lower):
-            intent_type = "CORRELATION"
-            comparison_type = "CORRELATION_SEARCH"
-            ops = ["BIVARIATE_CORRELATION", "PARTIAL_CORRELATION", "CRAMERS_V"]
-        elif any(w in q_lower for w in [
-            "forecast", "predict", "trajectory", "future", "next month", "trend", "growth",
-            # Expanded: other common ways of asking for a forward-looking
-            # projection that the original list didn't recognize.
-            "outlook", "projection", "going forward", "upcoming",
-            "next quarter", "next year", "look like next", "headed",
-        ]):
-            intent_type = "FORECAST"
-            comparison_type = "PERIOD_OVER_PERIOD"
-            ops = ["TIME_SERIES_TREND", "GROWTH_RATE", "CUSUM_CHANGE_POINT"]
-        elif any(w in q_lower for w in [
-            "why", "drop", "fell", "fall", "decrease", "decline", "spike", "surge", "cause", "driver", "root cause", "down",
-            # Expanded: "cause" as a bare word never matches its own common
-            # inflections ("causing", "caused", "causes" don't contain the
-            # substring "cause" -- e.g. "causing" is missing the trailing
-            # "e"). Also added other everyday diagnostic phrasings
-            # ("what happened to X", "what changed", "reason behind",
-            # "account for", "dip", "jump", "miss(ed)") that real users
-            # reach for at least as often as "why"/"drop"/"decline".
-            "causing", "caused", "causes", "reason", "explain", "diagnose",
-            "dip", "jump", "miss", "missed", "what happened", "what changed",
-            "account for", "behind the",
-        ]):
-            intent_type = "ROOT_CAUSE"
-            comparison_type = "ANOMALY_ROOT_CAUSE"
-            ops = ["CONCENTRATION", "VARIANCE_DECOMPOSITION", "SEGMENT_CONTRAST", "ADVERSARIAL_SIMPSON"]
-        elif any(w in q_lower for w in [
-            "churn", "churned", "cancellation", "cancelling", "canceled", "cancelled", "attrition", "dropoff", "retention", "retained",
-            # Expanded: "at risk of leaving" / "at risk" / "churn risk" are
-            # everyday phrasings for the same retention question that never
-            # mention the word "churn" itself.
-            "at risk of leaving", "at risk", "churn risk",
-        ]):
-            intent_type = "CHURN"
-            comparison_type = "SEGMENT_CONTRAST"
-            ops = ["CRUDE_CHURN_RATE", "EXPOSURE_ADJUSTED_RATE", "STRATIFIED_CHURN_CHECK"]
-        elif any(w in q_lower for w in [
-            "segment", "rfm", "cluster", "cohort", "groups",
-        ]):
-            intent_type = "SEGMENTATION"
-            comparison_type = "SEGMENT_CONTRAST"
-            ops = ["SEGMENT_DECOMPOSITION", "PARETO_80_20", "ANOVA_ETA_SQUARED"]
-        elif any(w in q_lower for w in [
-            "performing", "performance", "top", "bottom", "ranking", "worst", "best", "share", "contribution",
-            # Expanded: explicit ranking/comparison phrasings ("rank the
-            # reps by...", "how does Q1 compare to Q2", "underperforms")
-            # that name the operation the user wants without using any of
-            # the words above.
-            "rank", "ranked", "compare", "comparison", "compared to",
-            "most", "least", "underperform", "outperform",
-        ]):
-            intent_type = "PERFORMANCE"
-            comparison_type = "SEGMENT_CONTRAST"
-            ops = ["RANKING", "SHARE_OF_TOTAL", "GINI_CONCENTRATION"]
-        else:
-            intent_type = "GENERAL"
-            comparison_type = "GENERAL_INVESTIGATION"
-            ops = ["DESCRIPTIVE_SUMMARY", "DISTRIBUTION_SCAN"]
+        columns = [str(c) for c in (available_columns or [])]
 
-        # 2. Extract column matches dynamically from available columns if provided.
-        # Relation grammar has an explicit subject/object direction ONLY for
-        # "depend(s) on", where the grammatical SUBJECT genuinely is the
-        # outcome being explained ("Does revenue depend on price and
-        # marketing_spend?" -- revenue, the subject, is the target; price
-        # and marketing_spend, the object, are predictors). This must not
-        # mistakenly choose the first predictor as the target.
-        #
-        # "affect(s)"/"influence(s)" are grammatically the OPPOSITE polarity
-        # -- in "X affects/influences Y", the SUBJECT (X) is the cause/
-        # predictor and the OBJECT (Y) is the outcome/target ("Does price
-        # influence annual_sales?" -- price, the subject, is the predictor).
-        # Treating them the same as "depend on" previously forced the
-        # predictor into the target role for this verb group.
-        #
-        # Symmetric associative verbs ("associated with", "correlated
-        # with", "related to", "relate to") carry no direction at all: "Is
-        # price associated with annual_sales?" does not grammatically
-        # privilege either side as the outcome.
-        #
-        # All three misclassifications collapsed to the same downstream
-        # symptom (confirmed via live regression): forcing an unrelated
-        # subject into target_metric_hint short-circuited SemanticEngine's
-        # own alphabetically-stable bivariate tie-break in
-        # resolve_schema_static, silently flipping which column was
-        # treated as the requested predictor. Only "depend on"/"depends
-        # on" sets target_metric_hint from the subject here; "affect(s)"/
-        # "influence(s)" set it from the OBJECT instead; symmetric verbs
-        # set neither and fall through to the generic scoring/tie-break
-        # logic below.
-        target_metric_hint = None
-        dimension_hint = None
+        relation_target_phrase, relation_predictor_phrases = IntentEngine._relation_sides(q)
+        relation_question = bool(_CORRELATION_KEYWORD_RE.search(q_lower) or relation_predictor_phrases)
+
+        causal = bool(_CAUSAL_RE.search(q_lower))
+        prediction = bool(_PREDICTION_RE.search(q_lower))
+        forecast = bool(_FORECAST_RE.search(q_lower)) and not prediction
+        ranking_high = bool(_RANK_HIGH_RE.search(q_lower))
+        ranking_low = bool(_RANK_LOW_RE.search(q_lower))
+        ranking_ambiguous = bool(_RANK_AMBIGUOUS_RE.search(q_lower))
+        ranking_question = bool(
+            ranking_high or ranking_low or ranking_ambiguous
+            or re.search(r"\b(rank|ranked|ranking|top|bottom)\b", q_lower, re.I)
+        )
+        comparison_question = bool(_COMPARISON_RE.search(q_lower))
+
+        if _GOVERNANCE_RE.search(q_lower):
+            intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["GOVERNANCE"]
+        elif _RECONCILIATION_RE.search(q_lower):
+            intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["RECONCILIATION"]
+        elif _DATA_QUALITY_RE.search(q_lower) and re.search(
+            r"\b(check|find|identify|clean|repair|quality|missing|duplicate|invalid|outlier|anomal)\w*\b",
+            q_lower,
+            re.I,
+        ):
+            intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["DATA_QUALITY"]
+        elif _PRESCRIPTIVE_RE.search(q_lower):
+            intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["PRESCRIPTIVE"]
+        elif causal:
+            intent_type, comparison_type, ops = "CAUSAL", "ANOMALY_ROOT_CAUSE", ["CAUSAL_EFFECT"]
+        elif prediction:
+            intent_type, comparison_type, ops = "PREDICTION", "GENERAL_INVESTIGATION", ["RISK_OR_OUTCOME_PREDICTION"]
+        elif forecast:
+            intent_type, comparison_type, ops = "FORECAST", "PERIOD_OVER_PERIOD", ["TIME_SERIES_FORECAST", "GROWTH_RATE"]
+        elif relation_question and not causal:
+            intent_type, comparison_type, ops = "CORRELATION", "CORRELATION_SEARCH", ["BIVARIATE_CORRELATION", "PARTIAL_CORRELATION", "CRAMERS_V"]
+        elif _SEGMENTATION_RE.search(q_lower) and not ranking_question and not comparison_question:
+            intent_type, comparison_type, ops = "SEGMENTATION", "SEGMENT_CONTRAST", ["SEGMENT_DECOMPOSITION", "STABILITY_CHECK"]
+        elif _DIAGNOSTIC_RE.search(q_lower):
+            intent_type, comparison_type, ops = "ROOT_CAUSE", "ANOMALY_ROOT_CAUSE", ["CONCENTRATION", "VARIANCE_DECOMPOSITION", "ADVERSARIAL_SIMPSON"]
+        elif ranking_question or comparison_question:
+            intent_type, comparison_type = "PERFORMANCE", "SEGMENT_CONTRAST"
+            ops = ["RANKING"] if ranking_question else ["GROUP_COMPARISON"]
+        elif _CHURN_RE.search(q_lower):
+            intent_type, comparison_type, ops = "CHURN", "SEGMENT_CONTRAST", ["CRUDE_CHURN_RATE", "EXPOSURE_ADJUSTED_RATE", "STRATIFIED_CHURN_CHECK"]
+        elif _DESCRIPTIVE_RE.search(q_lower) or re.search(r"\b(by|per|across|within|for each)\b", q_lower):
+            intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["DESCRIPTIVE_SUMMARY", "DISTRIBUTION_SCAN"]
+        else:
+            intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["DESCRIPTIVE_SUMMARY", "DISTRIBUTION_SCAN"]
+
+        target_metric_hint: Optional[str] = None
+        dimension_hint: Optional[str] = None
         candidate_dims: List[str] = []
 
-        if available_columns:
-            depend_match = re.search(
-                r"\b(?:is|are|do|does|can|whether)\s+(.+?)\s+"
-                r"(?:depend on|depends on)\s+"
-                r"(.+?)(?=,|;|\bcontrolling for\b|\bgiven\b|\bafter accounting for\b|\bholding\b|\?|$)",
-                q_lower,
-                flags=re.IGNORECASE,
-            )
-            if depend_match:
-                subject_text, object_text = depend_match.groups()
-                subject_cols = [c for c in available_columns if c.lower() in subject_text or c.lower().replace("_", " ") in subject_text]
-                if len(subject_cols) == 1:
-                    target_metric_hint = subject_cols[0]
-            else:
-                affect_match = re.search(
-                    r"\b(?:is|are|do|does|can|whether)\s+(.+?)\s+"
-                    r"(?:influence|influences|affect|affects)\s+"
-                    r"(.+?)(?=,|;|\bcontrolling for\b|\bgiven\b|\bafter accounting for\b|\bholding\b|\?|$)",
-                    q_lower,
-                    flags=re.IGNORECASE,
-                )
-                if affect_match:
-                    subject_text, object_text = affect_match.groups()
-                    object_cols = [c for c in available_columns if c.lower() in object_text or c.lower().replace("_", " ") in object_text]
-                    if len(object_cols) == 1:
-                        target_metric_hint = object_cols[0]
+        if relation_target_phrase:
+            target_metric_hint = _resolve_phrase(relation_target_phrase, columns, _METRIC_ALIASES)
 
-            metric_matches: List[str] = []
-            for col in available_columns:
-                c_clean = col.lower().replace("_", " ")
-                if c_clean in q_lower or col.lower() in words:
-                    if any(k in col.lower() for k in ["id", "code", "region", "country", "type", "category", "segment", "channel", "tier"]):
-                        if not dimension_hint:
-                            dimension_hint = col
-                        candidate_dims.append(col)
-                    else:
-                        metric_matches.append(col)
+        explicit_targets = [c for c in columns if _contains_phrase(q, c)]
+
+        if not target_metric_hint:
+            metric_mentions: List[Tuple[int, str]] = []
+            for _, aliases in _METRIC_ALIASES.items():
+                for alias in aliases:
+                    if _contains_phrase(q, alias):
+                        candidates = _alias_candidates(alias, columns, _METRIC_ALIASES)
+                        if len(candidates) == 1:
+                            metric_mentions.append((q_lower.find(_normalize_phrase(alias)), candidates[0]))
+            metric_mentions.sort(key=lambda x: x[0])
+            unique = list(dict.fromkeys(c for _, c in metric_mentions))
+            if relation_question and len(unique) >= 2:
+                target_metric_hint = None
+            elif len(unique) == 1:
+                target_metric_hint = unique[0]
+
+        if not target_metric_hint and len(explicit_targets) == 1:
+            candidate = explicit_targets[0]
+            if not re.search(r"(^|_)(id|key|code|uuid)$", candidate, re.I):
+                target_metric_hint = candidate
+
+        group_phrases: List[str] = []
+        for match in re.finditer(
+            r"\b(?:by|per|across|within|for each)\s+(.+?)(?=\s+(?:after|before|during|since|between|where|when)\b|\?|$)",
+            q,
+            re.I,
+        ):
+            group_phrases.append(match.group(1).strip(" ,"))
+
+        top_by = re.search(
+            r"\b(?:rank|ranked|top|bottom)\s+(?:\d+\s+)?(?:the\s+)?(.+?)\s+by\s+(.+?)(?:\?|$)",
+            q,
+            re.I,
+        )
+        if top_by:
+            group_phrases.insert(0, top_by.group(1).strip(" ,"))
             if not target_metric_hint:
-                if intent_type == "CORRELATION" and len(metric_matches) >= 2:
-                    # Two numeric metrics both explicitly named in a
-                    # CORRELATION question ("Is price associated with
-                    # annual_sales?") is the expected bivariate case, not
-                    # one where this loop's incidental match order should
-                    # crown a "target". Picking metric_matches[0] here
-                    # silently forced whichever column this loop happened
-                    # to see first into the target role (regression:
-                    # target_metric_hint="price" for that exact question,
-                    # which then short-circuited SemanticEngine's own
-                    # alphabetically-stable bivariate tie-break in
-                    # resolve_schema_static). Leave target_metric_hint
-                    # unset here and let that tie-break decide.
-                    pass
-                elif metric_matches:
-                    target_metric_hint = metric_matches[0]
+                target_metric_hint = _resolve_phrase(top_by.group(2).strip(" ,"), columns, _METRIC_ALIASES)
 
-        # 3. Uncertainty Scoring
-        uncertainty = 0.1 if (target_metric_hint and dimension_hint) else (0.4 if target_metric_hint else 0.7)
-
-        # 3b. Direction of the change being asked about. Resolved once from
-        # the raw question text, deterministically, so every hypothesis
-        # synthesized downstream can share the SAME direction rather than
-        # each guessing independently from its own claim wording.
-        decrease_kw = (
-            "drop", "fell", "fall", "decreas", "declin", "down", "shrink", "lower", "reduc", "worsen",
-            # Expanded to match the ROOT_CAUSE keyword additions above.
-            "dip", "miss",
+        which_group = re.search(
+            r"\b(?:which|what)\s+(.+?)\s+(?:has|have|shows?|with)\s+(?:the\s+)?"
+            r"(?:highest|lowest|largest|smallest|most|least|top|bottom|best|worst)\b",
+            q,
+            re.I,
         )
-        increase_kw = (
-            "increas", "rise", "rose", "grow", "surge", "spike", "gain", "up", "higher", "improv",
-            # Expanded to match the ROOT_CAUSE keyword additions above.
-            "jump",
-        )
-        if any(w in q_lower for w in decrease_kw):
-            direction_hint = "decrease"
-        elif any(w in q_lower for w in increase_kw):
-            direction_hint = "increase"
-        else:
-            direction_hint = "unspecified"
+        if which_group:
+            group_phrases.insert(0, which_group.group(1).strip(" ,"))
 
-        # 4. Formulate Business Objective
-        obj = f"Investigate {intent_type.lower().replace('_', ' ')} for {target_metric_hint or 'primary metrics'} across {dimension_hint or 'key business partitions'}."
+        for phrase in group_phrases:
+            resolved = _resolve_phrase(phrase, columns, _DIMENSION_ALIASES)
+            if resolved and resolved != target_metric_hint:
+                dimension_hint = resolved
+                break
+            matches = _schema_phrase_matches(phrase, columns)
+            if len(matches) == 1 and matches[0] != target_metric_hint:
+                dimension_hint = matches[0]
+                break
+
+        if not dimension_hint:
+            dim_mentions: List[str] = []
+            for values in _DIMENSION_ALIASES.values():
+                for alias in values:
+                    if _contains_phrase(q, alias):
+                        matches = _alias_candidates(alias, columns, _DIMENSION_ALIASES)
+                        if len(matches) == 1:
+                            dim_mentions.append(matches[0])
+            dim_unique = list(dict.fromkeys(dim_mentions))
+            if len(dim_unique) == 1 and dim_unique[0] != target_metric_hint:
+                dimension_hint = dim_unique[0]
+
+        if dimension_hint:
+            candidate_dims = [dimension_hint]
+
+        resolved_predictors = []
+        for phrase in relation_predictor_phrases:
+            resolved = _resolve_phrase(phrase, columns, _METRIC_ALIASES)
+            resolved_predictors.append(resolved or phrase)
+        relation_predictor_phrases = resolved_predictors
+
+        ranking_direction = None
+        if ranking_high and not ranking_low and not ranking_ambiguous:
+            ranking_direction = "DESC"
+        elif ranking_low and not ranking_high and not ranking_ambiguous:
+            ranking_direction = "ASC"
+
+        aggregation_hint = None
+        if re.search(r"\b(average|mean|avg)\b", q_lower):
+            aggregation_hint = "mean"
+        elif re.search(r"\bmedian\b", q_lower):
+            aggregation_hint = "median"
+        elif re.search(r"\b(total|sum)\b", q_lower):
+            aggregation_hint = "sum"
+        elif re.search(r"\b(how many|number of|count)\b", q_lower):
+            aggregation_hint = "count"
+        elif re.search(r"\b(rate|percentage|percent|proportion)\b", q_lower):
+            aggregation_hint = "rate"
+
+        decrease = bool(re.search(
+            r"\b(drop\w*|fell|fall\w*|decreas\w*|declin\w*|down|shrink\w*|"
+            r"lower\w*|reduc\w*|dip\w*|worsen\w*|miss\w*)\b", q_lower
+        ))
+        increase = bool(re.search(
+            r"\b(increas\w*|rise\w*|rose|grow\w*|surge\w*|spike\w*|"
+            r"gain\w*|higher|improv\w*|jump\w*)\b", q_lower
+        ))
+        direction_hint = (
+            "decrease" if decrease and not increase
+            else "increase" if increase and not decrease
+            else "unspecified"
+        )
+
+        time_horizon_hint = _extract_time_hint(q_lower)
+
+        constraints: Dict[str, Any] = {}
+        if relation_predictor_phrases:
+            constraints["relation_predictors"] = list(relation_predictor_phrases)
+        if relation_target_phrase:
+            constraints["relation_target_phrase"] = relation_target_phrase
+        if time_horizon_hint:
+            constraints["time_horizon"] = time_horizon_hint
+        if ranking_ambiguous:
+            constraints["ranking_direction_requires_metric_polarity"] = True
+
+        uncertainty = (
+            0.10 if relation_question and len(relation_predictor_phrases) >= 2
+            else 0.25 if target_metric_hint and dimension_hint
+            else 0.35 if target_metric_hint or dimension_hint
+            else 0.45 if ranking_question or comparison_question
+            else 0.70
+        )
+
+        objective = (
+            f"Investigate {intent_type.lower().replace('_', ' ')} for "
+            f"{target_metric_hint or 'primary metrics'} across "
+            f"{dimension_hint or 'key business partitions'}."
+        )
 
         return InvestigationIntent(
-            raw_question=question,
+            raw_question=q,
             intent_type=intent_type,
             comparison_type=comparison_type,
             target_metric_hint=target_metric_hint,
             dimension_hint=dimension_hint,
-            direction_hint=direction_hint,
+            comparison_period_hint=time_horizon_hint,
             requested_operations=ops,
             candidate_dimensions=candidate_dims,
             keywords=words,
-            business_objective=obj,
+            constraints=constraints,
+            business_objective=objective,
             uncertainty_score=uncertainty,
             assumptions=[
                 "Deterministic execution across available dataset columns.",
-                "Hypothesis falsification prioritized over answer guessing.",
+                "Schema-grounded aliases are accepted only when uniquely resolvable.",
+                "Unresolved or ambiguous variables are not replaced by unrelated columns.",
             ],
+            direction_hint=direction_hint,
+            ranking_direction=ranking_direction,
+            aggregation_hint=aggregation_hint,
+            time_horizon_hint=time_horizon_hint,
+            relation_target_phrase=relation_target_phrase,
+            relation_predictor_phrases=list(relation_predictor_phrases),
         )
