@@ -179,7 +179,10 @@ def _alias_candidates(phrase: str, columns: Sequence[str], aliases: Dict[str, Tu
         parts = set(cn.split())
         for concept in concepts:
             synonym_set = {_normalize_phrase(v) for v in aliases[concept]} | {concept}
-            if cn in synonym_set or parts.intersection(synonym_set):
+            # The natural-language phrase identifies a semantic concept;
+            # the physical column may use the canonical concept name rather
+            # than the exact spoken synonym (e.g. "sales"/"money" -> revenue).
+            if cn == concept or cn in synonym_set or parts.intersection(synonym_set):
                 candidates.append(str(col))
                 break
     return sorted(set(candidates))
