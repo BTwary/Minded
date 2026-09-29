@@ -203,6 +203,97 @@ def frequency_table(series: pd.Series, top_n: int = 20) -> List[Dict[str, Any]]:
 # 2. TIME SERIES ANALYTICS
 # ==============================================================================
 
+def canonical_time_coordinates(
+    time_series_or_df: Any,
+    time_col: Optional[str] = None,
+    length: Optional[int] = None,
+) -> np.ndarray:
+    """Extract authoritative chronological coordinates (period deltas from t0) for trend regression.
+
+    Ensures that every analytical engine (analyst answer, belief, transition, execution provider)
+    regresses against true elapsed temporal coordinates (e.g. calendar years/months/days)
+    rather than ordinal row positions (0..n-1), correctly handling time series with gaps.
+    """
+    if time_series_or_df is None:
+        return np.arange(length or 0, dtype=float)
+
+    if isinstance(time_series_or_df, pd.DataFrame):
+        df = time_series_or_df
+        if len(df) == 0:
+            return np.array([], dtype=float)
+        col = None
+        if time_col and time_col in df.columns:
+            col = time_col
+        else:
+            dt_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+            if dt_cols:
+                col = dt_cols[0]
+            else:
+                named = [c for c in df.columns if any(k in str(c).lower() for k in ("time", "date", "year", "period", "month", "quarter", "day"))]
+                if named:
+                    col = named[0]
+                elif len(df.columns) > 1:
+                    col = df.columns[0]
+        if col is not None:
+            series = df[col]
+        else:
+            return np.arange(len(df), dtype=float)
+    else:
+        series = time_series_or_df
+
+    if isinstance(series, pd.PeriodIndex) and len(series) > 0:
+        p0 = series[0]
+        return np.array([(p - p0).n for p in series], dtype=float)
+    if hasattr(series, "index") and isinstance(series.index, pd.PeriodIndex) and len(series) > 0:
+        p0 = series.index[0]
+        return np.array([(p - p0).n for p in series.index], dtype=float)
+
+    if not isinstance(series, pd.Series):
+        try:
+            series = pd.Series(series)
+        except Exception:
+            return np.arange(length or (len(series) if hasattr(series, "__len__") else 0), dtype=float)
+
+    if len(series) == 0:
+        return np.array([], dtype=float)
+
+    if pd.api.types.is_numeric_dtype(series):
+        s_num = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+        if len(s_num) > 0 and np.all(np.isfinite(s_num)):
+            return s_num - s_num[0]
+
+    try:
+        dt = pd.to_datetime(series, errors="coerce")
+        if dt.notna().sum() == len(series) and len(series) > 0:
+            span_days = (dt.max() - dt.min()).days
+            if (dt.dt.month == 1).all() and (dt.dt.day == 1).all():
+                freq = "Y"
+            elif (dt.dt.day == 1).all():
+                freq = "M"
+            elif span_days >= 366 * 3:
+                freq = "Y"
+            elif span_days >= 366 * 1.5 or span_days >= 120:
+                freq = "M"
+            elif span_days >= 21:
+                freq = "W"
+            else:
+                freq = "D"
+            periods = dt.dt.to_period(freq)
+            p0 = periods.iloc[0]
+            return np.array([(p - p0).n for p in periods], dtype=float)
+    except Exception:
+        pass
+
+    try:
+        s_num = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+        if len(s_num) > 0 and np.all(np.isfinite(s_num)):
+            return s_num - s_num[0]
+    except Exception:
+        pass
+
+    return np.arange(len(series), dtype=float)
+
+
 def time_series_summary(
     df: pd.DataFrame,
     time_col: str,
@@ -225,7 +316,7 @@ def time_series_summary(
         return {"error": "Time series analysis requires at least 2 chronological observations."}
 
     vals = sub_df[value_col].values.astype(float)
-    x = np.arange(n, dtype=float)
+    x = canonical_time_coordinates(sub_df[time_col])
 
     # 1. Period-over-Period deltas
     pop_deltas = np.diff(vals)

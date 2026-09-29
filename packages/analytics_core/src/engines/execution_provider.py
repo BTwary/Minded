@@ -122,11 +122,14 @@ def _derive_primary_metric(
             raise ValueError("Regression requires an explicit numeric primary result column.")
         if not re.search(r"\bORDER\s+BY\s+", sql, re.IGNORECASE):
             raise ValueError("Regression trend requires the query to be deterministically ordered chronologically (ORDER BY).")
-        y = pd.to_numeric(result[primary_result_column], errors="coerce").dropna()
+        valid_rows = result.dropna(subset=[primary_result_column])
+        y = pd.to_numeric(valid_rows[primary_result_column], errors="coerce").dropna()
         if len(y) < 3 or y.nunique() < 2:
             raise ValueError("Regression trend is not identifiable from the observed result rows.")
         import numpy as np
-        x = np.arange(len(y), dtype=float)
+        from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+        other_cols = [c for c in valid_rows.columns if c != primary_result_column]
+        x = canonical_time_coordinates(valid_rows[other_cols[0]]) if other_cols else np.arange(len(y), dtype=float)
         slope = float(np.polyfit(x, y.to_numpy(dtype=float), 1)[0])
         return slope, "regression_slope"
 

@@ -245,17 +245,27 @@ class BeliefEngine:
         )
 
     @staticmethod
-    def bayes_factor_trend(y: Sequence[float]) -> BayesianEvidence:
+    def bayes_factor_trend(y: Sequence[float], x: Optional[Sequence[float]] = None) -> BayesianEvidence:
         """Approximate BF10 for linear temporal trend vs intercept-only model."""
-        values = np.asarray(y, dtype=float)
-        values = values[np.isfinite(values)]
+        raw_vals = np.asarray(y, dtype=float)
+        mask = np.isfinite(raw_vals)
+        values = raw_vals[mask]
         n = int(len(values))
         if n < 8 or np.std(values) <= 0:
             return BayesianEvidence(1.0, "NEUTRAL_INADEQUATE_TREND", n, ("At least 8 finite time periods and non-zero variance are required.",))
-        x = np.arange(n, dtype=float)
-        slope, intercept = np.polyfit(x, values, 1)
+        if x is not None:
+            x_arr = np.asarray(x, dtype=float)
+            if len(x_arr) == len(raw_vals):
+                x_coord = x_arr[mask]
+            elif len(x_arr) == n:
+                x_coord = x_arr
+            else:
+                x_coord = np.arange(n, dtype=float)
+        else:
+            x_coord = np.arange(n, dtype=float)
+        slope, intercept = np.polyfit(x_coord, values, 1)
         sse0 = float(np.sum((values - np.mean(values)) ** 2))
-        sse1 = float(np.sum((values - (slope * x + intercept)) ** 2))
+        sse1 = float(np.sum((values - (slope * x_coord + intercept)) ** 2))
         if sse1 <= 0:
             bf = 1e12
         else:
@@ -266,7 +276,7 @@ class BeliefEngine:
             bf,
             "BIC_GAUSSIAN_LINEAR_TREND",
             n,
-            ("Ordered observations are equally spaced after aggregation.", "Gaussian residuals with constant variance.", "BIC is used as an approximate Bayes factor."),
+            ("Ordered observations with temporal coordinates.", "Gaussian residuals with constant variance.", "BIC is used as an approximate Bayes factor."),
             diagnostic=f"slope={slope:.6g}",
         )
 
@@ -348,7 +358,12 @@ class BeliefEngine:
             numeric = [c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])]
             trend_col = effective_metric_col if effective_metric_col in numeric else (numeric[0] if len(numeric) == 1 else None)
             if trend_col is not None:
-                ev = BeliefEngine.bayes_factor_trend(frame[trend_col].to_numpy())
+                time_cols = [c for c in frame.columns if c != trend_col]
+                x_coord = None
+                if time_cols:
+                    from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+                    x_coord = canonical_time_coordinates(frame[time_cols[0]])
+                ev = BeliefEngine.bayes_factor_trend(frame[trend_col].to_numpy(), x=x_coord)
                 for i, h in enumerate(hypotheses):
                     if getattr(h, "hypothesis_code", "") not in codes:
                         continue

@@ -2060,13 +2060,8 @@ def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
         if agg in ("sum", "count") and seen_days < 0.9 * full_days:
             caveats.append(f"The last {grain} ({per}) covers only {seen_days} of {full_days} days and was excluded from the trend, since a partial period always looks like a drop.")
             frame = frame.iloc[:-1]
-    if isinstance(frame.index, pd.PeriodIndex) and len(frame) > 0:
-        p0 = frame.index[0]
-        idx = np.array([(p - p0).n for p in frame.index], dtype=float)
-    elif pd.api.types.is_numeric_dtype(frame.index) and len(frame) > 0:
-        idx = np.array(frame.index - frame.index[0], dtype=float)
-    else:
-        idx = np.arange(len(frame), dtype=float)
+    from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+    idx = canonical_time_coordinates(frame.index, length=len(frame))
     vals = frame["value"].to_numpy(float)
     lr = sps.linregress(idx, vals)
     tau, tau_p = sps.kendalltau(idx, vals)

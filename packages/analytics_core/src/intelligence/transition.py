@@ -681,7 +681,16 @@ class ScientificTransitionService:
                     ordered = result_df.dropna(subset=[y_col])
                     y = ordered[y_col].astype(float).values
                     if len(y) >= 3 and np.std(y) > 0:
-                        x = np.arange(len(y), dtype=float)
+                        from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+                        time_candidate = None
+                        sem_time = getattr(semantic, "time_col", None) or getattr(semantic, "time_dimension_col", None)
+                        if sem_time and sem_time in ordered.columns and sem_time != y_col:
+                            time_candidate = sem_time
+                        else:
+                            other_cols = [c for c in ordered.columns if c != y_col]
+                            if other_cols:
+                                time_candidate = other_cols[0]
+                        x = canonical_time_coordinates(ordered[time_candidate]) if time_candidate else np.arange(len(y), dtype=float)
                         slope, intercept, r_value, p_value, _std_err = _scipy_stats.linregress(x, y)
                         r_sq_pct = float(np.clip((r_value ** 2) * 100.0, 0.0, 100.0))
                         eta_sq = r_sq_pct
