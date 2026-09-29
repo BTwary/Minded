@@ -139,18 +139,36 @@ def build_canonical_semantic_resolution(
     )
 
     outcome = _resolve_outcome_field(semantic, task)
-    dimension = _resolve_single_field(
-        SemanticRole.GROUPING_DIMENSION,
-        getattr(semantic, "group_dimension_col", None),
-        getattr(semantic, "available_categorical_cols", None),
-        "semantic.group_dimension_col",
-    )
-    time = _resolve_single_field(
-        SemanticRole.TIME_VARIABLE,
-        getattr(semantic, "time_col", None),
-        None,
-        "semantic.time_col",
-    )
+    if question_roles and getattr(question_roles, "canonical_roles_authoritative", False):
+        dim_col = question_roles.grouping_columns[0] if (question_roles.grouping_columns and len(question_roles.grouping_columns) > 0) else None
+        dimension = ResolvedSemanticField(
+            role=SemanticRole.GROUPING_DIMENSION,
+            value=dim_col,
+            status=ResolutionStatus.RESOLVED if dim_col else ResolutionStatus.UNRESOLVED,
+            candidates=[dim_col] if dim_col else [],
+            provenance={"source": "canonical_question_contract"},
+        )
+        time_col = question_roles.time_column
+        time = ResolvedSemanticField(
+            role=SemanticRole.TIME_VARIABLE,
+            value=time_col,
+            status=ResolutionStatus.RESOLVED if time_col else ResolutionStatus.UNRESOLVED,
+            candidates=[time_col] if time_col else [],
+            provenance={"source": "canonical_question_contract"},
+        )
+    else:
+        dimension = _resolve_single_field(
+            SemanticRole.GROUPING_DIMENSION,
+            getattr(semantic, "group_dimension_col", None),
+            getattr(semantic, "available_categorical_cols", None),
+            "semantic.group_dimension_col",
+        )
+        time = _resolve_single_field(
+            SemanticRole.TIME_VARIABLE,
+            getattr(semantic, "time_col", None),
+            None,
+            "semantic.time_col",
+        )
     secondary_metric = _resolve_single_field(
         SemanticRole.EXPLANATORY_VARIABLE,
         getattr(semantic, "secondary_metric_col", None),

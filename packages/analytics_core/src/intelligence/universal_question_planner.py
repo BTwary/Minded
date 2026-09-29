@@ -100,6 +100,7 @@ class SemanticContract:
     resolution_confidence: float = 0.0
     semantic_evidence: Dict[str, Any] = field(default_factory=dict)
     ranking_direction: Optional[str] = None
+    canonical_roles_authoritative: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,6 +114,7 @@ class SemanticContract:
             "resolution_confidence": float(self.resolution_confidence),
             "semantic_evidence": dict(self.semantic_evidence),
             "ranking_direction": self.ranking_direction,
+            "canonical_roles_authoritative": bool(self.canonical_roles_authoritative),
         }
 
 
@@ -336,6 +338,7 @@ class UniversalQuestionCompiler:
             retained = [c for c in semantics.referenced_columns if c not in (proposal_role_cols - canonical_role_cols)]
             semantics.referenced_columns = sorted(set(retained) | canonical_role_cols)
             semantics.resolution_confidence = max(semantics.resolution_confidence, c_contract.resolution_confidence)
+            semantics.canonical_roles_authoritative = bool(canonical_authoritative)
             semantics.semantic_evidence["canonical_question_contract"] = c_contract.to_dict()
 
         hypotheses = cls._hypotheses(task, semantics, q)

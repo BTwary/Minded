@@ -181,6 +181,7 @@ from packages.analytics_core.src.governance.claim_gate import (
 from packages.analytics_core.src.runtime.scientific_state_snapshot import build_scientific_state_snapshot
 from packages.analytics_core.src.intelligence.contract_authority import (
     finalize_contract, load_final_contract, set_phase, supersede_and_replan,
+    ContractIntegrityError,
 )
 from packages.analytics_core.src.intelligence.analytical_identity import (
     AnalyticalIdentityError, FinalAnalyticalContract, hypothesis_identity_for, stamp_experiment_identity,
@@ -999,18 +1000,35 @@ class InvestigationController:
         )
 
         # Synchronize resolved canonical question contract with semantic resolution
+        canonical_roles_authoritative = bool(
+            getattr(analysis_plan.semantics, "canonical_roles_authoritative", False)
+            or (
+                getattr(analysis_plan.semantics, "resolution_confidence", 0.0) >= 0.70
+                and getattr(analysis_plan, "task", "") != "GENERAL_EXPLORATION"
+                and (
+                    "canonical_question_contract" in getattr(analysis_plan.semantics, "semantic_evidence", {})
+                    or bool(getattr(analysis_plan.semantics, "semantic_evidence", {}).get("canonical_question_contract"))
+                )
+            )
+        )
         if getattr(analysis_plan, "semantics", None) is not None:
             plan_sem = analysis_plan.semantics
-            if plan_sem.target_column:
+            if canonical_roles_authoritative:
                 semantic.target_metric_col = plan_sem.target_column
-            if plan_sem.grouping_columns:
-                semantic.group_dimension_col = plan_sem.grouping_columns[0]
-            else:
-                semantic.group_dimension_col = None
-            if plan_sem.explanatory_columns:
-                semantic.secondary_metric_col = plan_sem.explanatory_columns[0]
-            if plan_sem.time_column:
+                semantic.group_dimension_col = plan_sem.grouping_columns[0] if plan_sem.grouping_columns else None
+                semantic.secondary_metric_col = plan_sem.explanatory_columns[0] if plan_sem.explanatory_columns else None
                 semantic.time_col = plan_sem.time_column
+            else:
+                if plan_sem.target_column:
+                    semantic.target_metric_col = plan_sem.target_column
+                if plan_sem.grouping_columns:
+                    semantic.group_dimension_col = plan_sem.grouping_columns[0]
+                else:
+                    semantic.group_dimension_col = None
+                if plan_sem.explanatory_columns:
+                    semantic.secondary_metric_col = plan_sem.explanatory_columns[0]
+                if plan_sem.time_column:
+                    semantic.time_col = plan_sem.time_column
 
             # Canonical aggregation ownership
             req_agg = getattr(analysis_plan, "estimand", {}).get("requested_aggregation")
@@ -1194,18 +1212,29 @@ class InvestigationController:
 
         # Canonical Question Contract authority cutover:
         # Columns resolved by the canonical contract take precedence over semantic layer defaults.
-        canonical_target_col = analysis_plan.semantics.target_column or semantic_binding_set.projected_target_column()
-        canonical_group_dimension_col = (
-            analysis_plan.semantics.grouping_columns[0]
-            if analysis_plan.semantics.grouping_columns
-            else semantic_binding_set.projected_group_dimension()
-        )
-        canonical_time_col = analysis_plan.semantics.time_column or semantic_binding_set.projected_time_column()
-        canonical_explanatory_cols = (
-            list(analysis_plan.semantics.explanatory_columns)
-            if analysis_plan.semantics.explanatory_columns
-            else semantic_binding_set.projected_explanatory_columns()
-        )
+        # Authoritative canonical roles suppress fallback; non-authoritative paths retain fallback.
+        if canonical_roles_authoritative:
+            canonical_target_col = analysis_plan.semantics.target_column
+            canonical_group_dimension_col = (
+                analysis_plan.semantics.grouping_columns[0]
+                if analysis_plan.semantics.grouping_columns
+                else None
+            )
+            canonical_time_col = analysis_plan.semantics.time_column
+            canonical_explanatory_cols = list(analysis_plan.semantics.explanatory_columns)
+        else:
+            canonical_target_col = analysis_plan.semantics.target_column or semantic_binding_set.projected_target_column()
+            canonical_group_dimension_col = (
+                analysis_plan.semantics.grouping_columns[0]
+                if analysis_plan.semantics.grouping_columns
+                else semantic_binding_set.projected_group_dimension()
+            )
+            canonical_time_col = analysis_plan.semantics.time_column or semantic_binding_set.projected_time_column()
+            canonical_explanatory_cols = (
+                list(analysis_plan.semantics.explanatory_columns)
+                if analysis_plan.semantics.explanatory_columns
+                else semantic_binding_set.projected_explanatory_columns()
+            )
 
         # Persist the compiled contract as a first-class, versioned artifact.
         # The event stream remains useful for replay, but the DB row is now the
@@ -1421,6 +1450,16 @@ class InvestigationController:
                 f" Registry selection unavailable: {type(registry_exc).__name__}: {registry_exc}."
             )
 
+        if canonical_roles_authoritative:
+            method_decision.estimand.comparison_dimension = (
+                analysis_plan.semantics.grouping_columns[0]
+                if analysis_plan.semantics.grouping_columns
+                else None
+            )
+            method_decision.estimand.time_column = analysis_plan.semantics.time_column
+            if not analysis_plan.semantics.explanatory_columns:
+                method_decision.estimand.predictor_columns = ()
+
         # v19 section 8/13: hard authority-conflict assertion. select_for_plan
         # always sets method_decision.canonical_task = analysis_plan.task on
         # every path it takes (including its own exception handling above,
@@ -1505,6 +1544,30 @@ class InvestigationController:
                         sorted({c["field"] for c in plan_final_conflicts if c["severity"] == "BLOCKING"})
                     ) + ". Refusing to execute rather than let a stale plan redefine the analysis."
                 )
+            if canonical_roles_authoritative:
+                final_grouping = [final_contract.comparison_dimension] if final_contract.comparison_dimension else []
+                final_time = final_contract.time_column
+                final_explanatory = list(final_contract.predictor_columns or [])
+                canonical_grouping = list(analysis_plan.semantics.grouping_columns or [])
+                canonical_time = analysis_plan.semantics.time_column
+                canonical_explanatory = list(analysis_plan.semantics.explanatory_columns or [])
+
+                if not canonical_grouping and final_grouping:
+                    raise ContractIntegrityError(
+                        f"Canonical role authority violation: canonical grouping is empty "
+                        f"but final contract has grouping={final_grouping!r}"
+                    )
+                if canonical_time is None and final_time is not None:
+                    raise ContractIntegrityError(
+                        f"Canonical role authority violation: canonical time is None "
+                        f"but final contract has time={final_time!r}"
+                    )
+                if not canonical_explanatory and final_explanatory:
+                    raise ContractIntegrityError(
+                        f"Canonical role authority violation: canonical explanatory is empty "
+                        f"but final contract has explanatory={final_explanatory!r}"
+                    )
+
             with self.session_factory() as authority_session:
                 finalize_contract(authority_session, contract_id, final_contract)
         except AnalyticalIdentityError as identity_exc:
