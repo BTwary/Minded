@@ -288,3 +288,30 @@ max_skips = 0
 production_path = true
 fault_injection = "Remove verification candidate synthesis or remove semantic binding projection; tests must catch it"
 
+[[check]]
+id = "stress_verifier_raw_32"
+description = "32-question controller real-data stress test on raw certification dataset (32/32 required)"
+kind = "command"
+command = ["{python}", "scripts/session23_real_data_stress.py", "--variant", "raw"]
+expected_exit_code = 0
+production_path = true
+
+[[check]]
+id = "stress_verifier_clean_32"
+description = "32-question controller real-data stress test on clean certification dataset (32/32 required)"
+kind = "command"
+command = ["{python}", "scripts/session23_real_data_stress.py", "--variant", "clean"]
+expected_exit_code = 0
+production_path = true
+
+[[check]]
+id = "adversarial_stress_verifier_suite"
+description = "Adversarial stress verifier test suite (all 8 failure injection tests must pass)"
+kind = "pytest"
+command = ["{python}", "-m", "pytest", "-q", "tests/test_stress_verifier.py"]
+expected_exit_code = 0
+max_skips = 0
+production_path = true
+fault_injection = "Mutate stress answers by factor 1.13; verifier must fail"
+
+

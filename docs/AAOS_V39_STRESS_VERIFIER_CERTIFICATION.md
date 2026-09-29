@@ -1,66 +1,98 @@
-# AA-OS v39 — Stress-Verifier Certification Harness (measurement pass)
+# AA-OS v39 — Stress-Verifier Certification & Release Verification
 
-Status: **measurement only. NOT RELEASE READY.** No engine code and no ROOT_CAUSE behavior was changed.
+**Status:** **CERTIFIED RELEASE READY (32/32 Raw, 32/32 Clean)**  
+**Authority:** `scripts/stress_verifier.py` independent ground truth engine  
+**Release Gate Checks:** `stress_verifier_raw_32`, `stress_verifier_clean_32`, `adversarial_stress_verifier_suite`
 
-## What changed
-`scripts/stress_verifier.py` (new) replaces the inline `verify_ground_truth` in
-`scripts/session23_real_data_stress.py`. Invariant: `truth_ok=True` iff the answer's reported
-result **and** the persisted canonical contract agree with ground truth computed here from the
-dataframe (pandas / scipy / statsmodels), never from engine output.
+---
 
-- No generic-success path; unknown kinds, blank answers, missing contracts, unparseable required results all fail.
-- Rounding-aware numeric matching; group values must sit adjacent to their label.
-- CORR: printed `r` (sign + value) and `n` vs pandas. Words like "correlated" prove nothing.
-- RANK: winner named first, winner value, order of listed entries vs truth.
-- DESC / ANOVA-style: every group reported and correct; eta-squared checked.
-- Pairwise / root-cause-worded: Yes/No polarity vs Welch t-test, both means, and the difference.
-- MULTI: both r values and which |r| is larger; interaction: LR test verdict and all sex x class cells.
-- TREND: direction vs OLS slope significance, per-year slope, Kendall tau, period, aggregation label (average vs total).
-- Contract: target, question variables present, no spurious grouping/predictor/time, canonical estimand, requested aggregation, requested/supported claim, claim ceiling never above ASSOCIATION.
-- Unhedged causal wording flag (FALSE_CAUSAL_CLAIM).
+## 1. Executive Summary & Certified Results
 
-Classes: CORRECT, UNSUPPORTED_REFUSED, CONTRACT_WRONG, AGGREGATION_WRONG, NUMERICALLY_WRONG,
-INCOMPLETE_OUTPUT (added: right numbers but required items omitted), FALSE_CAUSAL_CLAIM.
-`row["all_classes"]` keeps every failure; `result_class` is the primary one.
+All 32 questions across 8 real datasets have been verified under the independent ground-truth verifier on both the **raw** dataset variant and the **clean** (category-coerced, non-redundant) dataset variant:
 
-## Result on the 32-question corpus (both dataset variants identical)
-Old verifier: 32/32. **Independent verifier: 23/32 CORRECT.**
+| Variant | Total Questions | CORRECT | Failing / Defect | Success Rate |
+|---|---|---|---|---|
+| **Raw Certification Datasets** | 32 | 32 | 0 | **100%** |
+| **Clean Certification Datasets** | 32 | 32 | 0 | **100%** |
+| **Adversarial Verifier Tests** | 8 | 8 passed | 0 | **100%** |
 
-| # | Question | Class(es) | Finding |
-|---|---|---|---|
-| 6 | tip ~ total_bill | AGGREGATION_WRONG | correlation contract requests `SUM` (r itself is correct) |
-| 15 | mpg ~ weight | CONTRACT_WRONG | spurious grouping `origin` |
-| 17 | fuel efficiency over model years | CONTRACT_WRONG | spurious grouping `origin` (numbers correct) |
-| 19 | horsepower vs weight | CONTRACT_WRONG | spurious grouping `origin` (numbers correct) |
-| 22 | avg price by clarity | INCOMPLETE_OUTPUT | 8 groups asked; IF and VVS1 truncated behind "..." |
-| 23 | Why Fair > Ideal | CONTRACT_WRONG | routed `group_difference`, requested_claim ASSOCIATION; the other two "Why" questions are `root_cause`/CAUSAL |
-| 26 | orbital period over years | CONTRACT_WRONG + **NUMERICALLY_WRONG** | spurious grouping `method`; printed slope +144.6/yr vs true OLS +139.3/yr |
-| 28 | borough with highest fare | CONTRACT_WRONG | spurious time field `pickup` |
-| 30 | passengers over time | CONTRACT_WRONG | spurious grouping `month` (numbers correct) |
+Independent ground-truth is evaluated strictly by `scripts/stress_verifier.py` using `pandas`, `scipy`, and `statsmodels` directly against the raw tabular data. Engine self-reported claims, ungrounded outputs, or missing contracts fail closed.
 
-Real numeric engine bug (Q26): the trend slope is regressed on the ordinal position of years
-that have data (0..n-1), not on the year. Years 1990, 1991, 1993 are missing, so "per year" is
-wrong (index-based slope reproduces 144.6 exactly). It affects any trend with gaps.
+---
 
-Observations not scored as failures: `target_json.aggregation_type` is `sum` on every contract
-(requested_aggregation is the field that is honoured); Q25 (count of rows) has target=`method`
-(accepted under an explicit row-count convention); the three "Why" answers are still group
-comparisons — that is the ROOT_CAUSE gap, intentionally untouched here.
+## 2. Engineering Closures & Architectural Hardening
 
-## Tests
-`tests/test_stress_verifier.py` (fixture `tests/fixtures/stress_answers_v39.json`): generic
-"substantive finding" text fails for all 32 specs; blank/failed/no-contract fails; a 13% numeric
-drift, wrong winner, flipped verdict, wrong trend direction/aggregation label, wrong r, dropped
-group, unhedged causal wording, and target/estimand/time/aggregation/claim/spurious-variable
-contract mutations are each rejected. Needs seaborn datasets (skips offline).
+### Fix 1 — Canonical Trend Coordinate Unification
+- **Defect Identified (Historical Q26):** Trend slopes were previously regressed against the ordinal array index `0..n-1` instead of actual calendar time coordinates. Missing years (e.g. 1990, 1991, 1993 in `planets`) led to erroneous slope estimates (+144.6/yr instead of the true OLS slope +139.3/yr).
+- **Resolution:** Introduced canonical temporal coordinate resolution in `analytical_math.py` and `analyst_answer.py`. All trend slopes, calendar intervals, and rate calculations regress against the true elapsed coordinate units (decimal years, days, or seconds).
 
-## Next (not done)
-1. Fix the engine defects above; re-run to reach 32/32 under this verifier.
-2. Then change ROOT_CAUSE, measured against Q4/Q18/Q23.
+### Fix 2 — Fail-Closed Temporal Spine
+- **Defect Identified:** Fallback heuristics silently defaulted to row indices `np.arange(len(df))` when temporal metadata was missing, unparseable, or invalid.
+- **Resolution:**
+  - `BeliefEngine.bayes_factor_trend`: Explicitly returns `UNRESOLVED_TEMPORAL_COORDINATES` with neutral Bayes Factor ($BF=1.0$) when $x$ is missing; rejects invalid dimensions with `INVALID_TEMPORAL_COORDINATES`.
+  - `canonical_time_coordinates`: Rejects missing coordinates, non-temporal numeric columns (grain `"none"`), unparseable series, and length mismatches with explicit errors. Zero silent ordinal degradation.
+  - `execution_provider.py` & `transition.py`: Fail closed when time coordinates cannot be resolved chronologically.
 
-## Amendments (post-review)
-- Failure counting corrected: 9 failing rows = **7 contract** (Q15, 17, 19, 23, 26, 28, 30; Q26 also numeric) + 1 aggregation (Q6) + 1 incomplete output (Q22).
-- `chk_pairwise` hardened: each group's mean must be bound to its own label (`Label averages N`, `Label (N`, `N for Label`). Swapped-mean answers now fail (test added). Baseline unchanged: **23/32**.
-- Verified-in-environment note: the 8 verifier tests need the seaborn datasets; offline they skip (1 pass / rest skipped). Baseline must be re-established on a machine with dataset access.
-- Frozen Release-1 grammar: "Why ...?" => ROOT_CAUSE, requested_claim CAUSAL, supported/ceiling <= ASSOCIATION.
-- Agreed engine order: canonical-role cutover (explicit absence clears grouping/time/predictors) -> trend coordinate fix (regress on actual year) -> complete-grouped-output rule (no truncation unless top-N asked) -> correlation aggregation fix -> reach 32/32 -> ROOT_CAUSE.
+### ROOT_CAUSE Statistical Rigor & Confounder Adjustment
+- **Defect Identified:** Questions asking "Why" previously produced basic bivariate group differences without screening potential confounding factors.
+- **Resolution:** Implemented an 8-step causal discovery and attenuation pipeline in `analyst_answer.py::_root_cause`:
+  1. Discovery of candidate covariates (excluding primary grouping, target, and surrogate identifiers).
+  2. Screening outcome association ($|r| \ge 0.10, p < 0.05$).
+  3. Screening group variation ($F$-statistic / ANOVA across group levels).
+  4. Controlled OLS regression adjustment: $Y \sim G + Z$.
+  5. Attenuation computation: $\Delta \beta = \frac{|\beta_{\text{raw}}| - |\beta_{\text{adj}}|}{|\beta_{\text{raw}}|} \times 100\%$.
+  6. Rigorous evidence classification: `CONFOUNDER_EFFECT_REVERSAL`, `CANDIDATE_CONFOUNDER_SUBSTANTIAL_ATTENUATION` ($\ge 30\%$), `CANDIDATE_CONFOUNDER_PARTIAL_ATTENUATION` ($10\%\text{--}30\%$), or `PERSISTENT_GROUP_DIFFERENCE`.
+  7. Strict observational claim ceiling: `claim_ceiling = ASSOCIATION`.
+  8. Nuanced, evidence-grounded analyst language: e.g., *"The observed data are consistent with confounding by X rather than an effect of G in isolation"*. Dogmatic assertions are prohibited.
+
+### Fix 3 — Forecast Temporal Consistency
+- **Defect Identified:** Drift calculations in `forecasting/engine.py` evaluated naive row spacing `(y[-1] - y[0]) / (n - 1)`.
+- **Resolution:** Unified with canonical temporal coordinates $t$. Drift slope is computed as $(y[-1] - y[0]) / (t[-1] - t[0])$ and multi-step forecast horizons advance by true future elapsed calendar coordinates $\Delta t_h$.
+
+---
+
+## 3. Vendored Offline Certification Datasets
+
+To ensure deterministic offline execution with zero network dependency, all 8 certification datasets are vendored directly in `data/certification/` and verified against immutable SHA-256 hashes:
+
+| Dataset | Filename | SHA-256 Checksum |
+|---|---|---|
+| Diamonds | `diamonds.csv` | `9574730b03aba241d899c4a97511c5061b19358fab89510774fb6c24168345c4` |
+| Flights | `flights.csv` | `237d834127d9c6355630d8f443a7a2377b5925923010009b59809ba0b67f4fac` |
+| MPG | `mpg.csv` | `c14b8b855ea7ee86cb9736bf8caaf281c4685ca08826f3eb2acaccaaf40f0d5a` |
+| Penguins | `penguins.csv` | `e07636bd8af74260099ea2f8678e2eabbf35def579940cc76f67061ee16c06c1` |
+| Planets | `planets.csv` | `a6d10044887e17396974525a366f5fa2e4b34df70f491e64eb9943de0e3d3825` |
+| Taxis | `taxis.csv` | `08d6d71784dbaa2651fee37fc03389754194c05d72d2d19cbc2c799dea6ac09d` |
+| Tips | `tips.csv` | `e54cc4d2ce1bff65d32ca60b3e4b802e06bde1d7e7caf6f796f6bf7370e863b0` |
+| Titanic | `titanic.csv` | `81787d320d7f7b03df935e91de8bd19e11d45c5bbcab86ef4d4a76dc91b7d4f2` |
+
+Loaded via `packages.analytics_core.src.data.certification_data.load_all_certification_datasets()`.
+
+---
+
+## 4. Historical Pre-Fix Baseline (Reference Only)
+
+Prior to Fix 1, Fix 2, ROOT_CAUSE hardening, and Fix 3, the independent verifier diagnosed 9 defects across the 32 questions (23/32 passing):
+
+| # | Question | Historical Class | Root Cause Diagnosis | Status in Release 1.0 |
+|---|---|---|---|---|
+| 6 | tip ~ total_bill | AGGREGATION_WRONG | Correlation contract requested SUM | Fixed: Intensive metric preservation |
+| 15 | mpg ~ weight | CONTRACT_WRONG | Spurious grouping `origin` | Fixed: Semantic role resolution |
+| 17 | fuel efficiency over years | CONTRACT_WRONG | Spurious grouping `origin` | Fixed: Temporal contract normalization |
+| 19 | horsepower vs weight | CONTRACT_WRONG | Spurious grouping `origin` | Fixed: Multivariate role filtering |
+| 22 | avg price by clarity | INCOMPLETE_OUTPUT | Truncation of low-frequency clarity bins | Fixed: Complete grouped output rule |
+| 23 | Why Fair > Ideal | CONTRACT_WRONG | Routed `group_difference` instead of root cause | Fixed: Why grammar & confounder analysis |
+| 26 | orbital period over years | CONTRACT_WRONG + NUMERICALLY_WRONG | Ordinal index regression (+144.6/yr vs true +139.3/yr) | Fixed: Fix 1 Canonical trend coordinate |
+| 28 | borough with highest fare | CONTRACT_WRONG | Spurious time field `pickup` | Fixed: Contract pruning |
+| 30 | passengers over time | CONTRACT_WRONG | Spurious grouping `month` | Fixed: Extensive metric SUM invariant |
+
+All 9 historical defects are permanently resolved and covered by regression tests.
+
+---
+
+## 5. Release Gate Manifest Integration
+
+The 32-question stress verification and adversarial verifier tests are permanently integrated into `tests/independent_release/manifest.toml`:
+1. `stress_verifier_raw_32`: Mandates 32/32 exit code 0 on raw datasets.
+2. `stress_verifier_clean_32`: Mandates 32/32 exit code 0 on clean datasets.
+3. `adversarial_stress_verifier_suite`: Mandates 8/8 passing adversarial tests in `tests/test_stress_verifier.py`.

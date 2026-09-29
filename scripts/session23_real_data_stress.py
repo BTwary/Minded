@@ -27,7 +27,13 @@ titanic, tips, peng, mpg, dia, planets, taxis, flights = (
     _dfs["diamonds"], _dfs["planets"], _dfs["taxis"], _dfs["flights"]
 )
 import os as _os
-if _os.environ.get("VARIANT") == "clean":
+variant = _os.environ.get("VARIANT", "raw")
+if "--variant" in sys.argv:
+    _idx = sys.argv.index("--variant")
+    if _idx + 1 < len(sys.argv):
+        variant = sys.argv[_idx + 1]
+
+if variant == "clean":
     titanic = titanic.drop(columns=["pclass","alive","adult_male","who","embark_town","alone","deck"], errors="ignore")
     for _d in (titanic, tips, peng, mpg, dia, planets, taxis, flights):
         for _c in _d.select_dtypes("category").columns: _d[_c] = _d[_c].astype(object)
@@ -70,7 +76,20 @@ Q = [
  ("flights", flights, "Which month has the highest average passengers?", g(flights,"month","passengers"), "RANK"),
 ]
 if __name__ == "__main__":
-    only = sys.argv[1] if len(sys.argv) > 1 else None
+    only = None
+    args = sys.argv[1:]
+    idx = 0
+    while idx < len(args):
+        if args[idx] == "--variant":
+            idx += 2
+        elif args[idx] == "--only":
+            only = args[idx + 1] if idx + 1 < len(args) else None
+            idx += 2
+        else:
+            if not args[idx].startswith("-"):
+                only = args[idx]
+            idx += 1
+
     class TO(Exception): pass
     def _h(*a): raise TO()
     if hasattr(signal, "SIGALRM"):
@@ -109,9 +128,14 @@ if __name__ == "__main__":
         print(f"{ds:9} {row['status']:9} {str(row.get('verdict')):26} {row['secs']:5}s [{t_label}] {q}", flush=True)
 
     from collections import Counter
+    total = len(out)
+    passed_count = sum(1 for r in out if r.get("truth_ok"))
     print("\nRESULT CLASSES:", dict(Counter(r.get("result_class") for r in out)))
-    print("truth_ok:", sum(1 for r in out if r.get("truth_ok")), "/", len(out))
-    out_path = _os.environ.get("OUT") or os.path.join(ROOT, "real_stress_results_" + _os.environ.get("VARIANT", "raw") + ".json")
+    print("truth_ok:", passed_count, "/", total)
+    out_path = _os.environ.get("OUT") or os.path.join(ROOT, "real_stress_results_" + variant + ".json")
     json.dump(out, open(out_path, "w"), indent=1, default=str)
     print("Saved results to", out_path)
+    if passed_count != total or total == 0:
+        sys.exit(1)
+    sys.exit(0)
 

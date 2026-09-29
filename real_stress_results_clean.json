@@ -39,7 +39,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 7.9
+  "secs": 4.1
  },
  {
   "ds": "titanic",
@@ -81,7 +81,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 5.2
+  "secs": 3.3
  },
  {
   "ds": "titanic",
@@ -123,7 +123,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.6
+  "secs": 3.7
  },
  {
   "ds": "titanic",
@@ -165,7 +165,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 4.8
+  "secs": 2.0
  },
  {
   "ds": "titanic",
@@ -180,7 +180,7 @@
   "status": "COMPLETED",
   "verdict": "STATISTICALLY_SIGNIFICANT",
   "conf": 0.999999999999,
-  "answer": "Yes -- survived rate is 24.2% for Third (n=491) vs 63.0% for First (n=216): -38.73 percentage points (-61.51% relative), 95% CI -45.85 to -31.01 pp, chi-square p<0.001. Counterfactual opportunity: if First matched Third's survived rate (24.2%), it would generate -83.65 additional events across its 216 baseline observations. Candidate explanatory factors scanned: sex, age, sibsp, parch, fare, embarked. Confounder association check: fare has strong correlation with survived (r=0.26) and differs across passenger_class (First averages 84.15 vs 13.68 for Third), indicating that observed passenger_class-survived differences are confounded by fare rather than passenger_class in isolation. Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, but cannot establish mechanistic causality without controlled experimental intervention. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Third to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: 111 rows (12.5%) are exact duplicates of another row; results include them. Recommended next steps: Evaluate whether practical uplift of -38.73 pp justifies rolling out Third. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
+  "answer": "Yes -- survived rate is 24.2% for Third (n=491) vs 63.0% for First (n=216): -38.73 percentage points (-61.51% relative), 95% CI -45.85 to -31.01 pp, chi-square p<0.001. Counterfactual opportunity: if First matched Third's survived rate (24.2%), it would generate -83.65 additional events across its 216 baseline observations. Candidate explanatory factors scanned: sex, age, sibsp, parch, fare, embarked. Confounder adjustment & partial attenuation: fare is a candidate covariate: it correlates with survived (r=0.26) and differs across passenger_class. Adjusting for fare yields a modest 20.4% attenuation (from +0.387 to +0.308), but substantial group differences persist independently of fare. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Third to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: 111 rows (12.5%) are exact duplicates of another row; results include them. Recommended next steps: Evaluate whether practical uplift of -38.73 pp justifies rolling out Third. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
   "finding": "Yes -- survived rate is 24.2% for Third (n=491) vs 63.0% for First (n=216): -38.73 percentage points (-61.51% relative), 95% CI -45.85 to -31.01 pp, chi-square p<0.001. (deterministic recomputation from the resolved contract columns) Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
   "contract": {
    "target": "survived",
@@ -207,7 +207,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 8.3
+  "secs": 4.1
  },
  {
   "ds": "titanic",
@@ -254,7 +254,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 1.3
+  "secs": 0.7
  },
  {
   "ds": "tips",
@@ -296,7 +296,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.8
+  "secs": 1.7
  },
  {
   "ds": "tips",
@@ -338,7 +338,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.0
+  "secs": 2.2
  },
  {
   "ds": "tips",
@@ -422,7 +422,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.8
+  "secs": 4.6
  },
  {
   "ds": "tips",
@@ -464,7 +464,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 0.6
+  "secs": 0.7
  },
  {
   "ds": "penguins",
@@ -506,7 +506,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 1.7
+  "secs": 2.0
  },
  {
   "ds": "penguins",
@@ -548,7 +548,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.0
+  "secs": 2.2
  },
  {
   "ds": "penguins",
@@ -632,7 +632,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.5
+  "secs": 5.5
  },
  {
   "ds": "mpg",
@@ -716,7 +716,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.0
+  "secs": 2.1
  },
  {
   "ds": "mpg",
@@ -758,7 +758,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.8
+  "secs": 4.5
  },
  {
   "ds": "mpg",
@@ -773,7 +773,7 @@
   "status": "COMPLETED",
   "verdict": "STATISTICALLY_SIGNIFICANT",
   "conf": 1.0,
-  "answer": "Average mpg differs across origin (p<0.001; 33.3% of the variation in mpg is explained by origin, a large share). Highest: japan (30.45); lowest: usa (20.08). By group -- japan: 30.45 (n=79); europe: 27.89 (n=70); usa: 20.08 (n=249). japan vs all other origin values combined: +8.65 (95% CI +7.08 to +10.23, p<0.001). Candidate explanatory factors scanned: cylinders, displacement, horsepower, weight, acceleration, model_year (+1 more). Confounder association check: weight has strong correlation with mpg (r=-0.83) and differs across origin (usa averages 3,362 vs 2,221 for japan), indicating that observed origin-mpg differences are confounded by weight rather than origin in isolation. Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, but cannot establish mechanistic causality without controlled experimental intervention. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for japan to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Recommended next steps: Investigate high-performing japan and underperforming usa for operational drivers.",
+  "answer": "Average mpg differs across origin (p<0.001; 33.3% of the variation in mpg is explained by origin, a large share). Highest: japan (30.45); lowest: usa (20.08). By group -- japan: 30.45 (n=79); europe: 27.89 (n=70); usa: 20.08 (n=249). japan vs all other origin values combined: +8.65 (95% CI +7.08 to +10.23, p<0.001). Candidate explanatory factors scanned: cylinders, displacement, horsepower, weight, acceleration, model_year (+1 more). Confounder adjustment & attenuation: weight is a candidate confounder: it correlates with mpg (r=-0.83) and differs across origin (japan averages 2,221 vs 3,362 for usa). After adjusting for weight, the observed difference between japan and usa attenuates by 77.1% (from +10.37 to +2.38). The observed data are consistent with confounding by weight rather than an effect of origin in isolation. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for japan to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Recommended next steps: Investigate high-performing japan and underperforming usa for operational drivers.",
   "finding": "Average mpg differs across origin (p<0.001; 33.3% of the variation in mpg is explained by origin, a large share). Highest: japan (30.45); lowest: usa (20.08). (deterministic recomputation from the resolved contract columns) 'mpg' was averaged (MEAN) rather than summed, because it is not additive across rows.",
   "contract": {
    "target": "mpg",
@@ -800,7 +800,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.9
+  "secs": 4.2
  },
  {
   "ds": "mpg",
@@ -844,7 +844,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.6
+  "secs": 2.8
  },
  {
   "ds": "diamonds",
@@ -886,7 +886,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 6.5
+  "secs": 6.6
  },
  {
   "ds": "diamonds",
@@ -928,7 +928,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.4
+  "secs": 2.5
  },
  {
   "ds": "diamonds",
@@ -970,7 +970,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.7
+  "secs": 4.6
  },
  {
   "ds": "diamonds",
@@ -985,7 +985,7 @@
   "status": "COMPLETED",
   "verdict": "STATISTICALLY_SIGNIFICANT",
   "conf": 0.9999999999999224,
-  "answer": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). Common Language Effect Size (probability that a random Fair exceeds a random Ideal): 68%. Counterfactual opportunity: if Ideal matched Fair's average performance, total price would expand by +4.77M. Candidate explanatory factors scanned: carat, color, clarity, depth, table, x (+2 more). Confounder association check: carat has strong correlation with price (r=0.92) and differs across cut (Fair averages 1.12 vs 0.7 for Ideal), indicating that observed cut-price differences are confounded by carat rather than cut in isolation. Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, but cannot establish mechanistic causality without controlled experimental intervention. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Fair to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: Skewness: Fair values are skewed (mean 4,936 vs median 3,458, P90 11,183); median reflects typical outcome better than mean. Recommended next steps: Investigate operational or business practices driving the superior price of Fair over Ideal. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
+  "answer": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). Common Language Effect Size (probability that a random Fair exceeds a random Ideal): 68%. Counterfactual opportunity: if Ideal matched Fair's average performance, total price would expand by +4.77M. Candidate explanatory factors scanned: carat, color, clarity, depth, table, x (+2 more). Confounder adjustment & effect reversal: z is a candidate confounder: it correlates with price (r=0.88) and differs across cut (Fair averages 4.09 vs 3.40 for Ideal). When adjusting for z, the observed difference between Fair and Ideal reverses direction (adjusted difference -2,059 vs unadjusted +1,507), indicating that the unadjusted cut difference was an artifact of composition/confounding by z. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Fair to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: Skewness: Fair values are skewed (mean 4,936 vs median 3,458, P90 11,183); median reflects typical outcome better than mean. Recommended next steps: Investigate operational or business practices driving the superior price of Fair over Ideal. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
   "finding": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). (deterministic recomputation from the resolved contract columns) 'price' was averaged (MEAN) rather than summed, because it is not additive across rows. Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
   "contract": {
    "target": "price",
@@ -1012,7 +1012,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 4.5
+  "secs": 5.4
  },
  {
   "ds": "planets",
@@ -1054,7 +1054,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.8
+  "secs": 4.2
  },
  {
   "ds": "planets",
@@ -1096,7 +1096,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.2
+  "secs": 1.8
  },
  {
   "ds": "planets",
@@ -1138,7 +1138,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 7.0
+  "secs": 4.0
  },
  {
   "ds": "taxis",
@@ -1180,7 +1180,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 11.4
+  "secs": 5.6
  },
  {
   "ds": "taxis",
@@ -1222,7 +1222,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 6.4
+  "secs": 2.9
  },
  {
   "ds": "taxis",
@@ -1264,7 +1264,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 10.1
+  "secs": 5.7
  },
  {
   "ds": "flights",
@@ -1306,7 +1306,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 8.3
+  "secs": 4.0
  },
  {
   "ds": "flights",
@@ -1348,6 +1348,6 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.1
+  "secs": 4.5
  }
 ]
