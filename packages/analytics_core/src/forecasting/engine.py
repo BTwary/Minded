@@ -86,6 +86,17 @@ class ForecastingEngine:
         if inferred_season is None or inferred_season < 2 or n < 2 * inferred_season + horizon_periods:
             candidates.remove("seasonal_naive")
 
+        future_dates = self._future_dates(dates, horizon_periods)
+        try:
+            from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+            all_dates = pd.concat([dates, pd.Series(future_dates)], ignore_index=True)
+            all_coords = canonical_time_coordinates(all_dates)
+            t_coords = all_coords[:n]
+            future_t_coords = all_coords[n:]
+        except Exception:
+            t_coords = np.arange(n, dtype=float)
+            future_t_coords = np.arange(n, n + horizon_periods, dtype=float)
+
         folds = self._rolling_origins(n, horizon_periods, min_backtest_folds)
         score_map: Dict[str, _ModelScore] = {}
         for model_name in candidates:
@@ -95,6 +106,7 @@ class ForecastingEngine:
                 horizon=horizon_periods,
                 origins=folds,
                 seasonal_periods=inferred_season,
+                t=t_coords,
             )
 
         valid_scores = [s for s in score_map.values() if math.isfinite(s.mae) and s.folds > 0]
@@ -113,6 +125,8 @@ class ForecastingEngine:
             model_name=selected.name,
             horizon=horizon_periods,
             seasonal_periods=inferred_season,
+            t=t_coords,
+            future_t=future_t_coords,
         )
         point_forecast = fitted["forecast"]
 
@@ -289,6 +303,7 @@ class ForecastingEngine:
         horizon: int,
         origins: Sequence[int],
         seasonal_periods: Optional[int],
+        t: Optional[np.ndarray] = None,
     ) -> _ModelScore:
         errors: List[float] = []
         mase_denom_parts: List[float] = []
@@ -296,8 +311,17 @@ class ForecastingEngine:
         for origin in origins:
             train = y[:origin]
             actual = y[origin : origin + horizon]
+            train_t = t[:origin] if t is not None else None
+            future_t = t[origin : origin + horizon] if t is not None else None
             try:
-                pred = self._fit_forecast(train, model_name, horizon, seasonal_periods)["forecast"]
+                pred = self._fit_forecast(
+                    train,
+                    model_name,
+                    horizon,
+                    seasonal_periods,
+                    t=train_t,
+                    future_t=future_t,
+                )["forecast"]
             except (ValueError, FloatingPointError):
                 continue
             if len(pred) != len(actual):
@@ -323,10 +347,27 @@ class ForecastingEngine:
         model_name: str,
         horizon: int,
         seasonal_periods: Optional[int],
+        t: Optional[np.ndarray] = None,
+        future_t: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         n = len(y)
         if n < 2:
             raise ValueError("At least two observations are required")
+
+        # Temporal delta calculation: respect canonical temporal spacing when available
+        if t is not None and len(t) == n and (t[-1] - t[0]) > 0:
+            elapsed_time = float(t[-1] - t[0])
+            median_step = float(np.median(np.diff(t))) if n >= 2 else (elapsed_time / max(1, n - 1))
+            if median_step <= 0:
+                median_step = 1.0
+            if future_t is not None and len(future_t) == horizon:
+                future_deltas = np.asarray(future_t, dtype=float) - float(t[-1])
+            else:
+                future_deltas = np.arange(1, horizon + 1, dtype=float) * median_step
+        else:
+            elapsed_time = float(max(1, n - 1))
+            median_step = 1.0
+            future_deltas = np.arange(1, horizon + 1, dtype=float)
 
         if model_name == "naive":
             fc = np.repeat(y[-1], horizon)
@@ -335,8 +376,9 @@ class ForecastingEngine:
                 raise ValueError("Seasonal naive requires sufficient seasonal history")
             fc = np.array([y[-seasonal_periods + (h % seasonal_periods)] for h in range(horizon)], dtype=float)
         elif model_name == "drift":
-            slope = (y[-1] - y[0]) / max(1, n - 1)
-            fc = y[-1] + slope * np.arange(1, horizon + 1)
+            # True drift slope per canonical elapsed time unit: (y[-1] - y[0]) / elapsed_time
+            slope = float(y[-1] - y[0]) / elapsed_time
+            fc = float(y[-1]) + slope * future_deltas
         elif model_name == "moving_average":
             window = min(3, n)
             fc = np.repeat(np.mean(y[-window:]), horizon)
@@ -349,11 +391,12 @@ class ForecastingEngine:
                 prev_level = level
                 level = alpha * float(value) + (1 - alpha) * (level + phi * trend)
                 trend = beta * (level - prev_level) + (1 - beta) * trend
+            steps = future_deltas / max(1e-9, median_step)
             if model_name == "holt_linear":
-                fc = np.array([level + h * trend for h in range(1, horizon + 1)], dtype=float)
+                fc = np.array([level + s * trend for s in steps], dtype=float)
             else:
                 fc = np.array(
-                    [level + trend * (phi * (1 - phi**h) / (1 - phi)) for h in range(1, horizon + 1)],
+                    [level + trend * (phi * (1 - phi**s) / (1 - phi)) if phi < 1.0 else level + s * trend for s in steps],
                     dtype=float,
                 )
         else:
