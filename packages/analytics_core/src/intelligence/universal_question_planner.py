@@ -290,23 +290,51 @@ class UniversalQuestionCompiler:
         # context and compound-question traceability without allowing it to execute SQL.
         business = cls._business_context(q, task)
         semantics = cls._semantic_contract(semantic, df, ql, semantic_proposal, task=task)
-        if c_contract.target_column or c_contract.grouping_columns or c_contract.explanatory_columns:
-            if c_contract.target_column:
+        # Canonical-role authority: once the canonical contract is confident and
+        # names a task family, its role assignments are authoritative INCLUDING
+        # explicit absence. ``grouping=()`` / ``time=None`` / ``explanatory=()``
+        # clear whatever the semantic proposal added; proposal-only role columns
+        # must not survive into the executed plan.
+        canonical_authoritative = (
+            c_contract.resolution_confidence >= 0.70
+            and c_contract.task_family != "GENERAL_EXPLORATION"
+        )
+        if canonical_authoritative or (
+            c_contract.target_column or c_contract.grouping_columns or c_contract.explanatory_columns
+        ):
+            if canonical_authoritative:
+                proposal_role_cols = set(semantics.grouping_columns) | set(semantics.explanatory_columns)
+                if semantics.time_column:
+                    proposal_role_cols.add(semantics.time_column)
+                if semantics.target_column:
+                    proposal_role_cols.add(semantics.target_column)
                 semantics.target_column = c_contract.target_column
-            if c_contract.grouping_columns:
                 semantics.grouping_columns = list(c_contract.grouping_columns)
-            if c_contract.explanatory_columns:
                 semantics.explanatory_columns = list(c_contract.explanatory_columns)
-            if c_contract.time_column:
                 semantics.time_column = c_contract.time_column
-            if c_contract.ranking_direction:
                 semantics.ranking_direction = c_contract.ranking_direction
+            else:
+                proposal_role_cols = set()
+                if c_contract.target_column:
+                    semantics.target_column = c_contract.target_column
+                if c_contract.grouping_columns:
+                    semantics.grouping_columns = list(c_contract.grouping_columns)
+                if c_contract.explanatory_columns:
+                    semantics.explanatory_columns = list(c_contract.explanatory_columns)
+                if c_contract.time_column:
+                    semantics.time_column = c_contract.time_column
+                if c_contract.ranking_direction:
+                    semantics.ranking_direction = c_contract.ranking_direction
             all_cols = list(c_contract.explanatory_columns) + list(c_contract.grouping_columns)
             if c_contract.target_column:
                 all_cols.append(c_contract.target_column)
             if c_contract.time_column:
                 all_cols.append(c_contract.time_column)
-            semantics.referenced_columns = sorted(set(semantics.referenced_columns + [c for c in all_cols if c in df.columns]))
+            canonical_role_cols = {c for c in all_cols if c in df.columns}
+            # Drop proposal-only role columns (roles the canonical contract did
+            # not assign); keep columns merely named in the question.
+            retained = [c for c in semantics.referenced_columns if c not in (proposal_role_cols - canonical_role_cols)]
+            semantics.referenced_columns = sorted(set(retained) | canonical_role_cols)
             semantics.resolution_confidence = max(semantics.resolution_confidence, c_contract.resolution_confidence)
             semantics.semantic_evidence["canonical_question_contract"] = c_contract.to_dict()
 
