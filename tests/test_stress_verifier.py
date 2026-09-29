@@ -19,13 +19,10 @@ FIX = json.load(open(os.path.join(ROOT, "tests", "fixtures", "stress_answers_v39
 
 def _frames():
     try:
-        L = sns.load_dataset
-        t = L("titanic").rename(columns={"class": "passenger_class"})
-        d = {"titanic": t, "tips": L("tips"), "penguins": L("penguins"), "mpg": L("mpg"),
-             "diamonds": L("diamonds").sample(8000, random_state=0).reset_index(drop=True),
-             "planets": L("planets"), "taxis": L("taxis"), "flights": L("flights")}
+        from packages.analytics_core.src.data.certification_data import load_all_certification_datasets
+        d = load_all_certification_datasets()
     except Exception as e:  # offline
-        pytest.skip(f"seaborn datasets unavailable: {e}")
+        pytest.skip(f"certification datasets unavailable: {e}")
     for df in d.values():
         for c in df.select_dtypes("category").columns:
             df[c] = df[c].astype(object)

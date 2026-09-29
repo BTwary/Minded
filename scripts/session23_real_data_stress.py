@@ -20,11 +20,12 @@ def factory():
     Base.metadata.create_all(bind=e)
     return sessionmaker(bind=e)
 
-L = sns.load_dataset
-titanic, tips, peng, mpg, dia, planets, taxis, flights = (L(n) for n in
-    ["titanic", "tips", "penguins", "mpg", "diamonds", "planets", "taxis", "flights"])
-dia = dia.sample(8000, random_state=0).reset_index(drop=True)
-titanic = titanic.rename(columns={"class": "passenger_class"})
+from packages.analytics_core.src.data.certification_data import load_all_certification_datasets
+_dfs = load_all_certification_datasets()
+titanic, tips, peng, mpg, dia, planets, taxis, flights = (
+    _dfs["titanic"], _dfs["tips"], _dfs["penguins"], _dfs["mpg"],
+    _dfs["diamonds"], _dfs["planets"], _dfs["taxis"], _dfs["flights"]
+)
 import os as _os
 if _os.environ.get("VARIANT") == "clean":
     titanic = titanic.drop(columns=["pclass","alive","adult_male","who","embark_town","alone","deck"], errors="ignore")
