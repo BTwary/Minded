@@ -263,11 +263,14 @@ def _parse_dates(s: pd.Series) -> Optional[pd.Series]:
             min_v = float(non_null.min())
             max_v = float(non_null.max())
             if 1800 <= min_v and max_v <= 2200:
-                return pd.to_datetime(s.astype(str) + "-01-01", errors="coerce")
+                s_int = s.round().astype(int)
+                return pd.to_datetime(s_int.astype(str) + "-01-01", errors="coerce")
             elif 50 <= min_v and max_v <= 99:
-                return pd.to_datetime((1900 + s).astype(str) + "-01-01", errors="coerce")
+                s_int = (1900 + s).round().astype(int)
+                return pd.to_datetime(s_int.astype(str) + "-01-01", errors="coerce")
             elif 0 <= min_v and max_v <= 49:
-                return pd.to_datetime((2000 + s).astype(str) + "-01-01", errors="coerce")
+                s_int = (2000 + s).round().astype(int)
+                return pd.to_datetime(s_int.astype(str) + "-01-01", errors="coerce")
         except Exception:
             pass
         return None
@@ -2084,20 +2087,50 @@ def _association(q, df, target, predictors) -> Optional[AnalystResult]:
 
 
 # --------------------------------------------------------------------------- TREND
-def _period_frame(dates: pd.Series, values: pd.Series, agg: str) -> Tuple[pd.DataFrame, str]:
+def _period_frame(
+    dates: pd.Series,
+    values: pd.Series,
+    agg: str,
+    target_unit: Optional[str] = None,
+) -> Tuple[pd.DataFrame, str]:
+    from packages.analytics_core.src.statistics.analytical_math import resolve_canonical_temporal_axis
     d = pd.DataFrame({"t": dates, "v": values}).dropna()
-    span_days = (d["t"].max() - d["t"].min()).days
-    if (d["t"].dt.month == 1).all() and (d["t"].dt.day == 1).all():
-        grain, freq = "year", "Y"
-    elif span_days >= 366 * 3:
-        grain, freq = "year", "Y"
-    elif span_days >= 366 * 1.5 or span_days >= 120:
-        grain, freq = "month", "M"
-    elif span_days >= 21:
-        grain, freq = "week", "W"
+    if len(d) == 0:
+        return pd.DataFrame(), "year"
+
+    axis = resolve_canonical_temporal_axis(d["t"], target_unit=target_unit)
+    span_days = (d["t"].max() - d["t"].min()).days if hasattr(d["t"], "dt") else 0
+
+    if axis.inferred_grain == "year":
+        freq = "Y"
+        grain = "year"
+    elif axis.inferred_grain == "quarter":
+        freq = "Q"
+        grain = target_unit if target_unit else "quarter"
+    elif axis.inferred_grain == "month":
+        freq = "M"
+        grain = target_unit if target_unit else "month"
+    elif axis.inferred_grain == "week":
+        freq = "W"
+        grain = target_unit if target_unit else "week"
+    elif axis.inferred_grain == "day":
+        if target_unit:
+            grain = target_unit
+            freq = "M" if grain in ("year", "month") else ("W" if grain == "week" else "D")
+        elif span_days >= 120:
+            grain = "month"
+            freq = "M"
+        elif span_days >= 21:
+            grain = "week"
+            freq = "W"
+        else:
+            grain = "day"
+            freq = "D"
     else:
-        grain, freq = "day", "D"
-    d["period"] = d["t"].dt.to_period(freq)
+        freq = "Y"
+        grain = "year"
+
+    d["period"] = d["t"].dt.to_period(freq) if hasattr(d["t"], "dt") else pd.to_datetime(d["t"]).dt.to_period(freq)
     g = d.groupby("period")
     if agg == "sum":
         out = g["v"].sum()
@@ -2121,7 +2154,20 @@ def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
     agg = _choose_agg(q, agg_default, binary is not None, target=target)
     if agg == "rate":
         agg = "mean"
-    frame, grain = _period_frame(dates, y, agg)
+
+    target_unit = None
+    if re.search(r"\b(year|years|annual|annually|yearly)\b", q, re.I):
+        target_unit = "year"
+    elif re.search(r"\b(quarter|quarterly)\b", q, re.I):
+        target_unit = "quarter"
+    elif re.search(r"\b(month|monthly)\b", q, re.I):
+        target_unit = "month"
+    elif re.search(r"\b(week|weekly)\b", q, re.I):
+        target_unit = "week"
+    elif re.search(r"\b(day|daily)\b", q, re.I):
+        target_unit = "day"
+
+    frame, grain = _period_frame(dates, y, agg, target_unit=target_unit)
     used = int(frame["n"].sum())
     caveats = _hygiene(df, [time_col, target], used)
     if len(frame) < 4:
@@ -2138,7 +2184,7 @@ def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
             caveats.append(f"The last {grain} ({per}) covers only {seen_days} of {full_days} days and was excluded from the trend, since a partial period always looks like a drop.")
             frame = frame.iloc[:-1]
     from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
-    idx = canonical_time_coordinates(frame.index, length=len(frame))
+    idx = canonical_time_coordinates(frame.index, length=len(frame), target_unit=grain)
     vals = frame["value"].to_numpy(float)
     lr = sps.linregress(idx, vals)
     tau, tau_p = sps.kendalltau(idx, vals)

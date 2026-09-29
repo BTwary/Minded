@@ -39,7 +39,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 6.3
+  "secs": 7.9
  },
  {
   "ds": "titanic",
@@ -81,7 +81,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.6
+  "secs": 5.2
  },
  {
   "ds": "titanic",
@@ -123,7 +123,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.5
+  "secs": 5.6
  },
  {
   "ds": "titanic",
@@ -165,7 +165,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.0
+  "secs": 4.8
  },
  {
   "ds": "titanic",
@@ -207,7 +207,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 5.9
+  "secs": 8.3
  },
  {
   "ds": "titanic",
@@ -254,7 +254,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 0.9
+  "secs": 1.3
  },
  {
   "ds": "tips",
@@ -296,7 +296,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.7
+  "secs": 2.8
  },
  {
   "ds": "tips",
@@ -338,7 +338,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.5
+  "secs": 2.0
  },
  {
   "ds": "tips",
@@ -380,7 +380,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "NO_DETECTABLE_EFFECT"
   },
-  "secs": 5.3
+  "secs": 3.8
  },
  {
   "ds": "tips",
@@ -422,7 +422,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.9
+  "secs": 3.8
  },
  {
   "ds": "tips",
@@ -464,7 +464,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 0.9
+  "secs": 0.6
  },
  {
   "ds": "penguins",
@@ -506,7 +506,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.4
+  "secs": 1.7
  },
  {
   "ds": "penguins",
@@ -548,7 +548,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.3
+  "secs": 2.0
  },
  {
   "ds": "penguins",
@@ -590,7 +590,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.9
+  "secs": 2.1
  },
  {
   "ds": "penguins",
@@ -632,7 +632,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 4.7
+  "secs": 3.5
  },
  {
   "ds": "mpg",
@@ -674,7 +674,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.5
+  "secs": 1.9
  },
  {
   "ds": "mpg",
@@ -716,7 +716,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.0
+  "secs": 2.0
  },
  {
   "ds": "mpg",
@@ -758,7 +758,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 12.2
+  "secs": 3.8
  },
  {
   "ds": "mpg",
@@ -800,7 +800,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 7.2
+  "secs": 3.9
  },
  {
   "ds": "mpg",
@@ -844,7 +844,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.3
+  "secs": 2.6
  },
  {
   "ds": "diamonds",
@@ -886,7 +886,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 10.3
+  "secs": 6.5
  },
  {
   "ds": "diamonds",
@@ -928,7 +928,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.5
+  "secs": 2.4
  },
  {
   "ds": "diamonds",
@@ -970,7 +970,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 7.2
+  "secs": 5.7
  },
  {
   "ds": "diamonds",
@@ -1012,7 +1012,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 10.2
+  "secs": 4.5
  },
  {
   "ds": "planets",
@@ -1054,7 +1054,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 8.2
+  "secs": 3.8
  },
  {
   "ds": "planets",
@@ -1096,7 +1096,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.8
+  "secs": 2.2
  },
  {
   "ds": "planets",
@@ -1138,7 +1138,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 7.1
+  "secs": 7.0
  },
  {
   "ds": "taxis",
@@ -1180,7 +1180,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 8.1
+  "secs": 11.4
  },
  {
   "ds": "taxis",
@@ -1222,7 +1222,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.7
+  "secs": 6.4
  },
  {
   "ds": "taxis",
@@ -1264,7 +1264,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 8.6
+  "secs": 10.1
  },
  {
   "ds": "flights",
@@ -1306,7 +1306,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.6
+  "secs": 8.3
  },
  {
   "ds": "flights",
@@ -1348,6 +1348,6 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 6.8
+  "secs": 5.1
  }
 ]
