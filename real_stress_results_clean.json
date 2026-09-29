@@ -39,7 +39,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 8.9
+  "secs": 5.5
  },
  {
   "ds": "titanic",
@@ -81,7 +81,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 5.8
+  "secs": 3.5
  },
  {
   "ds": "titanic",
@@ -123,7 +123,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 7.4
+  "secs": 4.2
  },
  {
   "ds": "titanic",
@@ -165,7 +165,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.9
+  "secs": 2.2
  },
  {
   "ds": "titanic",
@@ -207,7 +207,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 8.5
+  "secs": 6.0
  },
  {
   "ds": "titanic",
@@ -254,7 +254,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 1.2
+  "secs": 0.8
  },
  {
   "ds": "tips",
@@ -298,7 +298,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.7
+  "secs": 2.1
  },
  {
   "ds": "tips",
@@ -340,7 +340,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.6
+  "secs": 2.5
  },
  {
   "ds": "tips",
@@ -382,7 +382,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "NO_DETECTABLE_EFFECT"
   },
-  "secs": 8.0
+  "secs": 3.9
  },
  {
   "ds": "tips",
@@ -424,7 +424,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 8.6
+  "secs": 5.3
  },
  {
   "ds": "tips",
@@ -466,7 +466,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 1.0
+  "secs": 0.7
  },
  {
   "ds": "penguins",
@@ -508,7 +508,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.5
+  "secs": 2.2
  },
  {
   "ds": "penguins",
@@ -550,7 +550,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.2
+  "secs": 2.5
  },
  {
   "ds": "penguins",
@@ -592,7 +592,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 4.0
+  "secs": 3.1
  },
  {
   "ds": "penguins",
@@ -634,7 +634,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 7.2
+  "secs": 5.3
  },
  {
   "ds": "mpg",
@@ -676,7 +676,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.4
+  "secs": 1.9
  },
  {
   "ds": "mpg",
@@ -718,7 +718,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.1
+  "secs": 2.1
  },
  {
   "ds": "mpg",
@@ -760,7 +760,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 10.0
+  "secs": 4.5
  },
  {
   "ds": "mpg",
@@ -802,7 +802,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 8.5
+  "secs": 5.3
  },
  {
   "ds": "mpg",
@@ -846,7 +846,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.8
+  "secs": 3.1
  },
  {
   "ds": "diamonds",
@@ -888,7 +888,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 12.8
+  "secs": 7.2
  },
  {
   "ds": "diamonds",
@@ -930,7 +930,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.7
+  "secs": 2.6
  },
  {
   "ds": "diamonds",
@@ -974,7 +974,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 9.1
+  "secs": 5.1
  },
  {
   "ds": "diamonds",
@@ -1018,7 +1018,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 5.2
+  "secs": 2.7
  },
  {
   "ds": "planets",
@@ -1060,7 +1060,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 8.5
+  "secs": 4.4
  },
  {
   "ds": "planets",
@@ -1102,7 +1102,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.2
+  "secs": 1.7
  },
  {
   "ds": "planets",
@@ -1110,17 +1110,15 @@
   "cat": "TREND",
   "truth": "{1989: 83.888, 1992: 45.902, 1994: 98.211, 1995: 4.231, 1996: 335.962, 1997: 39.845, 1998: 114.311, 1999: 552.281, 2000: 540.945, 2001: 735.304, 2002: 971.834, 2003: 2182.037, 2004: 538.039, 2005: 741.982, 2006: 26762.097, 2007: 363.759, 2008: 9394.701, 2009: 1346.423, 2010: 669.543, 2011: 706.968, 2012: 476.061, 2013: 133.241, 2014: 300.863}",
   "ok": true,
-  "truth_ok": false,
-  "result_class": "NUMERICALLY_WRONG",
-  "all_classes": [
-   "NUMERICALLY_WRONG"
-  ],
-  "truth_detail": "[NUMERICALLY_WRONG] slope printed +144.6, OLS slope=139.3",
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
   "status": "COMPLETED",
   "verdict": "OBSERVED",
   "conf": 1.0,
-  "answer": "No statistically detectable trend in orbital_period (average per year): slope +144.6 per year (95% CI -210.5 to +499.8, p=0.43) across 23 years (1989 to 2014). Typical year-to-year noise around the trend is about 5,764 (281.3% of the mean). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Validate current run-rate against near-term operational capacity and financial forecasts. | [Diagnostic Deep-Dive (1-2 weeks)]: Analyze period-to-period residuals to distinguish secular trend from seasonal or cyclical oscillations. | [Strategic & Commercial Mitigation (30-90 days)]: Calibrate medium-term targets and resourcing according to the projected trajectory. Checks: 43 of 1,035 rows (4.2%) were excluded for missing/unparseable values in year, orbital_period. Recommended next steps: Monitor subsequent periods to confirm whether the series remains stationary. [Missingness sensitivity: SENSITIVE -- Sensitivity interval [1920, 3.225e+04] crosses the relevant decision boundary under the stated assumption (observed_range_reallocation_mean); the conclusion is not invariant to plausible missing-value assignments and must not be presented as such.]",
-  "finding": "No statistically detectable trend in orbital_period (average per year): slope +144.6 per year (95% CI -210.5 to +499.8, p=0.43) across 23 years (1989 to 2014). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'orbital_period' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "answer": "No statistically detectable trend in orbital_period (average per year): slope +139.3 per year (95% CI -200.1 to +478.7, p=0.43) across 23 years (1989 to 2014). Typical year-to-year noise around the trend is about 5,763 (281.2% of the mean). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Validate current run-rate against near-term operational capacity and financial forecasts. | [Diagnostic Deep-Dive (1-2 weeks)]: Analyze period-to-period residuals to distinguish secular trend from seasonal or cyclical oscillations. | [Strategic & Commercial Mitigation (30-90 days)]: Calibrate medium-term targets and resourcing according to the projected trajectory. Checks: 43 of 1,035 rows (4.2%) were excluded for missing/unparseable values in year, orbital_period. Recommended next steps: Monitor subsequent periods to confirm whether the series remains stationary. [Missingness sensitivity: SENSITIVE -- Sensitivity interval [1920, 3.225e+04] crosses the relevant decision boundary under the stated assumption (observed_range_reallocation_mean); the conclusion is not invariant to plausible missing-value assignments and must not be presented as such.]",
+  "finding": "No statistically detectable trend in orbital_period (average per year): slope +139.3 per year (95% CI -200.1 to +478.7, p=0.43) across 23 years (1989 to 2014). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'orbital_period' was averaged (MEAN) rather than summed, because it is not additive across rows.",
   "contract": {
    "target": "orbital_period",
    "grouping": [],
@@ -1146,7 +1144,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 8.3
+  "secs": 4.7
  },
  {
   "ds": "taxis",
@@ -1188,7 +1186,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 11.4
+  "secs": 5.4
  },
  {
   "ds": "taxis",
@@ -1230,7 +1228,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.6
+  "secs": 2.9
  },
  {
   "ds": "taxis",
@@ -1272,7 +1270,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 13.4
+  "secs": 5.2
  },
  {
   "ds": "flights",
@@ -1314,7 +1312,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 9.8
+  "secs": 4.7
  },
  {
   "ds": "flights",
@@ -1356,6 +1354,6 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 9.4
+  "secs": 4.3
  }
 ]

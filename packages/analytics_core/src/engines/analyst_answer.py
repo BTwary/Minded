@@ -2060,7 +2060,13 @@ def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
         if agg in ("sum", "count") and seen_days < 0.9 * full_days:
             caveats.append(f"The last {grain} ({per}) covers only {seen_days} of {full_days} days and was excluded from the trend, since a partial period always looks like a drop.")
             frame = frame.iloc[:-1]
-    idx = np.arange(len(frame), dtype=float)
+    if isinstance(frame.index, pd.PeriodIndex) and len(frame) > 0:
+        p0 = frame.index[0]
+        idx = np.array([(p - p0).n for p in frame.index], dtype=float)
+    elif pd.api.types.is_numeric_dtype(frame.index) and len(frame) > 0:
+        idx = np.array(frame.index - frame.index[0], dtype=float)
+    else:
+        idx = np.arange(len(frame), dtype=float)
     vals = frame["value"].to_numpy(float)
     lr = sps.linregress(idx, vals)
     tau, tau_p = sps.kendalltau(idx, vals)
@@ -2102,15 +2108,16 @@ def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
     # Principal Data Analyst Intelligence Enrichments:
     # 1. Predictive run-rate extrapolation (next period projection with 95% PI)
     n_pts = len(vals)
-    y_next = lr.intercept + lr.slope * n_pts
+    x_next = (idx[-1] + 1.0) if len(idx) > 0 else float(n_pts)
+    y_next = lr.intercept + lr.slope * x_next
     x_bar = float(np.mean(idx))
     ss_x = float(np.sum((idx - x_bar) ** 2))
-    se_pred = resid_sd * math.sqrt(1.0 + (1.0 / n_pts) + (((n_pts - x_bar) ** 2) / ss_x)) if (resid_sd == resid_sd and ss_x > 0) else 0.0
+    se_pred = resid_sd * math.sqrt(1.0 + (1.0 / n_pts) + (((x_next - x_bar) ** 2) / ss_x)) if (resid_sd == resid_sd and ss_x > 0) else 0.0
     t_crit = sps.t.ppf(0.975, max(1, n_pts - 2)) if n_pts > 2 else 1.96
     pi_lo = y_next - t_crit * se_pred
     pi_hi = y_next + t_crit * se_pred
     run_rate_proj = {
-        "next_period_index": n_pts,
+        "next_period_index": int(round(x_next)),
         "projected_value": round(float(y_next), 2),
         "pi_low": round(float(pi_lo), 2),
         "pi_high": round(float(pi_hi), 2),
