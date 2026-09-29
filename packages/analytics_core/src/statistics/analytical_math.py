@@ -259,8 +259,7 @@ def resolve_canonical_temporal_axis(
             series = df[source_col]
 
     if series is None:
-        n = length or 0
-        return CanonicalTemporalAxis(np.arange(n, dtype=float), target_unit or "unit", source_col, "none")
+        return CanonicalTemporalAxis(np.array([], dtype=float), target_unit or "unit", source_col, "none")
 
     # 1. PeriodIndex
     pindex = None
@@ -327,8 +326,7 @@ def resolve_canonical_temporal_axis(
         try:
             series = pd.Series(series)
         except Exception:
-            n = length or (len(series) if hasattr(series, "__len__") else 0)
-            return CanonicalTemporalAxis(np.arange(n, dtype=float), target_unit or "unit", source_col, "none")
+            return CanonicalTemporalAxis(np.array([], dtype=float), target_unit or "unit", source_col, "none")
 
     if len(series) == 0:
         return CanonicalTemporalAxis(np.array([], dtype=float), target_unit or "unit", source_col, "none")
@@ -450,8 +448,7 @@ def resolve_canonical_temporal_axis(
         return CanonicalTemporalAxis(coords, chosen_unit, source_col, inferred_grain)
 
     # 4. Fallback: arbitrary sequence or unrecognized
-    n = length or (len(series) if hasattr(series, "__len__") else 0)
-    return CanonicalTemporalAxis(np.arange(n, dtype=float), "unit", source_col, "none")
+    return CanonicalTemporalAxis(np.array([], dtype=float), "unit", source_col, "none")
 
 
 def canonical_time_coordinates(
@@ -460,8 +457,24 @@ def canonical_time_coordinates(
     length: Optional[int] = None,
     target_unit: Optional[str] = None,
 ) -> np.ndarray:
-    """Extract authoritative chronological coordinates (period deltas from t0) for trend regression."""
+    """Extract authoritative chronological coordinates (period deltas from t0) for trend regression.
+
+    Fail-closed: Returns canonical chronological coordinates only when a valid temporal axis
+    and grain can be resolved. Rejects missing inputs, non-temporal numeric columns, and
+    unrecognized sequences without falling back to ordinal row indices (np.arange).
+    """
+    if time_series_or_df is None:
+        raise ValueError("Canonical temporal coordinates require a valid time series or dataframe, received None.")
     axis = resolve_canonical_temporal_axis(time_series_or_df, time_col=time_col, length=length, target_unit=target_unit)
+    if axis.inferred_grain == "none" or len(axis.coordinate_values) == 0:
+        col_name = time_col or getattr(time_series_or_df, "name", None) or "input"
+        raise ValueError(
+            f"Cannot resolve canonical temporal coordinates for {col_name!r}: non-temporal or unidentifiable grain."
+        )
+    if length is not None and len(axis.coordinate_values) != length:
+        raise ValueError(
+            f"Resolved temporal coordinates length ({len(axis.coordinate_values)}) does not match expected length ({length})."
+        )
     return axis.coordinate_values
 
 
@@ -487,7 +500,10 @@ def time_series_summary(
         return {"error": "Time series analysis requires at least 2 chronological observations."}
 
     vals = sub_df[value_col].values.astype(float)
-    x = canonical_time_coordinates(sub_df[time_col])
+    try:
+        x = canonical_time_coordinates(sub_df[time_col])
+    except Exception as exc:
+        return {"error": f"Failed to extract canonical time coordinates: {exc}"}
 
     # 1. Period-over-Period deltas
     pop_deltas = np.diff(vals)

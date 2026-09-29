@@ -106,18 +106,10 @@ def _derive_primary_metric(
         return float(1.0 - sse / sst), "r_squared"
 
     if agg == "REGRESSION":
-        # Time-bucketed trend requires an explicit result column; the first two
-        # numeric columns are not a semantic contract. Downstream trend/
-        # significance testing (intelligence/transition.py) regresses the
-        # metric against chronological row order (np.arange), not against
-        # any specific column's values -- it relies on the query's own
-        # ORDER BY to define the x-axis. The grouping key that produces that
-        # order (e.g. a DATE_TRUNC('day', ...) period column) is a DATE/
-        # DATETIME dtype, not numeric, so requiring a *second numeric*
-        # column here was checking for something nothing downstream reads:
-        # every chronological forecast query would fail this even though
-        # the outcome column alone is sufficient. Require deterministic
-        # ordering instead of a numeric predictor column.
+        # Time-bucketed trend requires an explicit primary result column and
+        # authoritative chronological temporal coordinates from the time column.
+        # Downstream analytical components regress against canonical temporal coordinates
+        # rather than ordinal row indices.
         if primary_result_column not in result.columns or not pd.api.types.is_numeric_dtype(result[primary_result_column]):
             raise ValueError("Regression requires an explicit numeric primary result column.")
         if not re.search(r"\bORDER\s+BY\s+", sql, re.IGNORECASE):
@@ -129,7 +121,18 @@ def _derive_primary_metric(
         import numpy as np
         from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
         other_cols = [c for c in valid_rows.columns if c != primary_result_column]
-        x = canonical_time_coordinates(valid_rows[other_cols[0]]) if other_cols else np.arange(len(y), dtype=float)
+        if not other_cols:
+            raise ValueError("Regression trend requires an explicit chronological time column alongside the primary metric.")
+        try:
+            x = canonical_time_coordinates(valid_rows[other_cols[0]], length=len(y))
+        except Exception as exc:
+            raise ValueError(
+                f"Regression trend failed to extract canonical temporal coordinates from column {other_cols[0]!r}: {exc}"
+            ) from exc
+        if len(x) != len(y) or np.std(x) <= 0:
+            raise ValueError(
+                f"Regression trend coordinates from {other_cols[0]!r} are invalid (len={len(x)}, expected {len(y)}, std={np.std(x):.4g})."
+            )
         slope = float(np.polyfit(x, y.to_numpy(dtype=float), 1)[0])
         return slope, "regression_slope"
 

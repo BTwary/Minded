@@ -253,16 +253,44 @@ class BeliefEngine:
         n = int(len(values))
         if n < 8 or np.std(values) <= 0:
             return BayesianEvidence(1.0, "NEUTRAL_INADEQUATE_TREND", n, ("At least 8 finite time periods and non-zero variance are required.",))
-        if x is not None:
+        if x is None:
+            return BayesianEvidence(
+                1.0,
+                "UNRESOLVED_TEMPORAL_COORDINATES",
+                n,
+                ("Explicit canonical temporal coordinates are required for trend evaluation.",),
+                diagnostic="missing_temporal_coordinates",
+            )
+        try:
             x_arr = np.asarray(x, dtype=float)
-            if len(x_arr) == len(raw_vals):
-                x_coord = x_arr[mask]
-            elif len(x_arr) == n:
-                x_coord = x_arr
-            else:
-                x_coord = np.arange(n, dtype=float)
+        except Exception as exc:
+            return BayesianEvidence(
+                1.0,
+                "INVALID_TEMPORAL_COORDINATES",
+                n,
+                (f"Failed to parse temporal coordinates: {exc}",),
+                diagnostic="invalid_temporal_coordinates",
+            )
+        if len(x_arr) == len(raw_vals):
+            x_coord = x_arr[mask]
+        elif len(x_arr) == n:
+            x_coord = x_arr
         else:
-            x_coord = np.arange(n, dtype=float)
+            return BayesianEvidence(
+                1.0,
+                "INVALID_TEMPORAL_COORDINATES_LENGTH",
+                n,
+                (f"Temporal coordinates length ({len(x_arr)}) does not match data length ({n}).",),
+                diagnostic=f"coordinate_length_mismatch: got {len(x_arr)}, expected {n}",
+            )
+        if not np.all(np.isfinite(x_coord)) or np.std(x_coord) <= 0:
+            return BayesianEvidence(
+                1.0,
+                "INVALID_TEMPORAL_COORDINATES",
+                n,
+                ("Temporal coordinates must be finite and contain non-zero variance.",),
+                diagnostic="degenerate_temporal_coordinates",
+            )
         slope, intercept = np.polyfit(x_coord, values, 1)
         sse0 = float(np.sum((values - np.mean(values)) ** 2))
         sse1 = float(np.sum((values - (slope * x_coord + intercept)) ** 2))
@@ -362,7 +390,10 @@ class BeliefEngine:
                 x_coord = None
                 if time_cols:
                     from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
-                    x_coord = canonical_time_coordinates(frame[time_cols[0]])
+                    try:
+                        x_coord = canonical_time_coordinates(frame[time_cols[0]])
+                    except Exception:
+                        x_coord = None
                 ev = BeliefEngine.bayes_factor_trend(frame[trend_col].to_numpy(), x=x_coord)
                 for i, h in enumerate(hypotheses):
                     if getattr(h, "hypothesis_code", "") not in codes:

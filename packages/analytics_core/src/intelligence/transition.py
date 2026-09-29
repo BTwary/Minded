@@ -690,31 +690,40 @@ class ScientificTransitionService:
                             other_cols = [c for c in ordered.columns if c != y_col]
                             if other_cols:
                                 time_candidate = other_cols[0]
-                        x = canonical_time_coordinates(ordered[time_candidate]) if time_candidate else np.arange(len(y), dtype=float)
-                        slope, intercept, r_value, p_value, _std_err = _scipy_stats.linregress(x, y)
-                        r_sq_pct = float(np.clip((r_value ** 2) * 100.0, 0.0, 100.0))
-                        eta_sq = r_sq_pct
-                        result.forecast_slope = float(slope)
-                        result.forecast_p_value = float(p_value)
-                        # Chronological holdout backtest vs. naive baseline
-                        if len(y) >= 5:
-                            split = max(1, int(len(y) * 0.8))
-                            train_x, test_x = x[:split], x[split:]
-                            train_y, test_y = y[:split], y[split:]
-                            if len(test_y) >= 1 and len(train_y) >= 2:
-                                t_slope, t_intercept, _, _, _ = _scipy_stats.linregress(train_x, train_y)
-                                trend_pred = t_slope * test_x + t_intercept
-                                naive_pred = np.full_like(test_y, train_y[-1])
-                                trend_mae = float(np.mean(np.abs(test_y - trend_pred)))
-                                naive_mae = float(np.mean(np.abs(test_y - naive_pred)))
-                                result.forecast_backtest_trend_mae = trend_mae
-                                result.forecast_backtest_naive_mae = naive_mae
-                                if naive_mae > 0 and trend_mae >= naive_mae:
-                                    # Trend does not beat the naive baseline
-                                    # out-of-sample -- do not let a merely
-                                    # significant in-sample slope masquerade
-                                    # as genuine predictive signal.
-                                    eta_sq = min(eta_sq, 4.0)
+                        x = None
+                        if time_candidate:
+                            try:
+                                x = canonical_time_coordinates(ordered[time_candidate], length=len(y))
+                            except Exception:
+                                x = None
+                        if x is not None and len(x) == len(y) and np.std(x) > 0:
+                            slope, intercept, r_value, p_value, _std_err = _scipy_stats.linregress(x, y)
+                            r_sq_pct = float(np.clip((r_value ** 2) * 100.0, 0.0, 100.0))
+                            eta_sq = r_sq_pct
+                            result.forecast_slope = float(slope)
+                            result.forecast_p_value = float(p_value)
+                            # Chronological holdout backtest vs. naive baseline
+                            if len(y) >= 5:
+                                split = max(1, int(len(y) * 0.8))
+                                train_x, test_x = x[:split], x[split:]
+                                train_y, test_y = y[:split], y[split:]
+                                if len(test_y) >= 1 and len(train_y) >= 2 and np.std(train_x) > 0:
+                                    t_slope, t_intercept, _, _, _ = _scipy_stats.linregress(train_x, train_y)
+                                    trend_pred = t_slope * test_x + t_intercept
+                                    naive_pred = np.full_like(test_y, train_y[-1])
+                                    trend_mae = float(np.mean(np.abs(test_y - trend_pred)))
+                                    naive_mae = float(np.mean(np.abs(test_y - naive_pred)))
+                                    result.forecast_backtest_trend_mae = trend_mae
+                                    result.forecast_backtest_naive_mae = naive_mae
+                                    if naive_mae > 0 and trend_mae >= naive_mae:
+                                        # Trend does not beat the naive baseline
+                                        # out-of-sample -- do not let a merely
+                                        # significant in-sample slope masquerade
+                                        # as genuine predictive signal.
+                                        eta_sq = min(eta_sq, 4.0)
+                        else:
+                            result.forecast_slope = None
+                            result.forecast_p_value = None
             except Exception as exc:
                 eta_sq = None
                 result.statistical_inference = {

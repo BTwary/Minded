@@ -54,7 +54,19 @@ def test_categorical_bayes_factor_penalizes_complexity():
 
 def test_trend_bayes_factor_compares_against_intercept_only_model():
     y = 50.0 + 2.5 * np.arange(24, dtype=float)
-    ev = BeliefEngine.bayes_factor_trend(y)
+    x = np.arange(24, dtype=float)
+    # Fail-closed when temporal coordinates are missing
+    ev_missing = BeliefEngine.bayes_factor_trend(y)
+    assert ev_missing.method == "UNRESOLVED_TEMPORAL_COORDINATES"
+    assert ev_missing.bayes_factor == 1.0
+
+    # Fail-closed when temporal coordinates length mismatches
+    ev_wrong_len = BeliefEngine.bayes_factor_trend(y, x=x[:10])
+    assert ev_wrong_len.method == "INVALID_TEMPORAL_COORDINATES_LENGTH"
+    assert ev_wrong_len.bayes_factor == 1.0
+
+    # Valid canonical temporal coordinates execute normally
+    ev = BeliefEngine.bayes_factor_trend(y, x=x)
     assert ev.method == "BIC_GAUSSIAN_LINEAR_TREND"
     assert ev.bayes_factor > 10
 
