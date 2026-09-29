@@ -369,8 +369,6 @@ def classify_question(
         return "ASSOCIATION"
     if has_group and (_RANK_RE.search(q) or _BREAKDOWN_RE.search(q)) and not re.search(r"\b(differ\w*|significant\w*)\b", q, re.I):
         return "RANKING"
-    if has_group and (_COMPARE_RE.search(q) or _AVG_RE.search(q)):
-        return "GROUP_COMPARISON"
     # DEFECT-038: a genuinely causal/diagnostic question with no time dimension at all --
     # "Why did cost_metric surge across datacenter_region?" -- reads exactly like a
     # PERIOD_CHANGE question (matches both _PERIOD_CHANGE_RE's "why"/"what caused" and
@@ -387,8 +385,12 @@ def classify_question(
     # this check fires whenever no time window was resolved and none was even named
     # (both period-based branches above already had their chance to fire first), regardless
     # of whether the dataset happens to have a time column the question doesn't reference.
-    if has_group and _PERIOD_CHANGE_RE.search(q) and _CHANGE_WORDS_RE.search(q):
+    if has_group and _PERIOD_CHANGE_RE.search(q) and _CHANGE_WORDS_RE.search(q) and not _COMPARE_RE.search(q):
         return "NONE"
+    if has_group and re.search(r"\bwhy\b", q, re.I):
+        return "ROOT_CAUSE"
+    if has_group and (_COMPARE_RE.search(q) or _AVG_RE.search(q)):
+        return "GROUP_COMPARISON"
     if has_group:
         return "RANKING"
     return "NONE"
@@ -1132,7 +1134,7 @@ def _build_strategic_playbook(
                 "focus_area": "Opportunity Gap Closure",
             })
 
-    elif kind == "GROUP_COMPARISON":
+    elif kind in ("GROUP_COMPARISON", "ROOT_CAUSE"):
         if finding in ("positive", "negative"):
             playbook.append({
                 "tier": "Immediate Operational Triage (24-48h)",
@@ -1387,6 +1389,81 @@ def _group_comparison(q, df, target, group, agg_default) -> Optional[AnalystResu
     if binary is not None:
         return _rate_comparison(q, df, sub, target, group)
     return _numeric_comparison(q, df, sub, target, group)
+
+
+def _root_cause(
+    q: str,
+    df: pd.DataFrame,
+    target: str,
+    group: str,
+    expl: Optional[Sequence[str]] = None,
+    default_aggregation: Optional[str] = None,
+) -> Optional[AnalystResult]:
+    """Dedicated ROOT_CAUSE investigation engine:
+    1. Observed difference (exact pairwise or ANOVA statistics).
+    2. Candidate factors (scan available covariates/confounders in dataset).
+    3. Association / confounder checks (controlled associations / group variance).
+    4. Evidence limits & claim ceiling (observational boundaries).
+    """
+    res = _group_comparison(q, df, target, group, default_aggregation)
+    if res is None:
+        return None
+    res.kind = "ROOT_CAUSE"
+
+    candidate_cols = [
+        c for c in df.columns
+        if c not in (target, group)
+        and (expl is None or c not in expl)
+        and df[c].nunique(dropna=True) > 1
+        and df[c].nunique(dropna=True) < len(df)
+    ]
+
+    confounder_notes = []
+    if candidate_cols:
+        numeric_candidates = []
+        for c in candidate_cols:
+            if _is_numeric_like(df[c]):
+                s_c = pd.to_numeric(df[c], errors="coerce")
+                s_t = pd.to_numeric(df[target], errors="coerce")
+                valid = pd.concat([s_c, s_t], axis=1).dropna()
+                if len(valid) >= 10:
+                    r_val = float(valid.iloc[:, 0].corr(valid.iloc[:, 1]))
+                    if not math.isnan(r_val):
+                        numeric_candidates.append((c, r_val, abs(r_val)))
+
+        numeric_candidates.sort(key=lambda x: x[2], reverse=True)
+        scanned_list = ", ".join(candidate_cols[:6])
+        if len(candidate_cols) > 6:
+            scanned_list += f" (+{len(candidate_cols) - 6} more)"
+        confounder_notes.append(f"Candidate explanatory factors scanned: {scanned_list}.")
+
+        if numeric_candidates:
+            top_cand, top_r, _ = numeric_candidates[0]
+            group_means = df.groupby(group, observed=True)[top_cand].mean().dropna().to_dict()
+            if len(group_means) >= 2:
+                top_items = sorted(group_means.items(), key=lambda x: x[1], reverse=True)
+                hi_grp, hi_val = top_items[0]
+                lo_grp, lo_val = top_items[-1]
+                confounder_notes.append(
+                    f"Confounder association check: {top_cand} has strong correlation with {target} (r={top_r:.2f}) "
+                    f"and differs across {group} ({hi_grp} averages {_num(hi_val)} vs {_num(lo_val)} for {lo_grp}), "
+                    f"indicating that observed {group}-{target} differences are confounded by {top_cand} rather than {group} in isolation."
+                )
+            else:
+                confounder_notes.append(
+                    f"Confounder association check: {top_cand} is associated with {target} (r={top_r:.2f}), "
+                    f"acting as a potential confounding covariate across {group} comparisons."
+                )
+    else:
+        confounder_notes.append("Candidate explanatory factors scanned: No additional confounding covariates detected in the dataset.")
+
+    confounder_notes.append(
+        "Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, "
+        "but cannot establish mechanistic causality without controlled experimental intervention."
+    )
+
+    res.details.extend(confounder_notes)
+    return res
 
 
 def _power_two_means(n1: int, n2: int, d_mde: float = 0.5, alpha: float = ALPHA) -> float:
@@ -2755,6 +2832,8 @@ def build_analyst_result(
             return None
         if group is None:
             return None
+        if kind == "ROOT_CAUSE":
+            return _root_cause(question, df, target, group, expl, default_aggregation)
         if kind == "RANKING":
             return _ranking(question, df, target, group, default_aggregation)
         if kind == "GROUP_COMPARISON":

@@ -4472,7 +4472,7 @@ class InvestigationController:
                 )
                 direct_ans = analyst_result.to_text()
                 main_find = f"{analyst_result.headline} (deterministic recomputation from the resolved contract columns)"
-            elif analyst_result.kind in ("ASSOCIATION", "GROUP_COMPARISON", "RATE_COMPARISON", "INTERACTION") and analyst_result.finding in ("positive", "negative") and (analyst_result.numbers.get("robust") is not False):
+            elif analyst_result.kind in ("ASSOCIATION", "GROUP_COMPARISON", "RATE_COMPARISON", "INTERACTION", "ROOT_CAUSE") and analyst_result.finding in ("positive", "negative") and (analyst_result.numbers.get("robust") is not False):
                 p_val = analyst_result.numbers.get("pearson_p", analyst_result.numbers.get("p", analyst_result.numbers.get("p_value", 0.0)))
                 if p_val is not None and p_val < 0.05:
                     verdict_eval.verdict_type = "STATISTICALLY_SIGNIFICANT"
