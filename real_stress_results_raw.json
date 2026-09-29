@@ -39,7 +39,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 6.5
+  "secs": 8.3
  },
  {
   "ds": "titanic",
@@ -81,7 +81,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.5
+  "secs": 4.5
  },
  {
   "ds": "titanic",
@@ -123,7 +123,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.5
+  "secs": 6.2
  },
  {
   "ds": "titanic",
@@ -165,7 +165,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.8
+  "secs": 4.0
  },
  {
   "ds": "titanic",
@@ -207,7 +207,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 5.6
+  "secs": 7.7
  },
  {
   "ds": "titanic",
@@ -254,7 +254,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 1.1
+  "secs": 1.7
  },
  {
   "ds": "tips",
@@ -262,12 +262,10 @@
   "cat": "CORR",
   "truth": "0.676",
   "ok": true,
-  "truth_ok": false,
-  "result_class": "AGGREGATION_WRONG",
-  "all_classes": [
-   "AGGREGATION_WRONG"
-  ],
-  "truth_detail": "[AGGREGATION_WRONG] requested_aggregation='SUM', expected one of [None, 'CORRELATION', 'MEAN']",
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
   "status": "COMPLETED",
   "verdict": "STATISTICALLY_SIGNIFICANT",
   "conf": 1.0,
@@ -290,7 +288,7 @@
    },
    "estimand": "correlation",
    "task": "ASSOCIATION",
-   "requested_aggregation": "SUM",
+   "requested_aggregation": "CORRELATION",
    "requested_claim": "ASSOCIATION",
    "supported_claim": "ASSOCIATION",
    "claim_ceiling": "ASSOCIATION",
@@ -298,7 +296,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.2
+  "secs": 2.6
  },
  {
   "ds": "tips",
@@ -340,7 +338,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.5
+  "secs": 3.5
  },
  {
   "ds": "tips",
@@ -382,7 +380,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "NO_DETECTABLE_EFFECT"
   },
-  "secs": 5.2
+  "secs": 8.8
  },
  {
   "ds": "tips",
@@ -424,7 +422,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.7
+  "secs": 8.7
  },
  {
   "ds": "tips",
@@ -466,7 +464,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 0.6
+  "secs": 1.2
  },
  {
   "ds": "penguins",
@@ -508,7 +506,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.6
+  "secs": 3.3
  },
  {
   "ds": "penguins",
@@ -550,7 +548,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.5
+  "secs": 3.2
  },
  {
   "ds": "penguins",
@@ -592,7 +590,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.0
+  "secs": 4.1
  },
  {
   "ds": "penguins",
@@ -634,7 +632,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 4.0
+  "secs": 5.9
  },
  {
   "ds": "mpg",
@@ -676,7 +674,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.1
+  "secs": 3.4
  },
  {
   "ds": "mpg",
@@ -718,7 +716,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.6
+  "secs": 3.7
  },
  {
   "ds": "mpg",
@@ -760,7 +758,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 8.7
+  "secs": 6.2
  },
  {
   "ds": "mpg",
@@ -802,7 +800,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 5.7
+  "secs": 7.9
  },
  {
   "ds": "mpg",
@@ -846,7 +844,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.1
+  "secs": 4.7
  },
  {
   "ds": "diamonds",
@@ -888,7 +886,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 9.2
+  "secs": 8.2
  },
  {
   "ds": "diamonds",
@@ -930,7 +928,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 6.6
+  "secs": 3.8
  },
  {
   "ds": "diamonds",
@@ -938,16 +936,14 @@
   "cat": "DESC",
   "truth": "{'IF': 3116.467, 'VVS1': 2611.611, 'VVS2': 3193.823, 'VS1': 3985.218, 'VS2': 4028.953, 'SI1': 3966.072, 'SI2': 4915.109, 'I1': 4153.789}",
   "ok": true,
-  "truth_ok": false,
-  "result_class": "INCOMPLETE_OUTPUT",
-  "all_classes": [
-   "INCOMPLETE_OUTPUT"
-  ],
-  "truth_detail": "[INCOMPLETE_OUTPUT] groups not reported: ['IF', 'VVS1']",
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
   "status": "COMPLETED",
   "verdict": "OBSERVED",
   "conf": 1.0,
-  "answer": "SI2 has the highest average price: 4,915 (n=1,392). Ranking by average price: SI2: 4,915 (n=1,392); I1: 4,154 (n=95); VS2: 4,029 (n=1,802); VS1: 3,985 (n=1,261); SI1: 3,966 (n=1,925); VVS2: 3,194 (n=734); ... Top vs runner-up (I1): +761.3 (95% CI +106.0 to +1,417, p=0.023) -- a real gap. Opportunity sizing: elevating 4 clarity segments currently below median (3,976) to the median benchmark represents +753.7 in potential price expansion (19.0% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure SI2's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (SI2) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 753.6). Recommended next steps: Investigate operational practices distinguishing SI2 from I1.",
+  "answer": "SI2 has the highest average price: 4,915 (n=1,392). Ranking by average price: SI2: 4,915 (n=1,392); I1: 4,154 (n=95); VS2: 4,029 (n=1,802); VS1: 3,985 (n=1,261); SI1: 3,966 (n=1,925); VVS2: 3,194 (n=734); IF: 3,116 (n=259); VVS1: 2,612 (n=532). Top vs runner-up (I1): +761.3 (95% CI +106.0 to +1,417, p=0.023) -- a real gap. Opportunity sizing: elevating 4 clarity segments currently below median (3,976) to the median benchmark represents +753.7 in potential price expansion (19.0% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure SI2's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (SI2) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 753.6). Recommended next steps: Investigate operational practices distinguishing SI2 from I1.",
   "finding": "SI2 has the highest average price: 4,915 (n=1,392). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis (the hypothesis loop's own verdict STATISTICALLY_SIGNIFICANT tested a different claim and is not the answer). 'price' was averaged (MEAN) rather than summed, because it is not additive across rows.",
   "contract": {
    "target": "price",
@@ -974,7 +970,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 7.4
+  "secs": 7.6
  },
  {
   "ds": "diamonds",
@@ -982,15 +978,13 @@
   "cat": "CAUSAL",
   "truth": "{'Ideal': 3428.822, 'Premium': 4674.461, 'Very Good': 4046.122, 'Good': 3718.488, 'Fair': 4936.319}",
   "ok": true,
-  "truth_ok": false,
-  "result_class": "CONTRACT_WRONG",
-  "all_classes": [
-   "CONTRACT_WRONG"
-  ],
-  "truth_detail": "[CONTRACT_WRONG] canonical_estimand='group_difference', expected one of ['root_cause']; [CONTRACT_WRONG] requested_claim='ASSOCIATION', expected 'CAUSAL'",
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
   "status": "COMPLETED",
   "verdict": "STATISTICALLY_SIGNIFICANT",
-  "conf": 1.0,
+  "conf": 0.9999999999999224,
   "answer": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). Common Language Effect Size (probability that a random Fair exceeds a random Ideal): 68%. Counterfactual opportunity: if Ideal matched Fair's average performance, total price would expand by +4.77M. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Fair to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: Skewness: Fair values are skewed (mean 4,936 vs median 3,458, P90 11,183); median reflects typical outcome better than mean. Recommended next steps: Investigate operational or business practices driving the superior price of Fair over Ideal. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
   "finding": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). (deterministic recomputation from the resolved contract columns) 'price' was averaged (MEAN) rather than summed, because it is not additive across rows. Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
   "contract": {
@@ -1008,17 +1002,17 @@
      "price"
     ]
    },
-   "estimand": "group_difference",
-   "task": "COMPARISON",
+   "estimand": "root_cause",
+   "task": "DIAGNOSTIC",
    "requested_aggregation": "MEAN",
-   "requested_claim": "ASSOCIATION",
+   "requested_claim": "CAUSAL",
    "supported_claim": "ASSOCIATION",
    "claim_ceiling": "ASSOCIATION",
-   "problem_class": "COMPARISON",
+   "problem_class": "DIAGNOSTIC",
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.2
+  "secs": 7.1
  },
  {
   "ds": "planets",
@@ -1060,7 +1054,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.3
+  "secs": 5.8
  },
  {
   "ds": "planets",
@@ -1075,7 +1069,7 @@
   "status": "COMPLETED",
   "verdict": "OBSERVED",
   "conf": 1.0,
-  "answer": "Radial Velocity discovered the most planets: 553 (n=553), 53.4% of the overall 1,035. Ranking by count of method: Radial Velocity: 553 (n=553); Transit: 397 (n=397); Imaging: 38 (n=38); Microlensing: 23 (n=23); Eclipse Timing Variations: 9 (n=9); Pulsar Timing: 5 (n=5); ...",
+  "answer": "Radial Velocity discovered the most planets: 553 (n=553), 53.4% of the overall 1,035. Ranking by count of method: Radial Velocity: 553 (n=553); Transit: 397 (n=397); Imaging: 38 (n=38); Microlensing: 23 (n=23); Eclipse Timing Variations: 9 (n=9); Pulsar Timing: 5 (n=5); Transit Timing Variations: 4 (n=4); Orbital Brightness Modulation: 3 (n=3); Astrometry: 2 (n=2); Pulsation Timing Variations: 1 (n=1).",
   "finding": "Radial Velocity discovered the most planets: 553 (n=553), 53.4% of the overall 1,035. (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'number' was aggregated as COUNT because it represents an occurrence count, not a summable magnitude.",
   "contract": {
    "target": "method",
@@ -1102,7 +1096,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.3
+  "secs": 2.9
  },
  {
   "ds": "planets",
@@ -1144,7 +1138,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 7.4
+  "secs": 6.6
  },
  {
   "ds": "taxis",
@@ -1186,7 +1180,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 7.5
+  "secs": 7.7
  },
  {
   "ds": "taxis",
@@ -1228,7 +1222,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.5
+  "secs": 4.3
  },
  {
   "ds": "taxis",
@@ -1270,7 +1264,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 6.6
+  "secs": 7.7
  },
  {
   "ds": "flights",
@@ -1312,7 +1306,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 6.1
+  "secs": 7.3
  },
  {
   "ds": "flights",
@@ -1327,7 +1321,7 @@
   "status": "COMPLETED",
   "verdict": "OBSERVED",
   "conf": 1.0,
-  "answer": "Jul has the highest average passengers: 351.3 (n=12). Ranking by average passengers: Jul: 351.3 (n=12); Aug: 351.1 (n=12); Jun: 311.7 (n=12); Sep: 302.4 (n=12); May: 271.8 (n=12); Mar: 270.2 (n=12); ... Top vs runner-up (Aug): +0.25 (95% CI -132.1 to +132.6, p=1.00) -- not a reliable gap. Opportunity sizing: elevating 6 month segments currently below median (268.6) to the median benchmark represents +17.78 in potential passengers expansion (6.3% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure Jul's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (Jul) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 17.78). Recommended next steps: Investigate operational practices distinguishing Jul from Aug.",
+  "answer": "Jul has the highest average passengers: 351.3 (n=12). Ranking by average passengers: Jul: 351.3 (n=12); Aug: 351.1 (n=12); Jun: 311.7 (n=12); Sep: 302.4 (n=12); May: 271.8 (n=12); Mar: 270.2 (n=12); Apr: 267.1 (n=12); Oct: 266.6 (n=12); Dec: 261.8 (n=12); Jan: 241.8 (n=12); Feb: 235.0 (n=12); Nov: 232.8 (n=12). Top vs runner-up (Aug): +0.25 (95% CI -132.1 to +132.6, p=1.00) -- not a reliable gap. Opportunity sizing: elevating 6 month segments currently below median (268.6) to the median benchmark represents +17.78 in potential passengers expansion (6.3% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure Jul's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (Jul) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 17.78). Recommended next steps: Investigate operational practices distinguishing Jul from Aug.",
   "finding": "Jul has the highest average passengers: 351.3 (n=12). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'passengers' was averaged (MEAN) rather than summed, because it is not additive across rows.",
   "contract": {
    "target": "passengers",
@@ -1354,6 +1348,6 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 5.3
+  "secs": 5.9
  }
 ]

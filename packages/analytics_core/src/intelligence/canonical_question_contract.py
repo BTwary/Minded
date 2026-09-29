@@ -634,7 +634,7 @@ def compile_canonical_question_contract(
         r"(?:do|does|did|is|are)\s+(.+?)\s+([a-zA-Z0-9_]+)\s+(?:more|less|higher|lower)\s+than\s+(.+?)(?:\?|$)",
         ql,
     )
-    if do_compare_match and not target:
+    if do_compare_match and not target and not re.search(r"\bwhy\b", ql):
         side_a = do_compare_match.group(1).strip()
         action_metric = do_compare_match.group(2).strip()
         side_b = do_compare_match.group(3).strip()
@@ -735,6 +735,8 @@ def compile_canonical_question_contract(
 
     # Determine requested aggregation
     req_agg = extract_aggregation(q_clean, target)
+    if estimand in ("correlation", "multi_correlation") and req_agg not in ("CORRELATION", "MEAN", None):
+        req_agg = "CORRELATION"
 
     # Clean up unresolved roles
     unresolved: List[str] = []
