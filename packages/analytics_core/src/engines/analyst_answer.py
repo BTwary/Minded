@@ -1403,66 +1403,221 @@ def _root_cause(
     default_aggregation: Optional[str] = None,
 ) -> Optional[AnalystResult]:
     """Dedicated ROOT_CAUSE investigation engine:
-    1. Observed difference (exact pairwise or ANOVA statistics).
-    2. Candidate factors (scan available covariates/confounders in dataset).
-    3. Association / confounder checks (controlled associations / group variance).
-    4. Evidence limits & claim ceiling (observational boundaries).
+    1. Observed difference (exact pairwise or ANOVA statistics across groups).
+    2. Candidate factor discovery (scan potential covariates in dataset).
+    3. Factor <-> Outcome association (test outcome correlation/significance).
+    4. Factor <-> Exposure/Group association (test group divergence).
+    5. Adjusted exposure <-> outcome test (multiple regression / ANCOVA controlling for factor).
+    6. Attenuation / persistence evaluation (measure effect change post-adjustment).
+    7. Evidence classification (substantial attenuation vs persistence vs reversal).
+    8. Observational claim ceiling (explicit limits on mechanistic causality).
     """
     res = _group_comparison(q, df, target, group, default_aggregation)
     if res is None:
         return None
     res.kind = "ROOT_CAUSE"
 
+    # 1. Candidate Factor Discovery
+    def _is_id_col(col_name: str, s: pd.Series) -> bool:
+        c_low = str(col_name).lower()
+        if c_low in ("id", "key", "uuid", "guid", "pk", "fk") or c_low.endswith(("_id", "_key", "_uuid", "_pk", "_fk")):
+            return True
+        if not _is_numeric_like(s) and s.nunique(dropna=True) >= len(s) * 0.9:
+            return True
+        return False
+
     candidate_cols = [
         c for c in df.columns
         if c not in (target, group)
         and (expl is None or c not in expl)
         and df[c].nunique(dropna=True) > 1
-        and df[c].nunique(dropna=True) < len(df)
+        and not _is_id_col(c, df[c])
     ]
 
     confounder_notes = []
-    if candidate_cols:
-        numeric_candidates = []
-        for c in candidate_cols:
-            if _is_numeric_like(df[c]):
-                s_c = pd.to_numeric(df[c], errors="coerce")
-                s_t = pd.to_numeric(df[target], errors="coerce")
-                valid = pd.concat([s_c, s_t], axis=1).dropna()
-                if len(valid) >= 10:
-                    r_val = float(valid.iloc[:, 0].corr(valid.iloc[:, 1]))
-                    if not math.isnan(r_val):
-                        numeric_candidates.append((c, r_val, abs(r_val)))
+    if not candidate_cols:
+        confounder_notes.append("Candidate explanatory factors scanned: No additional candidate covariates found in the dataset.")
+        confounder_notes.append(
+            "Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, "
+            "but cannot establish mechanistic causality without controlled experimental intervention."
+        )
+        res.details.extend(confounder_notes)
+        return res
 
-        numeric_candidates.sort(key=lambda x: x[2], reverse=True)
-        scanned_list = ", ".join(candidate_cols[:6])
-        if len(candidate_cols) > 6:
-            scanned_list += f" (+{len(candidate_cols) - 6} more)"
-        confounder_notes.append(f"Candidate explanatory factors scanned: {scanned_list}.")
+    scanned_list = ", ".join(candidate_cols[:6])
+    if len(candidate_cols) > 6:
+        scanned_list += f" (+{len(candidate_cols) - 6} more)"
+    confounder_notes.append(f"Candidate explanatory factors scanned: {scanned_list}.")
 
-        if numeric_candidates:
-            top_cand, top_r, _ = numeric_candidates[0]
-            group_means = df.groupby(group, observed=True)[top_cand].mean().dropna().to_dict()
-            if len(group_means) >= 2:
-                top_items = sorted(group_means.items(), key=lambda x: x[1], reverse=True)
-                hi_grp, hi_val = top_items[0]
-                lo_grp, lo_val = top_items[-1]
-                confounder_notes.append(
-                    f"Confounder association check: {top_cand} has strong correlation with {target} (r={top_r:.2f}) "
-                    f"and differs across {group} ({hi_grp} averages {_num(hi_val)} vs {_num(lo_val)} for {lo_grp}), "
-                    f"indicating that observed {group}-{target} differences are confounded by {top_cand} rather than {group} in isolation."
-                )
-            else:
-                confounder_notes.append(
-                    f"Confounder association check: {top_cand} is associated with {target} (r={top_r:.2f}), "
-                    f"acting as a potential confounding covariate across {group} comparisons."
-                )
+    # Identify focal groups (g_A vs g_B)
+    group_means = df.groupby(group, observed=True)[target].mean().dropna().to_dict()
+    if len(group_means) < 2:
+        confounder_notes.append(
+            "Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, "
+            "but cannot establish mechanistic causality without controlled experimental intervention."
+        )
+        res.details.extend(confounder_notes)
+        return res
+
+    sorted_groups = sorted(group_means.items(), key=lambda x: x[1], reverse=True)
+    g_hi, val_hi = sorted_groups[0]
+    g_lo, val_lo = sorted_groups[-1]
+
+    # Check if specific groups were asked in the question (e.g. "Fair" and "Ideal", or "third" and "first")
+    g_A, g_B = g_hi, g_lo
+    q_lower = q.lower()
+    matched_groups = [g for g in group_means.keys() if str(g).lower() in q_lower]
+    if len(matched_groups) >= 2:
+        g_A, g_B = matched_groups[0], matched_groups[1]
+    elif len(matched_groups) == 1:
+        matched = matched_groups[0]
+        if matched == g_lo:
+            g_A, g_B = g_hi, g_lo
+        else:
+            g_A, g_B = matched, g_lo
+
+    # 2. Screen Candidates: Factor <-> Outcome AND Factor <-> Group
+    qualified_candidates = []
+    for c in candidate_cols:
+        if not _is_numeric_like(df[c]):
+            continue
+        s_c = pd.to_numeric(df[c], errors="coerce")
+        s_t = pd.to_numeric(df[target], errors="coerce")
+        valid = pd.DataFrame({"z": s_c, "y": s_t, "g": df[group]}).dropna()
+        if len(valid) < 10 or valid["z"].nunique() < 2:
+            continue
+
+        try:
+            r_val, p_r = sps.pearsonr(valid["z"], valid["y"])
+        except Exception:
+            continue
+        if math.isnan(r_val):
+            continue
+
+        z_means = valid.groupby("g", observed=True)["z"].mean().to_dict()
+        if len(z_means) < 2:
+            continue
+        z_std = float(valid["z"].std())
+        if z_std <= 0:
+            continue
+
+        z_diff = abs(z_means.get(g_A, 0.0) - z_means.get(g_B, 0.0))
+        z_d = z_diff / z_std
+
+        # Confounder screening: must associate with outcome (|r| >= 0.10) AND differ across groups (z_diff > 0)
+        if abs(r_val) >= 0.10 and (z_d >= 0.15 or z_diff > 0):
+            score = abs(r_val) * (1.0 + min(2.0, z_d))
+            qualified_candidates.append({
+                "col": c,
+                "r": float(r_val),
+                "p_r": float(p_r),
+                "z_means": z_means,
+                "z_d": float(z_d),
+                "score": float(score),
+                "valid_df": valid,
+            })
+
+    if not qualified_candidates:
+        confounder_notes.append(
+            f"Candidate factor screening: None of the scanned factors met the dual criteria for candidate confounders "
+            f"(requiring both substantial correlation with {target} and systematic variation across {group})."
+        )
+        confounder_notes.append(
+            "Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, "
+            "but cannot establish mechanistic causality without controlled experimental intervention."
+        )
+        res.details.extend(confounder_notes)
+        return res
+
+    qualified_candidates.sort(key=lambda x: x["score"], reverse=True)
+    top_cand_info = qualified_candidates[0]
+    cand_name = top_cand_info["col"]
+    top_r = top_cand_info["r"]
+    p_r = top_cand_info["p_r"]
+    z_means = top_cand_info["z_means"]
+    valid = top_cand_info["valid_df"]
+
+    # 3. Adjusted Exposure <-> Outcome Test
+    focal_df = valid[valid["g"].isin([g_A, g_B])].copy()
+    if len(focal_df) >= 6 and focal_df["g"].nunique() == 2:
+        y_A = focal_df[focal_df["g"] == g_A]["y"].values
+        y_B = focal_df[focal_df["g"] == g_B]["y"].values
+        unadj_diff = float(np.mean(y_A) - np.mean(y_B))
+
+        D = (focal_df["g"] == g_A).astype(float).values
+        Z = focal_df["z"].values
+        Y = focal_df["y"].values
+        X = np.column_stack([np.ones(len(focal_df)), D, Z])
+        try:
+            beta, _, _, _ = np.linalg.lstsq(X, Y, rcond=None)
+            adj_diff = float(beta[1])
+            gamma_z = float(beta[2])
+        except Exception:
+            adj_diff = unadj_diff
+            gamma_z = 0.0
     else:
-        confounder_notes.append("Candidate explanatory factors scanned: No additional confounding covariates detected in the dataset.")
+        unadj_diff = float(group_means.get(g_A, 0.0) - group_means.get(g_B, 0.0))
+        adj_diff = unadj_diff
+        gamma_z = 0.0
+
+    sign_flipped = bool(unadj_diff * adj_diff < 0 and abs(unadj_diff) > 1e-6 and abs(adj_diff) > 1e-6)
+    if abs(unadj_diff) > 1e-9:
+        attenuation_pct = float((1.0 - abs(adj_diff) / abs(unadj_diff)) * 100.0)
+    else:
+        attenuation_pct = 0.0
+
+    z_hi = z_means.get(g_A, 0.0)
+    z_lo = z_means.get(g_B, 0.0)
+
+    res.numbers["candidate_factors_scanned"] = candidate_cols
+    res.numbers["top_candidate"] = cand_name
+    res.numbers["top_candidate_r"] = float(top_r)
+    res.numbers["unadjusted_diff"] = float(unadj_diff)
+    res.numbers["adjusted_diff"] = float(adj_diff)
+    res.numbers["attenuation_pct"] = float(attenuation_pct)
+
+    if sign_flipped:
+        classification = "CONFOUNDER_EFFECT_REVERSAL"
+        res.numbers["confounding_classification"] = classification
+        confounder_notes.append(
+            f"Confounder adjustment & effect reversal: {cand_name} is a candidate confounder: it correlates with {target} (r={top_r:.2f}) "
+            f"and differs across {group} ({g_A} averages {_num(z_hi)} vs {_num(z_lo)} for {g_B}). "
+            f"When adjusting for {cand_name}, the observed difference between {g_A} and {g_B} reverses direction "
+            f"(adjusted difference {_signed(adj_diff)} vs unadjusted {_signed(unadj_diff)}), "
+            f"indicating that the unadjusted {group} difference was an artifact of composition/confounding by {cand_name}."
+        )
+    elif attenuation_pct >= 30.0:
+        classification = "CANDIDATE_CONFOUNDER_SUBSTANTIAL_ATTENUATION"
+        res.numbers["confounding_classification"] = classification
+        confounder_notes.append(
+            f"Confounder adjustment & attenuation: {cand_name} is a candidate confounder: it correlates with {target} (r={top_r:.2f}) "
+            f"and differs across {group} ({g_A} averages {_num(z_hi)} vs {_num(z_lo)} for {g_B}). "
+            f"After adjusting for {cand_name}, the observed difference between {g_A} and {g_B} attenuates by {attenuation_pct:.1f}% "
+            f"(from {_signed(unadj_diff)} to {_signed(adj_diff)}). The observed data are consistent with confounding by {cand_name} "
+            f"rather than an effect of {group} in isolation."
+        )
+    elif attenuation_pct >= 10.0:
+        classification = "CANDIDATE_CONFOUNDER_PARTIAL_ATTENUATION"
+        res.numbers["confounding_classification"] = classification
+        confounder_notes.append(
+            f"Confounder adjustment & partial attenuation: {cand_name} is a candidate covariate: it correlates with {target} (r={top_r:.2f}) "
+            f"and differs across {group}. Adjusting for {cand_name} yields a modest {attenuation_pct:.1f}% attenuation "
+            f"(from {_signed(unadj_diff)} to {_signed(adj_diff)}), but substantial group differences persist independently of {cand_name}."
+        )
+    else:
+        classification = "PERSISTENT_GROUP_DIFFERENCE"
+        res.numbers["confounding_classification"] = classification
+        persistence_pct = max(0.0, 100.0 - attenuation_pct)
+        confounder_notes.append(
+            f"Confounder adjustment & persistent difference: {cand_name} was evaluated as a candidate factor (r={top_r:.2f}), "
+            f"but adjusting for {cand_name} does not attenuate the observed difference "
+            f"(adjusted difference {_signed(adj_diff)} vs unadjusted {_signed(unadj_diff)}, {persistence_pct:.1f}% persistence). "
+            f"The observed difference persists independently of {cand_name}."
+        )
 
     confounder_notes.append(
-        "Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, "
-        "but cannot establish mechanistic causality without controlled experimental intervention."
+        "Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, "
+        "but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification."
     )
 
     res.details.extend(confounder_notes)
