@@ -1,0 +1,17 @@
+division,quarter,gross_revenue,operating_expenses,net_profit,margin_pct,audit_notes
+Cloud Services,2025-Q1,,,,43.5%,#N/A
+Cloud Services,2025-Q2,,,,23.3%,#N/A
+Cloud Services,2025-Q3,,,,22.0%,nil
+Cloud Services,2025-Q4,,,,8.9%,#N/A
+Hardware Solutions,2025-Q1,,,,16.3%,nil
+Hardware Solutions,2025-Q2,,,,38.6%,nil
+Hardware Solutions,2025-Q3,,,"(34,130.00)",-16.6%,#N/A
+Hardware Solutions,2025-Q4,,,"(33,542.00)",-17.9%,#N/A
+Digital Media,2025-Q1,,,,10.3%,nil
+Digital Media,2025-Q2,,,,41.5%,#N/A
+Digital Media,2025-Q3,,,,28.4%,nil
+Digital Media,2025-Q4,,,,22.6%,nil
+Consulting & Advisory,2025-Q1,,,,26.0%,#N/A
+Consulting & Advisory,2025-Q2,,,,14.4%,nil
+Consulting & Advisory,2025-Q3,,,,22.2%,#N/A
+Consulting & Advisory,2025-Q4,,,,15.4%,#N/A

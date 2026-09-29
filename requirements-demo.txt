@@ -1,0 +1,3 @@
+# Optional: used only by hf_space/app.py (the hosted demo), not the core app.
+gradio>=5.0.0
+plotly>=5.18.0

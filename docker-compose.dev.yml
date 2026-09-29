@@ -1,0 +1,49 @@
+version: "3.8"
+
+# Zero-cost local path. This stack uses SQLite + local filesystem + deterministic AA-OS.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: ada-api-dev
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: sqlite:////app/data/autonomous_analyst.db
+      SECRET_KEY: ${SECRET_KEY:-local-dev-only-change-me}
+      DATA_STORAGE_DIR: /app/data_store
+      AI_ENABLED: "false"
+      AI_PROVIDER: none
+      AI_MODEL: auto
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      AAOS_LOCAL_AUTOWORKER: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./data_store:/app/data_store
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: ada-web-dev
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3

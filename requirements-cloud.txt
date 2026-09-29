@@ -1,0 +1,5 @@
+# Optional, user-owned cloud backup/storage providers.
+# AA-OS remains fully local without installing this file.
+boto3>=1.35.0
+# GCS support is optional; install when the user chooses Google Cloud Storage.
+google-cloud-storage>=2.18.0

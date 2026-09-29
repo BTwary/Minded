@@ -1,0 +1,183 @@
+version: "3.8"
+
+# OPTIONAL client-paid/provider-backed deployment.
+# The AA-OS autonomous core does NOT depend on this stack; it is provided for
+# clients who choose PostgreSQL/Redis/MinIO and network-facing deployment.
+services:
+  postgres:
+    image: pgvector/pgvector:0.6.2-pg16
+    container_name: ada-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${AAOS_POSTGRES_USER:?AAOS_POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${AAOS_POSTGRES_PASSWORD:?AAOS_POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${AAOS_POSTGRES_DB:-autonomous_analyst}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
+  redis:
+    image: redis:7.2.4-alpine
+    container_name: ada-redis
+    restart: always
+    command: ["redis-server", "--requirepass", "${AAOS_REDIS_PASSWORD:?AAOS_REDIS_PASSWORD is required}"]
+    environment:
+      REDISCLI_AUTH: ${AAOS_REDIS_PASSWORD:?AAOS_REDIS_PASSWORD is required}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  minio:
+    image: minio/minio:RELEASE.2024-03-03T17-50-39Z
+    container_name: ada-minio
+    restart: always
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${AAOS_MINIO_ROOT_USER:?AAOS_MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${AAOS_MINIO_ROOT_PASSWORD:?AAOS_MINIO_ROOT_PASSWORD is required}
+    volumes:
+      - minio_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: ada-api
+    restart: always
+    environment:
+      ENVIRONMENT: production
+      POSTGRES_USER: ${AAOS_POSTGRES_USER:?AAOS_POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${AAOS_POSTGRES_PASSWORD:?AAOS_POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${AAOS_POSTGRES_DB:-autonomous_analyst}
+      DATABASE_URL: postgresql://${AAOS_POSTGRES_USER:?AAOS_POSTGRES_USER is required}:${AAOS_POSTGRES_PASSWORD:?AAOS_POSTGRES_PASSWORD is required}@postgres:5432/${AAOS_POSTGRES_DB:-autonomous_analyst}
+      SECRET_KEY: ${AAOS_JWT_SECRET:?AAOS_JWT_SECRET is required}
+      REDIS_URL: redis://:${AAOS_REDIS_PASSWORD:?AAOS_REDIS_PASSWORD is required}@redis:6379/0
+      AAOS_REDIS_PASSWORD: ${AAOS_REDIS_PASSWORD:?AAOS_REDIS_PASSWORD is required}
+      MINIO_ROOT_USER: ${AAOS_MINIO_ROOT_USER:?AAOS_MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${AAOS_MINIO_ROOT_PASSWORD:?AAOS_MINIO_ROOT_PASSWORD is required}
+      AAOS_ADMIN_BOOTSTRAP_TOKEN: ${AAOS_ADMIN_BOOTSTRAP_TOKEN:?AAOS_ADMIN_BOOTSTRAP_TOKEN is required}
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-none}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      DATA_STORAGE_DIR: /app/data_store
+    ports:
+      # Bind to host for client LAN/reverse-proxy use. Internet-facing use MUST
+      # put a TLS/rate-limit/WAF reverse proxy in front of this service.
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - api_data:/app/data
+    networks:
+      - internal
+      - public
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: ada-web
+    restart: always
+    environment:
+      NEXT_PUBLIC_API_URL: ${AAOS_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - public
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  api_data:
+
+networks:
+  internal:
+    driver: bridge
+    internal: true
+  public:
+    driver: bridge

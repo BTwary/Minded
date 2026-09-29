@@ -1,0 +1,6 @@
+product_id,product_name,category,unit_price
+P01,Enterprise AI Engine,Premium,12000
+P02,Real-Time Pipeline,Premium,8500
+P03,Analytics Dashboard,Standard,3500
+P04,Data Connector,Standard,1500
+P05,Standard Reporter,Basic,500

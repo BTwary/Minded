@@ -1,0 +1,193 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #020904;
+  --foreground: #f7f7e8;
+  --gold: #d4af37;
+  --laser-cyan: #38ef7d;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow-x: hidden;
+}
+
+a, button, [role="button"] {
+  cursor: pointer;
+}
+
+::selection {
+  background: #d4af37;
+  color: #020904;
+}
+
+/* Custom sleek gold-emerald scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #05150a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #0e2d19;
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #195431;
+  border-color: rgba(56, 239, 125, 0.4);
+}
+
+/* -------------------------------------------------------------------------- */
+/* MindEd visual themes                                                       */
+/* -------------------------------------------------------------------------- */
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+:root,
+html[data-theme="dark"] {
+  --background: #211207;
+  --surface-1: #2b1709;
+  --surface-2: #351c0b;
+  --surface-3: #42230c;
+  --surface-border: #694015;
+  --foreground: #fff8ed;
+  --muted: #d2b28b;
+  --muted-2: #a68258;
+  --accent: #e9a23b;
+  --accent-strong: #f5b84f;
+  --accent-soft: rgba(233, 162, 59, 0.14);
+  --success: #7fcf8a;
+  --danger: #ff8b74;
+}
+
+html[data-theme="light"] {
+  --background: #eef8ea;
+  --surface-1: #f6fbf3;
+  --surface-2: #e5f2df;
+  --surface-3: #d7ead0;
+  --surface-border: #b6d0ad;
+  --foreground: #18331d;
+  --muted: #4f6752;
+  --muted-2: #708170;
+  --accent: #3c7d4a;
+  --accent-strong: #286138;
+  --accent-soft: rgba(60, 125, 74, 0.12);
+  --success: #367b47;
+  --danger: #a74b3e;
+}
+
+/* Preserve existing Tailwind class structure while changing the entire visual
+   language consistently. These higher-specificity selectors override palette
+   utilities without requiring a page-by-page rewrite. */
+html[data-theme="light"] .bg-slate-950,
+html[data-theme="dark"] .bg-slate-950 { background-color: var(--background) !important; }
+html[data-theme="light"] .bg-slate-900,
+html[data-theme="dark"] .bg-slate-900 { background-color: var(--surface-1) !important; }
+html[data-theme="light"] .bg-slate-800,
+html[data-theme="dark"] .bg-slate-800 { background-color: var(--surface-2) !important; }
+html[data-theme="light"] .bg-slate-700,
+html[data-theme="dark"] .bg-slate-700 { background-color: var(--surface-3) !important; }
+
+html[data-theme="light"] .bg-slate-950\/60,
+html[data-theme="light"] .bg-slate-950\/70,
+html[data-theme="light"] .bg-slate-950\/90,
+html[data-theme="dark"] .bg-slate-950\/60,
+html[data-theme="dark"] .bg-slate-950\/70,
+html[data-theme="dark"] .bg-slate-950\/90 { background-color: color-mix(in srgb, var(--background) 88%, transparent) !important; }
+
+html[data-theme="light"] .bg-slate-900\/40,
+html[data-theme="light"] .bg-slate-900\/60,
+html[data-theme="light"] .bg-slate-900\/70,
+html[data-theme="dark"] .bg-slate-900\/40,
+html[data-theme="dark"] .bg-slate-900\/60,
+html[data-theme="dark"] .bg-slate-900\/70 { background-color: color-mix(in srgb, var(--surface-1) 88%, transparent) !important; }
+
+html[data-theme="light"] .border-slate-800,
+html[data-theme="light"] .border-slate-700,
+html[data-theme="dark"] .border-slate-800,
+html[data-theme="dark"] .border-slate-700 { border-color: var(--surface-border) !important; }
+
+html[data-theme="light"] .text-slate-100,
+html[data-theme="light"] .text-slate-200,
+html[data-theme="dark"] .text-slate-100,
+html[data-theme="dark"] .text-slate-200 { color: var(--foreground) !important; }
+/* `text-white` / `text-slate-50` are used throughout the app (headings, card
+   titles, empty-state copy) as a literal "brightest text" color. That's fine
+   against the dark theme's near-black background, but in light mode it left
+   headings rendering as literal white-on-near-white -- effectively invisible.
+   Map them to the theme's foreground color like the other text utilities. */
+html[data-theme="light"] .text-white,
+html[data-theme="light"] .text-slate-50,
+html[data-theme="dark"] .text-white,
+html[data-theme="dark"] .text-slate-50 { color: var(--foreground) !important; }
+html[data-theme="light"] .text-slate-300,
+html[data-theme="light"] .text-slate-400,
+html[data-theme="dark"] .text-slate-300,
+html[data-theme="dark"] .text-slate-400 { color: var(--muted) !important; }
+html[data-theme="light"] .text-slate-500,
+html[data-theme="light"] .text-slate-600,
+html[data-theme="dark"] .text-slate-500,
+html[data-theme="dark"] .text-slate-600 { color: var(--muted-2) !important; }
+
+html[data-theme="light"] .text-cyan-300,
+html[data-theme="light"] .text-cyan-400,
+html[data-theme="dark"] .text-cyan-300,
+html[data-theme="dark"] .text-cyan-400 { color: var(--accent-strong) !important; }
+html[data-theme="light"] .bg-cyan-600,
+html[data-theme="light"] .bg-cyan-500,
+html[data-theme="dark"] .bg-cyan-600,
+html[data-theme="dark"] .bg-cyan-500 { background-color: var(--accent) !important; }
+html[data-theme="light"] .bg-cyan-500\/10,
+html[data-theme="light"] .bg-cyan-500\/20,
+html[data-theme="dark"] .bg-cyan-500\/10,
+html[data-theme="dark"] .bg-cyan-500\/20 { background-color: var(--accent-soft) !important; }
+html[data-theme="light"] .border-cyan-500\/20,
+html[data-theme="light"] .border-cyan-500\/30,
+html[data-theme="light"] .border-cyan-500\/40,
+html[data-theme="dark"] .border-cyan-500\/20,
+html[data-theme="dark"] .border-cyan-500\/30,
+html[data-theme="dark"] .border-cyan-500\/40 { border-color: color-mix(in srgb, var(--accent) 45%, var(--surface-border)) !important; }
+
+.theme-toggle:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent-strong) !important;
+}
+
+/* Make native controls readable in both themes. */
+input, textarea, select {
+  color-scheme: inherit;
+}
+html[data-theme="light"] input,
+html[data-theme="light"] textarea,
+html[data-theme="light"] select {
+  color: var(--foreground);
+  background-color: var(--surface-1);
+  border-color: var(--surface-border);
+}
+
+/* Saffron/green scrollbar pair. */
+html[data-theme="dark"] ::-webkit-scrollbar-track { background: #1b0d04; }
+html[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #6b3a10; border-color: rgba(233, 162, 59, 0.25); }
+html[data-theme="light"] ::-webkit-scrollbar-track { background: #e2efdc; }
+html[data-theme="light"] ::-webkit-scrollbar-thumb { background: #a8c69e; border-color: rgba(60, 125, 74, 0.25); }
+
+.theme-light-glow {
+  box-shadow: 0 18px 55px rgba(60, 125, 74, 0.10);
+}
+
+.theme-dark-glow {
+  box-shadow: 0 18px 55px rgba(233, 162, 59, 0.12);
+}
