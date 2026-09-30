@@ -514,61 +514,87 @@ class SemanticEngine:
         # 3. Match Group Dimension by highest semantic affinity
         entity_nouns = {"customer", "customers", "user", "users", "account", "accounts", "client", "clients", "item", "items", "record", "records"}
         dim_q_tokens = {t for t in q_tokens if t.lower() not in entity_nouns and (t.lower()[:-1] if t.lower().endswith("s") else t.lower()) not in entity_nouns}
-        scored_dims = []
-        for col in categorical_cols:
-            score = SemanticEngine._match_column_score(col, dim_q_tokens if dim_q_tokens else q_tokens)
-            if not dim_q_tokens:
-                score = 0.0
-            col_low = col.lower()
-            # Prioritize categorical classification columns
-            if any(dim_k in col_low for dim_k in ["tier", "segment", "type", "category", "region", "channel", "plan", "status", "group", "class", "band", "level", "carrier", "warehouse"]):
-                score += 2.0 if score > 0 else 0.0
-            # Disqualify explicit identifier columns unless specifically named
-            if any(id_k in col_low for id_k in ["_id", "id", "key", "pk", "fk", "uuid"]):
-                if not any(token == col_low for token in q_tokens):
-                    score = -1e9
-            # Penalize high-cardinality unique user/row IDs. Previously
-            # gated on n_tot >= 10, which let a per-row identifier-like
-            # column (e.g. "product_name" in a small products table) tie
-            # with the real categorical dimension (e.g. "category") on
-            # small dimension tables -- exactly where an ID-like column is
-            # *most* likely to be unique per row. The ratio itself already
-            # requires >80% uniqueness, so this floor was only ever
-            # suppressing the one case it needed to catch; lower it so it
-            # still applies to small reference/dimension tables.
+
+        def _dimension_is_safe(col: str) -> bool:
+            """Reject explicit identifier columns and near-unique row labels --
+            the same safety bar the token-scored path below already enforces."""
+            if any(id_k in col.lower() for id_k in ["_id", "id", "key", "pk", "fk", "uuid"]):
+                return False
             n_uniq = primary_df[col].nunique()
             n_tot = len(primary_df)
-            if n_tot >= 3 and (n_uniq / n_tot) > 0.8:
-                score = -1e9
-            scored_dims.append((score, col))
+            return not (n_tot >= 3 and (n_uniq / n_tot) > 0.8)
 
-        scored_dims.sort(key=lambda x: (-x[0], x[1]))
-        if scored_dims and scored_dims[0][0] > 0 and (len(scored_dims) == 1 or scored_dims[0][0] > scored_dims[1][0]):
-            group_col = scored_dims[0][1]
-        elif categorical_cols:
-            # Fallback grouping must reject identifier-like dimensions by BOTH
-            # name and observed uniqueness.  A human-readable entity label such
-            # as `product_name` is still an ID in an 8-row product catalog when
-            # every value is unique; allowing it here creates an ambiguity with
-            # the real business dimension (`category`) and downstream consumers
-            # must then never fall back to raw column order.
-            non_id_cats = [
-                c for c in categorical_cols
-                if not any(id_k in c.lower() for id_k in ["_id", "id", "key", "pk", "fk", "uuid"])
-            ]
-            candidates = []
-            for c in non_id_cats:
-                n_obs = int(primary_df[c].notna().sum())
-                n_unique = int(primary_df[c].nunique(dropna=True))
-                uniqueness_ratio = n_unique / max(n_obs, 1)
-                if 2 <= n_unique <= 50 and uniqueness_ratio <= 0.80:
-                    candidates.append(c)
-            if len(candidates) == 1:
-                group_col = candidates[0]
+        # IntentEngine.parse_intent already resolves a single, schema-grounded
+        # grouping dimension when the question names exactly one (and, since
+        # the control-clause fix, correctly ignores confound mentions in a
+        # "controlling for X" clause that would otherwise tie with the real
+        # dimension in the token-scored fallback below). Trust that resolution
+        # directly rather than re-deriving it from an unscoped token scan that
+        # has no way to tell a genuine dimension from a named confound.
+        hinted_group_col = getattr(intent, "dimension_hint", None)
+        if (
+            hinted_group_col
+            and hinted_group_col in categorical_cols
+            and hinted_group_col != target_col
+            and _dimension_is_safe(hinted_group_col)
+        ):
+            group_col = hinted_group_col
+        else:
+            scored_dims = []
+            for col in categorical_cols:
+                score = SemanticEngine._match_column_score(col, dim_q_tokens if dim_q_tokens else q_tokens)
+                if not dim_q_tokens:
+                    score = 0.0
+                col_low = col.lower()
+                # Prioritize categorical classification columns
+                if any(dim_k in col_low for dim_k in ["tier", "segment", "type", "category", "region", "channel", "plan", "status", "group", "class", "band", "level", "carrier", "warehouse"]):
+                    score += 2.0 if score > 0 else 0.0
+                # Disqualify explicit identifier columns unless specifically named
+                if any(id_k in col_low for id_k in ["_id", "id", "key", "pk", "fk", "uuid"]):
+                    if not any(token == col_low for token in q_tokens):
+                        score = -1e9
+                # Penalize high-cardinality unique user/row IDs. Previously
+                # gated on n_tot >= 10, which let a per-row identifier-like
+                # column (e.g. "product_name" in a small products table) tie
+                # with the real categorical dimension (e.g. "category") on
+                # small dimension tables -- exactly where an ID-like column is
+                # *most* likely to be unique per row. The ratio itself already
+                # requires >80% uniqueness, so this floor was only ever
+                # suppressing the one case it needed to catch; lower it so it
+                # still applies to small reference/dimension tables.
+                n_uniq = primary_df[col].nunique()
+                n_tot = len(primary_df)
+                if n_tot >= 3 and (n_uniq / n_tot) > 0.8:
+                    score = -1e9
+                scored_dims.append((score, col))
+
+            scored_dims.sort(key=lambda x: (-x[0], x[1]))
+            if scored_dims and scored_dims[0][0] > 0 and (len(scored_dims) == 1 or scored_dims[0][0] > scored_dims[1][0]):
+                group_col = scored_dims[0][1]
+            elif categorical_cols:
+                # Fallback grouping must reject identifier-like dimensions by BOTH
+                # name and observed uniqueness.  A human-readable entity label such
+                # as `product_name` is still an ID in an 8-row product catalog when
+                # every value is unique; allowing it here creates an ambiguity with
+                # the real business dimension (`category`) and downstream consumers
+                # must then never fall back to raw column order.
+                non_id_cats = [
+                    c for c in categorical_cols
+                    if not any(id_k in c.lower() for id_k in ["_id", "id", "key", "pk", "fk", "uuid"])
+                ]
+                candidates = []
+                for c in non_id_cats:
+                    n_obs = int(primary_df[c].notna().sum())
+                    n_unique = int(primary_df[c].nunique(dropna=True))
+                    uniqueness_ratio = n_unique / max(n_obs, 1)
+                    if 2 <= n_unique <= 50 and uniqueness_ratio <= 0.80:
+                        candidates.append(c)
+                if len(candidates) == 1:
+                    group_col = candidates[0]
+                else:
+                    group_col = None
             else:
                 group_col = None
-        else:
-            group_col = None
 
         # 4. Match Time Dimension. Never choose the first physical datetime
         # column when several plausible time dimensions exist.

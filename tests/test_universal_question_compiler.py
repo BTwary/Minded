@@ -239,4 +239,3 @@ def test_intent_parser_understands_common_time_horizon_without_inventing_time_co
     assert intent.intent_type == "FORECAST"
     assert intent.target_metric_hint == "revenue"
     assert intent.time_horizon_hint == "next quarter"
-\n

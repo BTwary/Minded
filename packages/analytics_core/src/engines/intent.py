@@ -66,6 +66,13 @@ _DIMENSION_ALIASES: Dict[str, Tuple[str, ...]] = {
     "order": ("order", "orders", "transaction", "transactions"),
 }
 
+_CONTROL_CLAUSE_RE = re.compile(
+    r"\b(?:controlling for|holding|after accounting for|adjusting for)\b\s+"
+    r"(?P<phrase>.+?)"
+    r"(?=,|;|\bwhile\b|\bwhereas\b|\bconstant\b|\?|$)",
+    re.I,
+)
+
 _RELATION_BOUNDARY = (
     r"(?=,|;|\bwhile\b|\bwhereas\b|\bcontrolling for\b|\bgiven\b|"
     r"\bafter accounting for\b|\bholding\b|\?|$)"
@@ -76,8 +83,9 @@ _RANK_LOW_RE = re.compile(r"\b(lowest|least|smallest|bottom|fewest)\b", re.I)
 _RANK_AMBIGUOUS_RE = re.compile(r"\b(best|worst)\b", re.I)
 
 _CAUSAL_RE = re.compile(
-    r"\b(caus(?:e|ed|es|ing|al|ally)|causal|treatment effect|randomi[sz]ed|"
-    r"intervention|counterfactual|what happens if|would .+ if)\b",
+    r"\b(causal(?:ly)?|treatment effect|randomi[sz]ed|"
+    r"intervention|counterfactual|what happens if|would .+ if|"
+    r"caused\s+by|(?:does|do|did)\s+.{1,80}?\bcaus(?:e|es|ed)\b)",
     re.I,
 )
 _PREDICTION_RE = re.compile(
@@ -93,8 +101,8 @@ _FORECAST_RE = re.compile(
     re.I,
 )
 _DIAGNOSTIC_RE = re.compile(
-    r"\b(why|driver\w*|root cause|explain\w*|what caused|what drove|"
-    r"what is behind|reason behind|account for|what happened to|what changed)\b",
+    r"\b(why|driv(?:er\w*|ing)|root cause|explain\w*|what caused|what drove|caus\w*|"
+    r"what(?:\s+is|'s)\s+behind|reason behind|account for|what happened to|what changed)\b",
     re.I,
 )
 _SEGMENTATION_RE = re.compile(
@@ -243,9 +251,9 @@ class IntentEngine:
     @staticmethod
     def _relation_sides(question: str) -> Tuple[Optional[str], List[str]]:
         patterns = (
-            (r"\b(?:is|are|do|does|can|whether)\s+(.+?)\s+"
+            (r"\b(?:is|are|do|does|did|can|whether)\s+(.+?)\s+"
              r"(?:affect\w*|influenc\w*|impact\w*)\s+(.+?)" + _RELATION_BOUNDARY, "object"),
-            (r"\b(?:is|are|do|does|can|whether)\s+(.+?)\s+"
+            (r"\b(?:is|are|do|does|did|can|whether)\s+(.+?)\s+"
              r"(?:depend\w*)\s+on\s+(.+?)" + _RELATION_BOUNDARY, "subject"),
             (r"\b(?:correlation|relationship|association)\s+between\s+(.+?)\s+and\s+(.+?)" + _RELATION_BOUNDARY, "symmetric"),
             (r"\b(.+?)\s+(?:associated|correlated|related|linked|connected)\s+with\s+(.+?)" + _RELATION_BOUNDARY, "symmetric"),
@@ -271,12 +279,38 @@ class IntentEngine:
         words = re.findall(r"\b[a-zA-Z0-9_]+\b", q_lower)
         columns = [str(c) for c in (available_columns or [])]
 
+        # A "controlling for X" / "holding X constant" / "after accounting for X"
+        # clause names a confound to hold fixed, not the metric or dimension the
+        # question is actually about. Left in the general scan, those mentions
+        # compete with the real target/dimension and abort resolution as soon as
+        # a complex question names more than one concept (e.g. "compare churn
+        # rate between segments while controlling for region and channel" lost
+        # its dimension entirely because "segment", "region" and "channel" all
+        # looked like equally valid candidates). Strip those clauses out before
+        # scanning for the primary metric/dimension, and keep what they name as
+        # an explicit constraint instead of discarding it.
+        controlled_for_phrases: List[str] = []
+        control_matches = list(_CONTROL_CLAUSE_RE.finditer(q))
+        for cm in control_matches:
+            controlled_for_phrases.append(cm.group("phrase").strip(" ,"))
+        q_scan = _CONTROL_CLAUSE_RE.sub(" ", q) if control_matches else q
+
         relation_target_phrase, relation_predictor_phrases = IntentEngine._relation_sides(q)
         relation_question = bool(_CORRELATION_KEYWORD_RE.search(q_lower) or relation_predictor_phrases)
 
         causal = bool(_CAUSAL_RE.search(q_lower))
         prediction = bool(_PREDICTION_RE.search(q_lower))
-        forecast = bool(_FORECAST_RE.search(q_lower)) and not prediction
+        diagnostic = bool(_DIAGNOSTIC_RE.search(q_lower))
+        # DEFECT-033: _FORECAST_RE matches bare "this month"/"this quarter"/"this year" (not just
+        # "next ..."), which are common in explicitly backward-looking diagnostic questions ("Why
+        # is churn increasing this quarter?"). Because the `elif forecast` branch below is checked
+        # before `elif _DIAGNOSTIC_RE...`, any such question was hijacked into FORECAST and never
+        # reached ROOT_CAUSE, even though it names no "next"/future language and has an explicit
+        # "why"/"driver" marker. `prediction` already wins this priority fight over `forecast`
+        # (see the `and not prediction` below); `diagnostic` needs the same precedence so a "why
+        # ... this quarter" question still reaches the diagnostic branch instead of being silently
+        # answered as a time-series projection.
+        forecast = bool(_FORECAST_RE.search(q_lower)) and not prediction and not diagnostic
         ranking_high = bool(_RANK_HIGH_RE.search(q_lower))
         ranking_low = bool(_RANK_LOW_RE.search(q_lower))
         ranking_ambiguous = bool(_RANK_AMBIGUOUS_RE.search(q_lower))
@@ -285,6 +319,14 @@ class IntentEngine:
             or re.search(r"\b(rank|ranked|ranking|top|bottom)\b", q_lower, re.I)
         )
         comparison_question = bool(_COMPARISON_RE.search(q_lower))
+        # "What drives higher revenue between regions?" uses comparison words
+        # ("higher", "between") as qualifiers, not as a true comparison operator.
+        # The word "drives" signals an investigative/explanatory framing that
+        # belongs to GENERAL rather than PERFORMANCE.  This flag suppresses
+        # the PERFORMANCE branch when "what drives" appears in the question.
+        _drives_investigative = bool(
+            re.search(r"\bdrives?\b", q_lower) and re.search(r"\bwhat\b", q_lower)
+        )
 
         if _GOVERNANCE_RE.search(q_lower):
             intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["GOVERNANCE"]
@@ -309,16 +351,30 @@ class IntentEngine:
         elif _SEGMENTATION_RE.search(q_lower) and not ranking_question and not comparison_question:
             intent_type, comparison_type, ops = "SEGMENTATION", "SEGMENT_CONTRAST", ["SEGMENT_DECOMPOSITION", "STABILITY_CHECK"]
         elif _DIAGNOSTIC_RE.search(q_lower):
-            intent_type, comparison_type, ops = "ROOT_CAUSE", "ANOMALY_ROOT_CAUSE", ["CONCENTRATION", "VARIANCE_DECOMPOSITION", "ADVERSARIAL_SIMPSON"]
-        elif ranking_question or comparison_question:
+            intent_type, comparison_type, ops = "ROOT_CAUSE", "ANOMALY_ROOT_CAUSE", [
+                "CONCENTRATION", "VARIANCE_DECOMPOSITION", "ADVERSARIAL_SIMPSON"]
+        elif _CHURN_RE.search(q_lower):
+            # DEFECT-032: churn vocabulary ("churn rate", "cancellation", "attrition", ...) is a
+            # specific, measurable business outcome that needs SURVIVAL_CHURN's specialized
+            # exposure-adjusted/stratified treatment regardless of how the question is phrased.
+            # This branch previously sat *after* the ranking/comparison catch-all below, so a
+            # question like "Which plan tier has higher cancellation rate?" -- churn vocabulary,
+            # just phrased as a ranking/comparison -- matched `ranking_question`/`comparison_question`
+            # first and was misrouted to PERFORMANCE/COMPARATIVE, silently losing the churn-specific
+            # exposure-adjustment and confounding checks the equivalent "why are customers
+            # cancelling by plan tier" phrasing correctly receives. Unlike SEGMENTATION (a generic
+            # decomposition ask that's fine deferring to ranking when phrased that way), churn is
+            # specific enough that phrasing shouldn't change which family answers it.
+            intent_type, comparison_type, ops = "CHURN", "SEGMENT_CONTRAST", [
+                "CRUDE_CHURN_RATE", "EXPOSURE_ADJUSTED_RATE", "STRATIFIED_CHURN_CHECK"]
+        elif ranking_question or (comparison_question and not _drives_investigative):
             intent_type, comparison_type = "PERFORMANCE", "SEGMENT_CONTRAST"
             ops = ["RANKING"] if ranking_question else ["GROUP_COMPARISON"]
-        elif _CHURN_RE.search(q_lower):
-            intent_type, comparison_type, ops = "CHURN", "SEGMENT_CONTRAST", ["CRUDE_CHURN_RATE", "EXPOSURE_ADJUSTED_RATE", "STRATIFIED_CHURN_CHECK"]
-        elif _DESCRIPTIVE_RE.search(q_lower) or re.search(r"\b(by|per|across|within|for each)\b", q_lower):
+        elif _DESCRIPTIVE_RE.search(q_lower) or re.search(r"\b(by|per|across|within|for each)\b", q_lower) or _drives_investigative:
             intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["DESCRIPTIVE_SUMMARY", "DISTRIBUTION_SCAN"]
         else:
             intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["DESCRIPTIVE_SUMMARY", "DISTRIBUTION_SCAN"]
+
 
         target_metric_hint: Optional[str] = None
         dimension_hint: Optional[str] = None
@@ -327,16 +383,16 @@ class IntentEngine:
         if relation_target_phrase:
             target_metric_hint = _resolve_phrase(relation_target_phrase, columns, _METRIC_ALIASES)
 
-        explicit_targets = [c for c in columns if _contains_phrase(q, c)]
+        explicit_targets = [c for c in columns if _contains_phrase(q_scan, c)]
 
         if not target_metric_hint:
             metric_mentions: List[Tuple[int, str]] = []
             for _, aliases in _METRIC_ALIASES.items():
                 for alias in aliases:
-                    if _contains_phrase(q, alias):
+                    if _contains_phrase(q_scan, alias):
                         candidates = _alias_candidates(alias, columns, _METRIC_ALIASES)
                         if len(candidates) == 1:
-                            metric_mentions.append((q_lower.find(_normalize_phrase(alias)), candidates[0]))
+                            metric_mentions.append((q_scan.lower().find(_normalize_phrase(alias)), candidates[0]))
             metric_mentions.sort(key=lambda x: x[0])
             unique = list(dict.fromkeys(c for _, c in metric_mentions))
             if relation_question and len(unique) >= 2:
@@ -352,7 +408,7 @@ class IntentEngine:
         group_phrases: List[str] = []
         for match in re.finditer(
             r"\b(?:by|per|across|within|for each)\s+(.+?)(?=\s+(?:after|before|during|since|between|where|when)\b|\?|$)",
-            q,
+            q_scan,
             re.I,
         ):
             group_phrases.append(match.group(1).strip(" ,"))
@@ -390,7 +446,7 @@ class IntentEngine:
             dim_mentions: List[str] = []
             for values in _DIMENSION_ALIASES.values():
                 for alias in values:
-                    if _contains_phrase(q, alias):
+                    if _contains_phrase(q_scan, alias):
                         matches = _alias_candidates(alias, columns, _DIMENSION_ALIASES)
                         if len(matches) == 1:
                             dim_mentions.append(matches[0])
@@ -450,6 +506,20 @@ class IntentEngine:
             constraints["time_horizon"] = time_horizon_hint
         if ranking_ambiguous:
             constraints["ranking_direction_requires_metric_polarity"] = True
+        if controlled_for_phrases:
+            resolved_controls = []
+            for phrase in controlled_for_phrases:
+                for part in re.split(r"\s*,\s*|\s+and\s+", phrase, flags=re.I):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    resolved = (
+                        _resolve_phrase(part, columns, _DIMENSION_ALIASES)
+                        or _resolve_phrase(part, columns, _METRIC_ALIASES)
+                        or part
+                    )
+                    resolved_controls.append(resolved)
+            constraints["controlled_for"] = resolved_controls
 
         uncertainty = (
             0.10 if relation_question and len(relation_predictor_phrases) >= 2

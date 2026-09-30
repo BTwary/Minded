@@ -1,11 +1,11 @@
-"""Self-contained offline desktop entrypoint.
+"""Self-contained offline desktop entrypoint for MindEd AA-OS.
 
-The packaged executable starts the deterministic local API in a background
-thread and displays it inside a native OS window (via pywebview) rather than
-the user's default web browser. There is no visible browser tab, no console
-window, and no port the user ever needs to know about: the app opens and
-closes exactly like any other installed desktop program. Node/npm are
-build-time only and never required on the end-user machine.
+The packaged executable initializes the local application environment, starts the
+deterministic local API in a background thread on an unused loopback port, and displays
+it inside a native OS window (via pywebview) rather than the user's web browser.
+There is no visible browser tab, no console window, and no port the user ever needs to
+know about: the app opens and closes exactly like any other installed desktop software.
+Node/npm and external Python runtimes are build-time only and never required on the end-user machine.
 """
 from __future__ import annotations
 
@@ -26,13 +26,37 @@ os.environ["FEEDBACK_UPLOAD_ENABLED"] = "false"
 os.environ["STORAGE_PROVIDER"] = "local"
 
 HOST = "127.0.0.1"
-WINDOW_TITLE = "Minded AA-OS"
+WINDOW_TITLE = "MindEd AA-OS"
+
+
+def _acquire_single_instance(mutex_name: str = "Local\\MindEd_AAOS_SingleInstance_Mutex") -> bool:
+    """Ensure only one desktop instance runs at a time.
+    If another instance is active, bring its native window to the foreground and exit."""
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+
+        # Create or open named mutex
+        kernel32.CreateMutexW(None, True, mutex_name)
+        last_error = kernel32.GetLastError()
+        ERROR_ALREADY_EXISTS = 183
+
+        if last_error == ERROR_ALREADY_EXISTS:
+            hwnd = user32.FindWindowW(None, WINDOW_TITLE)
+            if hwnd:
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+            return False
+        return True
+    except Exception:
+        return True
 
 
 def _free_loopback_port() -> int:
-    """Pick an unused loopback port so the app never collides with anything
-    else that might be running on the machine, and the user never sees or
-    needs to know a port number exists."""
+    """Pick an unused loopback port dynamically so the app never collides with anything
+    else running on the machine, and the user never sees or needs to know a port number exists."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind((HOST, 0))
         return probe.getsockname()[1]
@@ -57,7 +81,7 @@ def _show_fatal_error(message: str) -> None:
     try:
         import ctypes
 
-        ctypes.windll.user32.MessageBoxW(0, message, WINDOW_TITLE, 0x10)
+        ctypes.windll.user32.MessageBoxW(0, message, WINDOW_TITLE, 0x10)  # MB_ICONERROR | MB_OK
     except Exception:
         print(message, file=sys.stderr)
 
@@ -66,6 +90,25 @@ def _resource_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[2]
+
+
+def _icon_path() -> str | None:
+    root = _resource_root()
+    # Check bundled root first
+    bundled = root / "app.ico"
+    if bundled.is_file():
+        return str(bundled)
+    # Check PyInstaller temp MEIPASS if applicable
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        meipass_icon = Path(meipass) / "app.ico"
+        if meipass_icon.is_file():
+            return str(meipass_icon)
+    # Check source development tree
+    dev_icon = root / "packaging" / "windows" / "app.ico"
+    if dev_icon.is_file():
+        return str(dev_icon)
+    return None
 
 
 def _allow_loopback(host: object) -> bool:
@@ -93,7 +136,6 @@ def _install_offline_network_guard() -> None:
             return 111
         return original_connect_ex(self, address)
 
-
     def getaddrinfo(host, port, *args, **kwargs):  # type: ignore[no-untyped-def]
         if not _allow_loopback(host):
             raise OSError("AAOS offline mode blocks non-loopback name resolution")
@@ -113,16 +155,24 @@ _frontend = _root / "frontend"
 if _frontend.is_dir():
     os.environ["AAOS_FRONTEND_ROOT"] = str(_frontend)
 
-from apps.api.src.main import app  # noqa: E402
-import uvicorn  # noqa: E402
-
-
-def _icon_path() -> str | None:
-    candidate = _root / "app.ico"
-    return str(candidate) if candidate.is_file() else None
-
 
 def main() -> None:
+    # 1. Single instance guard
+    if not _acquire_single_instance():
+        sys.exit(0)
+
+    # 2. Local loopback backend startup
+    try:
+        from apps.api.src.main import app
+        import uvicorn
+    except Exception as exc:
+        _show_fatal_error(
+            "MindEd could not start its local analytical engine.\n\n"
+            "Your data has not been sent to an external service.\n\n"
+            "Restart MindEd and try again."
+        )
+        sys.exit(1)
+
     port = _free_loopback_port()
     config = uvicorn.Config(app, host=HOST, port=port, reload=False, log_level="warning")
     server = uvicorn.Server(config)
@@ -133,24 +183,24 @@ def main() -> None:
     if not _wait_until_ready(HOST, port):
         server.should_exit = True
         _show_fatal_error(
-            "Minded AA-OS could not start its local analytical engine.\n\n"
-            "Please restart the application. If this keeps happening, check "
-            "that no other program is using a conflicting port or blocking "
-            "127.0.0.1, and reinstall if the problem persists."
+            "MindEd could not start its local analytical engine.\n\n"
+            "Your data has not been sent to an external service.\n\n"
+            "Restart MindEd and try again."
         )
         sys.exit(1)
 
+    # 3. Native desktop window via pywebview (no browser fallback)
     try:
         import webview
     except Exception:
-        # pywebview (or its native WebView2 dependency) is unavailable.
-        # Fall back to the default browser rather than leaving the user with
-        # nothing, but this path should not occur in a properly built release.
-        import webbrowser
-
-        webbrowser.open(f"http://{HOST}:{port}/")
-        server_thread.join()
-        return
+        server.should_exit = True
+        _show_fatal_error(
+            "MindEd could not open its application window.\n\n"
+            "This application requires the Microsoft Edge WebView2 Runtime. "
+            "Windows 10 (22H2+) and Windows 11 include it by default. On older systems, "
+            "install the 'WebView2 Runtime' from Microsoft and reopen MindEd AA-OS."
+        )
+        sys.exit(1)
 
     window = webview.create_window(
         WINDOW_TITLE,
@@ -163,8 +213,7 @@ def main() -> None:
     )
 
     def _on_closed() -> None:
-        # Shut the embedded server down cleanly when the user closes the
-        # window, exactly as any other installed desktop application would.
+        # Shut the embedded server down cleanly when the user closes the window.
         server.should_exit = True
 
     window.events.closed += _on_closed
@@ -174,12 +223,10 @@ def main() -> None:
     except Exception as exc:  # pragma: no cover - native GUI failure path
         server.should_exit = True
         _show_fatal_error(
-            "Minded AA-OS could not open its application window.\n\n"
-            "This usually means the Microsoft Edge WebView2 Runtime is not "
-            "installed. Windows 10 (22H2+) and Windows 11 include it by "
-            "default; on older systems, install the 'WebView2 Runtime' "
-            "from Microsoft and reopen Minded AA-OS.\n\n"
-            f"Details: {exc}"
+            "MindEd could not open its application window.\n\n"
+            "This application requires the Microsoft Edge WebView2 Runtime. "
+            "Windows 10 (22H2+) and Windows 11 include it by default. On older systems, "
+            "install the 'WebView2 Runtime' from Microsoft and reopen MindEd AA-OS."
         )
         sys.exit(1)
 
@@ -188,4 +235,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _show_fatal_error(
+            "MindEd could not start its local analytical engine.\n\n"
+            "Your data has not been sent to an external service.\n\n"
+            "Restart MindEd and try again."
+        )
+        sys.exit(1)

@@ -1,0 +1,1359 @@
+[
+ {
+  "ds": "titanic",
+  "q": "What is the survival rate by passenger class?",
+  "cat": "DESC",
+  "truth": "{'First': 0.63, 'Second': 0.473, 'Third': 0.242}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "First has the highest rate survived: 63.0% (n=216). Ranking by rate survived: First: 63.0% (n=216); Second: 47.3% (n=184); Third: 24.2% (n=491). Top vs runner-up (Second): +15.68 percentage points (95% CI +5.91 to +25.07) -- a real gap. Opportunity sizing: elevating 1 passenger_class segments currently below median (0.473) to the median benchmark represents +0.23 in potential survived expansion (60.0% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure First's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (First) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 0.23). Checks: 111 rows (12.5%) are exact duplicates of another row; results include them. Recommended next steps: Investigate operational practices distinguishing First from Second.",
+  "finding": "First has the highest rate survived: 63.0% (n=216). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis (the hypothesis loop's own verdict STATISTICALLY_SIGNIFICANT tested a different claim and is not the answer). 'survived' is a non-additive rate metric with no observable numerator/denominator pair in this dataset; it was aggregated as a plain mean rather than summed, to avoid producing a meaningless total-of-percentages.",
+  "contract": {
+   "target": "survived",
+   "grouping": [
+    "passenger_class"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "passenger_class"
+    ],
+    "OUTCOME": [
+     "survived"
+    ]
+   },
+   "estimand": "rate",
+   "task": "DESCRIPTIVE",
+   "requested_aggregation": "RATE",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "DESCRIPTIVE",
+   "claim_type": "OBSERVATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 4.5
+ },
+ {
+  "ds": "titanic",
+  "q": "Is survival correlated with fare?",
+  "cat": "CORR",
+  "truth": "0.257",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "fare and survived are associated (weak positive relationship): r=0.26 (95% CI 0.19 to 0.32, p<0.001, n=891); fare accounts for about 6.6% of the variation in survived. On average each +1 in fare goes with +0.00252 probability points (95% CI +0.0019 to +0.00314). This is an association only; it does not establish a causal effect in either direction. Multivariable covariate control: after controlling for age, sibsp, parch, fare remains significantly associated with survived (controlled slope +0.0027, p<0.001, model adj R2=0.09). Elasticity & Sensitivity: elasticity at means is 0.21 (a +10% shift in fare associates with an expected +0.00811 shift in survived). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Ensure key operational dashboards track both variables alongside confounding indicators. | [Diagnostic Deep-Dive (1-2 weeks)]: Design controlled intervention or A/B experiment to determine whether the fare relationship is causal. | [Strategic & Commercial Mitigation (30-90 days)]: Incorporate observed elasticities into revenue and capacity planning models. Checks: 111 rows (12.5%) are exact duplicates of another row; results include them. Recommended next steps: Test whether fare and survived remain associated after controlling for secondary covariates. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
+  "finding": "fare and survived are associated (weak positive relationship): r=0.26 (95% CI 0.19 to 0.32, p<0.001, n=891); fare accounts for about 6.6% of the variation in survived. (deterministic recomputation from the resolved contract columns) Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
+  "contract": {
+   "target": "survived",
+   "grouping": [],
+   "predictors": [
+    "fare"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "age",
+     "fare"
+    ],
+    "OUTCOME": [
+     "survived"
+    ]
+   },
+   "estimand": "correlation",
+   "task": "ASSOCIATION",
+   "requested_aggregation": null,
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 3.0
+ },
+ {
+  "ds": "titanic",
+  "q": "Which sex had the highest survival rate?",
+  "cat": "RANK",
+  "truth": "{'female': 0.742, 'male': 0.189}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "female has the highest rate survived: 74.2% (n=314). Ranking by rate survived: female: 74.2% (n=314); male: 18.9% (n=577). Top vs runner-up (male): +55.31 percentage points (95% CI +49.18 to +60.73) -- a real gap. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure female's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (female) from peer benchmarks. Checks: 111 rows (12.5%) are exact duplicates of another row; results include them. Recommended next steps: Investigate operational practices distinguishing female from male.",
+  "finding": "female has the highest rate survived: 74.2% (n=314). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'survived' is a non-additive rate metric with no observable numerator/denominator pair in this dataset; it was aggregated as a plain mean rather than summed, to avoid producing a meaningless total-of-percentages.",
+  "contract": {
+   "target": "survived",
+   "grouping": [
+    "sex"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "sex"
+    ],
+    "OUTCOME": [
+     "survived"
+    ]
+   },
+   "estimand": "ranking",
+   "task": "COMPARISON",
+   "requested_aggregation": "RATE",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 3.5
+ },
+ {
+  "ds": "titanic",
+  "q": "Did age affect survival?",
+  "cat": "CAUSAL",
+  "truth": "-0.077",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 0.9089173059305375,
+  "answer": "age and survived are associated (negligible negative relationship): r=-0.08 (95% CI -0.15 to -0.00, p=0.039, n=714); age accounts for about 0.6% of the variation in survived. On average each +1 in age goes with -0.00261 probability points (95% CI -0.00509 to -0.000135). This is an association only; it does not establish a causal effect in either direction. Multivariable covariate control: after controlling for sibsp, parch, fare, age remains significantly associated with survived (controlled slope -0.0044, p<0.001, model adj R2=0.09). Elasticity & Sensitivity: elasticity at means is -0.19 (a +10% shift in age associates with an expected -0.00776 shift in survived). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Ensure key operational dashboards track both variables alongside confounding indicators. | [Diagnostic Deep-Dive (1-2 weeks)]: Design controlled intervention or A/B experiment to determine whether the age relationship is causal. | [Strategic & Commercial Mitigation (30-90 days)]: Incorporate observed elasticities into revenue and capacity planning models. Checks: 177 of 891 rows (19.9%) were excluded for missing/unparseable values in age, survived. 111 rows (12.5%) are exact duplicates of another row; results include them. Recommended next steps: Test whether age and survived remain associated after controlling for secondary covariates. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
+  "finding": "age and survived are associated (negligible negative relationship): r=-0.08 (95% CI -0.15 to -0.00, p=0.039, n=714); age accounts for about 0.6% of the variation in survived. (deterministic recomputation from the resolved contract columns) Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
+  "contract": {
+   "target": "survived",
+   "grouping": [],
+   "predictors": [
+    "age"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "age",
+     "fare"
+    ],
+    "OUTCOME": [
+     "survived"
+    ]
+   },
+   "estimand": "correlation",
+   "task": "ASSOCIATION",
+   "requested_aggregation": null,
+   "requested_claim": "CAUSAL",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 1.7
+ },
+ {
+  "ds": "titanic",
+  "q": "Why did third class passengers have lower survival than first class?",
+  "cat": "CAUSAL",
+  "truth": "{'First': 0.63, 'Second': 0.473, 'Third': 0.242}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 0.999999999999,
+  "answer": "Yes -- survived rate is 24.2% for Third (n=491) vs 63.0% for First (n=216): -38.73 percentage points (-61.51% relative), 95% CI -45.85 to -31.01 pp, chi-square p<0.001. Counterfactual opportunity: if First matched Third's survived rate (24.2%), it would generate -83.65 additional events across its 216 baseline observations. Candidate explanatory factors scanned: sex, age, sibsp, parch, fare, embarked. Confounder adjustment & partial attenuation: sex is a candidate confounder: it is associated with survived (eta=0.54) and differs across passenger_class (First is 56.5% male vs 70.7% for Third). Adjusting for sex yields a modest 16.3% attenuation (from +0.387 to +0.324), but substantial group differences persist independently of sex. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Third to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: 111 rows (12.5%) are exact duplicates of another row; results include them. Recommended next steps: Evaluate whether practical uplift of -38.73 pp justifies rolling out Third. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
+  "finding": "Yes -- survived rate is 24.2% for Third (n=491) vs 63.0% for First (n=216): -38.73 percentage points (-61.51% relative), 95% CI -45.85 to -31.01 pp, chi-square p<0.001. (deterministic recomputation from the resolved contract columns) Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
+  "contract": {
+   "target": "survived",
+   "grouping": [
+    "passenger_class"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "passenger_class"
+    ],
+    "OUTCOME": [
+     "survived"
+    ]
+   },
+   "estimand": "root_cause",
+   "task": "DIAGNOSTIC",
+   "requested_aggregation": null,
+   "requested_claim": "CAUSAL",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "DIAGNOSTIC",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 4.1
+ },
+ {
+  "ds": "titanic",
+  "q": "Does the effect of class on survival differ between men and women?",
+  "cat": "MULTI",
+  "truth": "{('female', 'First'): 0.968, ('female', 'Second'): 0.921, ('female', 'Third'): 0.5, ('male', 'First'): 0.369, ('male', 'Second'): 0.157, ('male', 'Third'): 0.135}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "Yes -- the effect of passenger_class on survived differs between male and female: for male, survived was 36.9% in First vs 13.5% in Third (+23.34 pp); for female, survived was 96.8% in First vs 50.0% in Third (+46.81 pp). Stratified survived across sex and passenger_class: female First: 96.8% (n=94); female Second: 92.1% (n=76); female Third: 50.0% (n=144); male First: 36.9% (n=122); male Second: 15.7% (n=108); male Third: 13.5% (n=347). Checks: 111 rows (12.5%) are exact duplicates of another row; results include them.",
+  "finding": "Yes -- the effect of passenger_class on survived differs between male and female: for male, survived was 36.9% in First vs 13.5% in Third (+23.34 pp); for female, survived was 96.8% in First vs 50.0% in Third (+46.81 pp). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis.",
+  "contract": {
+   "target": "survived",
+   "grouping": [
+    "sex"
+   ],
+   "predictors": [
+    "passenger_class"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "fare",
+     "passenger_class"
+    ],
+    "GROUPING_DIMENSION": [
+     "sex"
+    ],
+    "OUTCOME": [
+     "survived"
+    ]
+   },
+   "estimand": "interaction",
+   "task": "ASSOCIATION",
+   "requested_aggregation": "RATE",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 0.6
+ },
+ {
+  "ds": "tips",
+  "q": "Is tip correlated with total bill?",
+  "cat": "CORR",
+  "truth": "0.676",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "total_bill and tip are strongly associated (strong positive relationship): r=0.68 (95% CI 0.60 to 0.74, p<0.001, n=244); total_bill accounts for about 45.7% of the variation in tip. On average each +1 in total_bill goes with +0.105 tip (95% CI +0.0906 to +0.119). This is an association only; it does not establish a causal effect in either direction. Multivariable covariate control: after controlling for size, total_bill remains significantly associated with tip (controlled slope +0.0927, p<0.001, model adj R2=0.46). Elasticity & Sensitivity: elasticity at means is 0.69 (a +10% shift in total_bill associates with an expected +0.208 shift in tip). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Ensure key operational dashboards track both variables alongside confounding indicators. | [Diagnostic Deep-Dive (1-2 weeks)]: Design controlled intervention or A/B experiment to determine whether the total_bill relationship is causal. | [Strategic & Commercial Mitigation (30-90 days)]: Incorporate observed elasticities into revenue and capacity planning models. Recommended next steps: Test whether total_bill and tip remain associated after controlling for secondary covariates.",
+  "finding": "total_bill and tip are strongly associated (strong positive relationship): r=0.68 (95% CI 0.60 to 0.74, p<0.001, n=244); total_bill accounts for about 45.7% of the variation in tip. (deterministic recomputation from the resolved contract columns)",
+  "contract": {
+   "target": "tip",
+   "grouping": [],
+   "predictors": [
+    "total_bill"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "total_bill"
+    ],
+    "OUTCOME": [
+     "tip"
+    ]
+   },
+   "estimand": "correlation",
+   "task": "ASSOCIATION",
+   "requested_aggregation": "CORRELATION",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 1.7
+ },
+ {
+  "ds": "tips",
+  "q": "Which day has the highest average tip?",
+  "cat": "RANK",
+  "truth": "{'Fri': 2.735, 'Sat': 2.993, 'Sun': 3.255, 'Thur': 2.771}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "Sun has the highest average tip: 3.26 (n=76). Ranking by average tip: Sun: 3.26 (n=76); Sat: 2.99 (n=87); Thur: 2.77 (n=62); Fri: 2.73 (n=19). Top vs runner-up (Sat): +0.262 (95% CI -0.182 to +0.706, p=0.25) -- not a reliable gap. Opportunity sizing: elevating 2 day segments currently below median (2.88) to the median benchmark represents +0.129 in potential tip expansion (4.3% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure Sun's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (Sun) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 0.13). Recommended next steps: Investigate operational practices distinguishing Sun from Sat.",
+  "finding": "Sun has the highest average tip: 3.26 (n=76). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'tip' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "tip",
+   "grouping": [
+    "day"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "day"
+    ],
+    "OUTCOME": [
+     "tip"
+    ]
+   },
+   "estimand": "ranking",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 2.0
+ },
+ {
+  "ds": "tips",
+  "q": "Do smokers tip more than non-smokers?",
+  "cat": "GROUPDIFF",
+  "truth": "{'No': 2.992, 'Yes': 3.009}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "NO_DETECTABLE_EFFECT",
+  "conf": 0.95,
+  "answer": "No -- no statistically detectable difference in average tip between No (2.99, n=151) and Yes (3.01, n=93): difference -0.0169 (95% CI -0.379 to +0.345, p=0.93). The interval bounds what the data can rule out: a true difference larger than about 0.379 is unlikely. Statistical power is sufficient (97% power at MDE d=0.5; n=151 vs 93) to conclude that any true difference is bounded within the 95% confidence interval. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Confirm that existing differences are within statistical noise and halt premature variant rollouts. | [Diagnostic Deep-Dive (1-2 weeks)]: Evaluate secondary segmentation and potential confounding factors that may mask localized effects. Recommended next steps: The two groups appear functionally equivalent; evaluate secondary segmentations or confounders if differences were expected.",
+  "finding": "No -- no statistically detectable difference in average tip between No (2.99, n=151) and Yes (3.01, n=93): difference -0.0169 (95% CI -0.379 to +0.345, p=0.93). (deterministic recomputation from the resolved contract columns) Verdict NO_DETECTABLE_EFFECT: adequately powered statistical test found no detectable difference; bound established by 95% confidence interval. 'tip' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "tip",
+   "grouping": [
+    "smoker"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "smoker"
+    ],
+    "OUTCOME": [
+     "tip"
+    ]
+   },
+   "estimand": "group_difference",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "NO_DETECTABLE_EFFECT"
+  },
+  "secs": 3.1
+ },
+ {
+  "ds": "tips",
+  "q": "What is the average tip by day?",
+  "cat": "DESC",
+  "truth": "{'Fri': 2.735, 'Sat': 2.993, 'Sun': 3.255, 'Thur': 2.771}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "Sun has the highest average tip: 3.26 (n=76). Ranking by average tip: Sun: 3.26 (n=76); Sat: 2.99 (n=87); Thur: 2.77 (n=62); Fri: 2.73 (n=19). Top vs runner-up (Sat): +0.262 (95% CI -0.182 to +0.706, p=0.25) -- not a reliable gap. Opportunity sizing: elevating 2 day segments currently below median (2.88) to the median benchmark represents +0.129 in potential tip expansion (4.3% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure Sun's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (Sun) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 0.13). Recommended next steps: Investigate operational practices distinguishing Sun from Sat.",
+  "finding": "Sun has the highest average tip: 3.26 (n=76). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'tip' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "tip",
+   "grouping": [
+    "day"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "day"
+    ],
+    "OUTCOME": [
+     "tip"
+    ]
+   },
+   "estimand": "mean",
+   "task": "DESCRIPTIVE",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "DESCRIPTIVE",
+   "claim_type": "OBSERVATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 2.8
+ },
+ {
+  "ds": "tips",
+  "q": "Does party size drive the tip amount?",
+  "cat": "CAUSAL",
+  "truth": "0.489",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "size and tip are associated (moderate positive relationship): r=0.49 (95% CI 0.39 to 0.58, p<0.001, n=244); size accounts for about 23.9% of the variation in tip. On average each +1 in size goes with +0.712 tip (95% CI +0.552 to +0.872). This is an association only; it does not establish a causal effect in either direction. Multivariable covariate control: after controlling for total_bill, size remains significantly associated with tip (controlled slope +0.193, p=0.025, model adj R2=0.46). Elasticity & Sensitivity: elasticity at means is 0.61 (a +10% shift in size associates with an expected +0.183 shift in tip). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Ensure key operational dashboards track both variables alongside confounding indicators. | [Diagnostic Deep-Dive (1-2 weeks)]: Design controlled intervention or A/B experiment to determine whether the size relationship is causal. | [Strategic & Commercial Mitigation (30-90 days)]: Incorporate observed elasticities into revenue and capacity planning models. Recommended next steps: Test whether size and tip remain associated after controlling for secondary covariates.",
+  "finding": "size and tip are associated (moderate positive relationship): r=0.49 (95% CI 0.39 to 0.58, p<0.001, n=244); size accounts for about 23.9% of the variation in tip. (deterministic recomputation from the resolved contract columns)",
+  "contract": {
+   "target": "tip",
+   "grouping": [],
+   "predictors": [
+    "size"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "size"
+    ],
+    "OUTCOME": [
+     "tip"
+    ]
+   },
+   "estimand": "correlation",
+   "task": "ASSOCIATION",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "CAUSAL",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 0.4
+ },
+ {
+  "ds": "penguins",
+  "q": "Is body mass correlated with flipper length?",
+  "cat": "CORR",
+  "truth": "0.871",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "flipper_length_mm and body_mass_g are strongly associated (very strong positive relationship): r=0.87 (95% CI 0.84 to 0.89, p<0.001, n=342); flipper_length_mm accounts for about 75.9% of the variation in body_mass_g. On average each +1 in flipper_length_mm goes with +49.69 body_mass_g (95% CI +46.71 to +52.66). This is an association only; it does not establish a causal effect in either direction. Multivariable covariate control: after controlling for bill_length_mm, bill_depth_mm, flipper_length_mm remains significantly associated with body_mass_g (controlled slope +50.27, p<0.001, model adj R2=0.76). Elasticity & Sensitivity: elasticity at means is 2.38 (a +10% shift in flipper_length_mm associates with an expected +998.3 shift in body_mass_g). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Ensure key operational dashboards track both variables alongside confounding indicators. | [Diagnostic Deep-Dive (1-2 weeks)]: Design controlled intervention or A/B experiment to determine whether the flipper_length_mm relationship is causal. | [Strategic & Commercial Mitigation (30-90 days)]: Incorporate observed elasticities into revenue and capacity planning models. Checks: 2 of 344 rows (0.6%) were excluded for missing/unparseable values in flipper_length_mm, body_mass_g. Recommended next steps: Test whether flipper_length_mm and body_mass_g remain associated after controlling for secondary covariates.",
+  "finding": "flipper_length_mm and body_mass_g are strongly associated (very strong positive relationship): r=0.87 (95% CI 0.84 to 0.89, p<0.001, n=342); flipper_length_mm accounts for about 75.9% of the variation in body_mass_g. (deterministic recomputation from the resolved contract columns)",
+  "contract": {
+   "target": "body_mass_g",
+   "grouping": [],
+   "predictors": [
+    "flipper_length_mm"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "flipper_length_mm"
+    ],
+    "OUTCOME": [
+     "body_mass_g"
+    ]
+   },
+   "estimand": "correlation",
+   "task": "ASSOCIATION",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 1.6
+ },
+ {
+  "ds": "penguins",
+  "q": "Which species has the highest average body mass?",
+  "cat": "RANK",
+  "truth": "{'Adelie': 3700.662, 'Chinstrap': 3733.088, 'Gentoo': 5076.016}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "Gentoo has the highest average body_mass_g: 5,076 (n=123). Ranking by average body_mass_g: Gentoo: 5,076 (n=123); Chinstrap: 3,733 (n=68); Adelie: 3,701 (n=151). Top vs runner-up (Chinstrap): +1,343 (95% CI +1,214 to +1,471, p<0.001) -- a real gap. Opportunity sizing: elevating 1 species segments currently below median (3,733) to the median benchmark represents +32.43 in potential body_mass_g expansion (0.8% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure Gentoo's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (Gentoo) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 32.43). Checks: 2 of 344 rows (0.6%) were excluded for missing/unparseable values in species, body_mass_g. Recommended next steps: Investigate operational practices distinguishing Gentoo from Chinstrap.",
+  "finding": "Gentoo has the highest average body_mass_g: 5,076 (n=123). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis (the hypothesis loop's own verdict STATISTICALLY_SIGNIFICANT tested a different claim and is not the answer). 'body_mass_g' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "body_mass_g",
+   "grouping": [
+    "species"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "species"
+    ],
+    "OUTCOME": [
+     "body_mass_g"
+    ]
+   },
+   "estimand": "ranking",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 1.9
+ },
+ {
+  "ds": "penguins",
+  "q": "How does bill length differ between species?",
+  "cat": "GROUPDIFF",
+  "truth": "{'Adelie': 38.791, 'Chinstrap': 48.834, 'Gentoo': 47.505}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "Average bill_length_mm differs across species (p<0.001; 70.8% of the variation in bill_length_mm is explained by species, a large share). Highest: Chinstrap (48.83); lowest: Adelie (38.79). By group -- Chinstrap: 48.83 (n=68); Gentoo: 47.50 (n=123); Adelie: 38.79 (n=151). Chinstrap vs all other species values combined: +6.13 (95% CI +5.12 to +7.14, p<0.001). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Chinstrap to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: 2 of 344 rows (0.6%) were excluded for missing/unparseable values in species, bill_length_mm. Recommended next steps: Investigate high-performing Chinstrap and underperforming Adelie for operational drivers.",
+  "finding": "Average bill_length_mm differs across species (p<0.001; 70.8% of the variation in bill_length_mm is explained by species, a large share). Highest: Chinstrap (48.83); lowest: Adelie (38.79). (deterministic recomputation from the resolved contract columns) 'bill_length_mm' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "bill_length_mm",
+   "grouping": [
+    "species"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "species"
+    ],
+    "OUTCOME": [
+     "bill_length_mm"
+    ]
+   },
+   "estimand": "group_difference",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 1.9
+ },
+ {
+  "ds": "penguins",
+  "q": "Do male penguins weigh more than female penguins?",
+  "cat": "GROUPDIFF",
+  "truth": "{'Female': 3862.273, 'Male': 4545.685}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "Yes -- Male averages 4,546 body_mass_g vs 3,862 for Female: 683.4 higher (95% CI +526.2 to +840.6, p<0.001; effect size d=0.93, large). Common Language Effect Size (probability that a random Male exceeds a random Female): 75%. Counterfactual opportunity: if Female matched Male's average performance, total body_mass_g would expand by +112,763. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Male to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: 11 of 344 rows (3.2%) were excluded for missing/unparseable values in sex, body_mass_g. Recommended next steps: Investigate operational or business practices driving the superior body_mass_g of Male over Female.",
+  "finding": "Yes -- Male averages 4,546 body_mass_g vs 3,862 for Female: 683.4 higher (95% CI +526.2 to +840.6, p<0.001; effect size d=0.93, large). (deterministic recomputation from the resolved contract columns) 'body_mass_g' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "body_mass_g",
+   "grouping": [
+    "sex"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "sex"
+    ],
+    "OUTCOME": [
+     "body_mass_g"
+    ]
+   },
+   "estimand": "group_difference",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 3.1
+ },
+ {
+  "ds": "mpg",
+  "q": "Is mpg correlated with weight?",
+  "cat": "CORR",
+  "truth": "-0.832",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "weight and mpg are strongly associated (very strong negative relationship): r=-0.83 (95% CI -0.86 to -0.80, p<0.001, n=398); weight accounts for about 69.2% of the variation in mpg. On average each +1 in weight goes with -0.00768 mpg (95% CI -0.00818 to -0.00717). This is an association only; it does not establish a causal effect in either direction. Multivariable covariate control: after controlling for cylinders, displacement, horsepower, weight remains significantly associated with mpg (controlled slope -0.0053, p<0.001, model adj R2=0.70). Elasticity & Sensitivity: elasticity at means is -0.97 (a +10% shift in weight associates with an expected -2.28 shift in mpg). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Ensure key operational dashboards track both variables alongside confounding indicators. | [Diagnostic Deep-Dive (1-2 weeks)]: Design controlled intervention or A/B experiment to determine whether the weight relationship is causal. | [Strategic & Commercial Mitigation (30-90 days)]: Incorporate observed elasticities into revenue and capacity planning models. Recommended next steps: Test whether weight and mpg remain associated after controlling for secondary covariates.",
+  "finding": "weight and mpg are strongly associated (very strong negative relationship): r=-0.83 (95% CI -0.86 to -0.80, p<0.001, n=398); weight accounts for about 69.2% of the variation in mpg. (deterministic recomputation from the resolved contract columns)",
+  "contract": {
+   "target": "mpg",
+   "grouping": [],
+   "predictors": [
+    "weight"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "weight"
+    ],
+    "OUTCOME": [
+     "mpg"
+    ]
+   },
+   "estimand": "correlation",
+   "task": "ASSOCIATION",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 1.6
+ },
+ {
+  "ds": "mpg",
+  "q": "Which origin has the highest average mpg?",
+  "cat": "RANK",
+  "truth": "{'europe': 27.891, 'japan': 30.451, 'usa': 20.084}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "japan has the highest average mpg: 30.45 (n=79). Ranking by average mpg: japan: 30.45 (n=79); europe: 27.89 (n=70); usa: 20.08 (n=249). Top vs runner-up (europe): +2.56 (95% CI +0.471 to +4.65, p=0.017) -- a real gap. Opportunity sizing: elevating 1 origin segments currently below median (27.89) to the median benchmark represents +7.81 in potential mpg expansion (33.2% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure japan's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (japan) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 7.81). Recommended next steps: Investigate operational practices distinguishing japan from europe.",
+  "finding": "japan has the highest average mpg: 30.45 (n=79). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis (the hypothesis loop's own verdict STATISTICALLY_SIGNIFICANT tested a different claim and is not the answer). 'mpg' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "mpg",
+   "grouping": [
+    "origin"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "origin"
+    ],
+    "OUTCOME": [
+     "mpg"
+    ]
+   },
+   "estimand": "ranking",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 2.0
+ },
+ {
+  "ds": "mpg",
+  "q": "Has fuel efficiency improved over model years?",
+  "cat": "TREND",
+  "truth": "{70: 17.69, 71: 21.25, 72: 18.714, 73: 17.1, 74: 22.704, 75: 20.267, 76: 21.574, 77: 23.375, 78: 24.061, 79: 25.093, 80: 33.697, 81: 30.334, 82: 31.71}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 0.31666666666666665,
+  "answer": "mpg (average per year) is trending up: +1.20 per year (95% CI +0.828 to +1.58, p<0.001; Kendall tau=0.77), from about 19.22 to 31.91 (+66.06%) across 13 years (1970 to 1982). Typical year-to-year noise around the trend is about 2.59 (11.0% of the mean). Run-rate extrapolation: projected next year value is 32.09 (95% prediction interval 25.47 to 38.71). Persistence dynamics: lag-1 autocorrelation is 0.63 (strong trend momentum / persistence). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Validate current run-rate against near-term operational capacity and financial forecasts. | [Diagnostic Deep-Dive (1-2 weeks)]: Analyze period-to-period residuals to distinguish secular trend from seasonal or cyclical oscillations. | [Strategic & Commercial Mitigation (30-90 days)]: Calibrate medium-term targets and resourcing according to the projected trajectory. Recommended next steps: Project future run-rate and evaluate whether operational capacity matches the up trend.",
+  "finding": "mpg (average per year) is trending up: +1.20 per year (95% CI +0.828 to +1.58, p<0.001; Kendall tau=0.77), from about 19.22 to 31.91 (+66.06%) across 13 years (1970 to 1982). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'model_year' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "mpg",
+   "grouping": [],
+   "predictors": [],
+   "time": [
+    "model_year"
+   ],
+   "bound": {
+    "OUTCOME": [
+     "mpg"
+    ],
+    "TIME_VARIABLE": [
+     "model_year"
+    ]
+   },
+   "estimand": "trend",
+   "task": "DESCRIPTIVE",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "DESCRIPTIVE",
+   "claim_type": "OBSERVATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 4.0
+ },
+ {
+  "ds": "mpg",
+  "q": "Why do cars from the usa have lower mpg?",
+  "cat": "CAUSAL",
+  "truth": "{'europe': 27.891, 'japan': 30.451, 'usa': 20.084}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 0.999999999999,
+  "answer": "Average mpg differs across origin (p<0.001; 33.3% of the variation in mpg is explained by origin, a large share). Highest: japan (30.45); lowest: usa (20.08). By group -- japan: 30.45 (n=79); europe: 27.89 (n=70); usa: 20.08 (n=249). japan vs all other origin values combined: +8.65 (95% CI +7.08 to +10.23, p<0.001). Candidate explanatory factors scanned: cylinders, displacement, horsepower, weight, acceleration, model_year (+1 more). Confounder adjustment & attenuation: weight is a candidate confounder: it correlates with mpg (r=-0.83) and differs across origin (japan averages 2,221 vs 3,362 for usa). After adjusting for weight, the observed difference between japan and usa attenuates by 77.1% (from +10.37 to +2.38). The observed data are consistent with confounding by weight rather than an effect of origin in isolation. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for japan to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Recommended next steps: Investigate high-performing japan and underperforming usa for operational drivers.",
+  "finding": "Average mpg differs across origin (p<0.001; 33.3% of the variation in mpg is explained by origin, a large share). Highest: japan (30.45); lowest: usa (20.08). (deterministic recomputation from the resolved contract columns) 'mpg' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "mpg",
+   "grouping": [
+    "origin"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "origin"
+    ],
+    "OUTCOME": [
+     "mpg"
+    ]
+   },
+   "estimand": "root_cause",
+   "task": "DIAGNOSTIC",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "CAUSAL",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "DIAGNOSTIC",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 3.0
+ },
+ {
+  "ds": "mpg",
+  "q": "Is horsepower or weight more strongly related to mpg?",
+  "cat": "MULTI",
+  "truth": "(-0.778, -0.832)",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "weight is more strongly related to mpg (|r|=0.83, R2=0.69) than horsepower (|r|=0.78, R2=0.61). Both variables have a statistically significant relationship with mpg (weight: r=-0.83, horsepower: r=-0.78), but weight explains a higher proportion of variance (69.2% vs 60.6%).",
+  "finding": "weight is more strongly related to mpg (|r|=0.83, R2=0.69) than horsepower (|r|=0.78, R2=0.61). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis.",
+  "contract": {
+   "target": "mpg",
+   "grouping": [],
+   "predictors": [
+    "horsepower",
+    "weight"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "horsepower",
+     "mpg",
+     "weight"
+    ],
+    "OUTCOME": [
+     "mpg"
+    ]
+   },
+   "estimand": "multi_correlation",
+   "task": "ASSOCIATION",
+   "requested_aggregation": "CORRELATION",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 0.5
+ },
+ {
+  "ds": "diamonds",
+  "q": "Is price correlated with carat?",
+  "cat": "CORR",
+  "truth": "0.924",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "carat and price are strongly associated (very strong positive relationship): r=0.92 (95% CI 0.92 to 0.93, p<0.001, n=8,000); carat accounts for about 85.4% of the variation in price. On average each +1 in carat goes with +7,825 price (95% CI +7,754 to +7,896). This is an association only; it does not establish a causal effect in either direction. Multivariable covariate control: after controlling for depth, table, x, carat remains significantly associated with price (controlled slope +10,885, p<0.001, model adj R2=0.86). Elasticity & Sensitivity: elasticity at means is 1.58 (a +10% shift in carat associates with an expected +625.5 shift in price). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Ensure key operational dashboards track both variables alongside confounding indicators. | [Diagnostic Deep-Dive (1-2 weeks)]: Design controlled intervention or A/B experiment to determine whether the carat relationship is causal. | [Strategic & Commercial Mitigation (30-90 days)]: Incorporate observed elasticities into revenue and capacity planning models. Recommended next steps: Test whether carat and price remain associated after controlling for secondary covariates. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
+  "finding": "carat and price are strongly associated (very strong positive relationship): r=0.92 (95% CI 0.92 to 0.93, p<0.001, n=8,000); carat accounts for about 85.4% of the variation in price. (deterministic recomputation from the resolved contract columns) Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
+  "contract": {
+   "target": "price",
+   "grouping": [],
+   "predictors": [
+    "carat"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "carat",
+     "price"
+    ],
+    "OUTCOME": [
+     "price"
+    ]
+   },
+   "estimand": "correlation",
+   "task": "ASSOCIATION",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 0.8
+ },
+ {
+  "ds": "diamonds",
+  "q": "Which cut has the highest average price?",
+  "cat": "RANK",
+  "truth": "{'Fair': 4936.319, 'Good': 3718.488, 'Ideal': 3428.822, 'Premium': 4674.461, 'Very Good': 4046.122}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "Fair has the highest average price: 4,936 (n=232). Ranking by average price: Fair: 4,936 (n=232); Premium: 4,674 (n=2,086); Very Good: 4,046 (n=1,798); Good: 3,718 (n=721); Ideal: 3,429 (n=3,163). Top vs runner-up (Premium): +261.9 (95% CI -292.4 to +816.1, p=0.35) -- not a reliable gap. Opportunity sizing: elevating 2 cut segments currently below median (4,046) to the median benchmark represents +472.5 in potential price expansion (11.9% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure Fair's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (Fair) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 472.5). Recommended next steps: Investigate operational practices distinguishing Fair from Premium.",
+  "finding": "Fair has the highest average price: 4,936 (n=232). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'price' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "price",
+   "grouping": [
+    "cut"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "cut"
+    ],
+    "OUTCOME": [
+     "price"
+    ]
+   },
+   "estimand": "ranking",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 2.5
+ },
+ {
+  "ds": "diamonds",
+  "q": "What is the average price by clarity?",
+  "cat": "DESC",
+  "truth": "{'I1': 4153.789, 'IF': 3116.467, 'SI1': 3966.072, 'SI2': 4915.109, 'VS1': 3985.218, 'VS2': 4028.953, 'VVS1': 2611.611, 'VVS2': 3193.823}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "SI2 has the highest average price: 4,915 (n=1,392). Ranking by average price: SI2: 4,915 (n=1,392); I1: 4,154 (n=95); VS2: 4,029 (n=1,802); VS1: 3,985 (n=1,261); SI1: 3,966 (n=1,925); VVS2: 3,194 (n=734); IF: 3,116 (n=259); VVS1: 2,612 (n=532). Top vs runner-up (I1): +761.3 (95% CI +106.0 to +1,417, p=0.023) -- a real gap. Opportunity sizing: elevating 4 clarity segments currently below median (3,976) to the median benchmark represents +753.7 in potential price expansion (19.0% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure SI2's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (SI2) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 753.6). Recommended next steps: Investigate operational practices distinguishing SI2 from I1.",
+  "finding": "SI2 has the highest average price: 4,915 (n=1,392). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis (the hypothesis loop's own verdict STATISTICALLY_SIGNIFICANT tested a different claim and is not the answer). 'price' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "price",
+   "grouping": [
+    "clarity"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "clarity"
+    ],
+    "OUTCOME": [
+     "price"
+    ]
+   },
+   "estimand": "mean",
+   "task": "DESCRIPTIVE",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "DESCRIPTIVE",
+   "claim_type": "OBSERVATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 3.2
+ },
+ {
+  "ds": "diamonds",
+  "q": "Why are Fair cut diamonds priced higher than Ideal cut on average?",
+  "cat": "CAUSAL",
+  "truth": "{'Fair': 4936.319, 'Good': 3718.488, 'Ideal': 3428.822, 'Premium': 4674.461, 'Very Good': 4046.122}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 0.999999999999,
+  "answer": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). Common Language Effect Size (probability that a random Fair exceeds a random Ideal): 68%. Counterfactual opportunity: if Ideal matched Fair's average performance, total price would expand by +4.77M. Candidate explanatory factors scanned: carat, color, clarity, depth, table, x (+2 more). Confounder adjustment & effect reversal: carat is a candidate confounder: it correlates with price (r=0.92) and differs across cut (Fair averages 1.12 vs 0.7 for Ideal). When adjusting for carat, the observed difference between Fair and Ideal reverses direction (adjusted difference -1,874 vs unadjusted +1,507), indicating that the unadjusted cut difference was an artifact of composition/confounding by carat. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Fair to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: Skewness: Fair values are skewed (mean 4,936 vs median 3,458, P90 11,183); median reflects typical outcome better than mean. Recommended next steps: Investigate operational or business practices driving the superior price of Fair over Ideal. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
+  "finding": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). (deterministic recomputation from the resolved contract columns) 'price' was averaged (MEAN) rather than summed, because it is not additive across rows. Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
+  "contract": {
+   "target": "price",
+   "grouping": [
+    "cut"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "cut"
+    ],
+    "OUTCOME": [
+     "price"
+    ]
+   },
+   "estimand": "root_cause",
+   "task": "DIAGNOSTIC",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "CAUSAL",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "DIAGNOSTIC",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 3.6
+ },
+ {
+  "ds": "planets",
+  "q": "What is the average mass by discovery method?",
+  "cat": "DESC",
+  "truth": "{'Eclipse Timing Variations': 5.125, 'Radial Velocity': 2.631, 'Transit': 1.47}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "Eclipse Timing Variations has the highest average mass: 5.12 (n=2). Ranking by average mass: Eclipse Timing Variations: 5.12 (n=2); Radial Velocity: 2.63 (n=510); Transit: 1.47 (n=1). Opportunity sizing: elevating 1 method segments currently below median (2.63) to the median benchmark represents +1.16 in potential mass expansion (44.0% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure Eclipse Timing Variations's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (Eclipse Timing Variations) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 1.16). Checks: 522 of 1,035 rows (50.4%) were excluded for missing/unparseable values in method, mass. In Radial Velocity, 20 extreme values (max 25.00) make up 25% of the group total; its mean is 2.63 but its median is 1.26. Verify these are genuine before relying on means or totals. Groups with fewer than 5 rows (Eclipse Timing Variations, Transit) are not reliable. [Missingness sensitivity: UNIDENTIFIABLE -- Sensitivity interval [1.309, 13.92] crosses the relevant decision boundary AND 50% of the claim-relevant data is missing -- the available observations plus the stated bounding assumption do not permit a defensible determination.]",
+  "finding": "Eclipse Timing Variations has the highest average mass: 5.12 (n=2). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'mass' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "mass",
+   "grouping": [
+    "method"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "method"
+    ],
+    "OUTCOME": [
+     "mass"
+    ]
+   },
+   "estimand": "mean",
+   "task": "DESCRIPTIVE",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "DESCRIPTIVE",
+   "claim_type": "OBSERVATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 3.9
+ },
+ {
+  "ds": "planets",
+  "q": "Which method discovered the most planets?",
+  "cat": "RANK",
+  "truth": "{'Radial Velocity': 553, 'Transit': 397, 'Imaging': 38}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "Radial Velocity discovered the most planets: 553 (n=553), 53.4% of the overall 1,035. Ranking by count of method: Radial Velocity: 553 (n=553); Transit: 397 (n=397); Imaging: 38 (n=38); Microlensing: 23 (n=23); Eclipse Timing Variations: 9 (n=9); Pulsar Timing: 5 (n=5); Transit Timing Variations: 4 (n=4); Orbital Brightness Modulation: 3 (n=3); Astrometry: 2 (n=2); Pulsation Timing Variations: 1 (n=1).",
+  "finding": "Radial Velocity discovered the most planets: 553 (n=553), 53.4% of the overall 1,035. (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'number' was aggregated as COUNT because it represents an occurrence count, not a summable magnitude.",
+  "contract": {
+   "target": "method",
+   "grouping": [
+    "method"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "method"
+    ],
+    "OUTCOME": [
+     "method"
+    ]
+   },
+   "estimand": "ranking",
+   "task": "COMPARISON",
+   "requested_aggregation": "COUNT",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 1.7
+ },
+ {
+  "ds": "planets",
+  "q": "Has the orbital period of discovered planets changed over the years?",
+  "cat": "TREND",
+  "truth": "{1989: 83.888, 1992: 45.902, 1994: 98.211, 1995: 4.231, 1996: 335.962, 1997: 39.845, 1998: 114.311, 1999: 552.281, 2000: 540.945, 2001: 735.304, 2002: 971.834, 2003: 2182.037, 2004: 538.039, 2005: 741.982, 2006: 26762.097, 2007: 363.759, 2008: 9394.701, 2009: 1346.423, 2010: 669.543, 2011: 706.968, 2012: 476.061, 2013: 133.241, 2014: 300.863}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 0.5,
+  "answer": "No statistically detectable trend in orbital_period (average per year): slope +139.3 per year (95% CI -200.1 to +478.7, p=0.43) across 23 years (1989 to 2014). Typical year-to-year noise around the trend is about 5,763 (281.2% of the mean). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Validate current run-rate against near-term operational capacity and financial forecasts. | [Diagnostic Deep-Dive (1-2 weeks)]: Analyze period-to-period residuals to distinguish secular trend from seasonal or cyclical oscillations. | [Strategic & Commercial Mitigation (30-90 days)]: Calibrate medium-term targets and resourcing according to the projected trajectory. Checks: 43 of 1,035 rows (4.2%) were excluded for missing/unparseable values in year, orbital_period. Recommended next steps: Monitor subsequent periods to confirm whether the series remains stationary. [Missingness sensitivity: SENSITIVE -- Sensitivity interval [1920, 3.225e+04] crosses the relevant decision boundary under the stated assumption (observed_range_reallocation_mean); the conclusion is not invariant to plausible missing-value assignments and must not be presented as such.]",
+  "finding": "No statistically detectable trend in orbital_period (average per year): slope +139.3 per year (95% CI -200.1 to +478.7, p=0.43) across 23 years (1989 to 2014). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'orbital_period' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "orbital_period",
+   "grouping": [],
+   "predictors": [],
+   "time": [
+    "year"
+   ],
+   "bound": {
+    "OUTCOME": [
+     "orbital_period"
+    ],
+    "TIME_VARIABLE": [
+     "year"
+    ]
+   },
+   "estimand": "trend",
+   "task": "DESCRIPTIVE",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "DESCRIPTIVE",
+   "claim_type": "OBSERVATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 1.8
+ },
+ {
+  "ds": "taxis",
+  "q": "Is tip correlated with fare?",
+  "cat": "CORR",
+  "truth": "0.489",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "fare and tip are associated (moderate positive relationship): r=0.49 (95% CI 0.47 to 0.51, p<0.001, n=6,433); fare accounts for about 23.9% of the variation in tip. On average each +1 in fare goes with +0.104 tip (95% CI +0.099 to +0.108). This is an association only; it does not establish a causal effect in either direction. Multivariable covariate control: after controlling for passengers, distance, tolls, fare remains significantly associated with tip (controlled slope +0.0931, p<0.001, model adj R2=0.26). Elasticity & Sensitivity: elasticity at means is 0.69 (a +10% shift in fare associates with an expected +0.136 shift in tip). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Ensure key operational dashboards track both variables alongside confounding indicators. | [Diagnostic Deep-Dive (1-2 weeks)]: Design controlled intervention or A/B experiment to determine whether the fare relationship is causal. | [Strategic & Commercial Mitigation (30-90 days)]: Incorporate observed elasticities into revenue and capacity planning models. Recommended next steps: Test whether fare and tip remain associated after controlling for secondary covariates.",
+  "finding": "fare and tip are associated (moderate positive relationship): r=0.49 (95% CI 0.47 to 0.51, p<0.001, n=6,433); fare accounts for about 23.9% of the variation in tip. (deterministic recomputation from the resolved contract columns)",
+  "contract": {
+   "target": "tip",
+   "grouping": [],
+   "predictors": [
+    "fare"
+   ],
+   "time": [],
+   "bound": {
+    "EXPLANATORY_VARIABLE": [
+     "fare",
+     "tip"
+    ],
+    "OUTCOME": [
+     "tip"
+    ]
+   },
+   "estimand": "correlation",
+   "task": "ASSOCIATION",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "ASSOCIATION",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 1.2
+ },
+ {
+  "ds": "taxis",
+  "q": "Which pickup borough has the highest average fare?",
+  "cat": "RANK",
+  "truth": "{'Bronx': 20.999, 'Brooklyn': 16.521, 'Manhattan': 11.153, 'Queens': 24.935}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "Queens has the highest average fare: 24.93 (n=657). Ranking by average fare: Queens: 24.93 (n=657); Bronx: 21.00 (n=99); Brooklyn: 16.52 (n=383); Manhattan: 11.15 (n=5,268). Top vs runner-up (Bronx): +3.94 (95% CI +0.552 to +7.32, p=0.023) -- a real gap. Opportunity sizing: elevating 2 pickup_borough segments currently below median (18.76) to the median benchmark represents +4.92 in potential fare expansion (37.8% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure Queens's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (Queens) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 4.92). Checks: 26 of 6,433 rows (0.4%) were excluded for missing/unparseable values in pickup_borough, fare. Recommended next steps: Investigate operational practices distinguishing Queens from Bronx.",
+  "finding": "Queens has the highest average fare: 24.93 (n=657). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis (the hypothesis loop's own verdict DIAGNOSED tested a different claim and is not the answer). 'fare' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "fare",
+   "grouping": [
+    "pickup_borough"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "pickup_borough"
+    ],
+    "OUTCOME": [
+     "fare"
+    ]
+   },
+   "estimand": "ranking",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 2.8
+ },
+ {
+  "ds": "taxis",
+  "q": "Do credit card payers tip more than cash payers?",
+  "cat": "GROUPDIFF",
+  "truth": "{'cash': 0.0, 'credit card': 2.782}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "STATISTICALLY_SIGNIFICANT",
+  "conf": 1.0,
+  "answer": "Yes -- credit card averages 2.78 tip vs 0 for cash: 2.78 higher (95% CI +2.71 to +2.85, p<0.001; effect size d=1.32, large). Common Language Effect Size (probability that a random credit card exceeds a random cash): 95%. Counterfactual opportunity: if cash matched credit card's average performance, total tip would expand by +5,041. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for credit card to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: 44 of 6,433 rows (0.7%) were excluded for missing/unparseable values in payment, tip. Recommended next steps: Investigate operational or business practices driving the superior tip of credit card over cash.",
+  "finding": "Yes -- credit card averages 2.78 tip vs 0 for cash: 2.78 higher (95% CI +2.71 to +2.85, p<0.001; effect size d=1.32, large). (deterministic recomputation from the resolved contract columns) 'tip' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "tip",
+   "grouping": [
+    "payment"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "payment"
+    ],
+    "OUTCOME": [
+     "tip"
+    ]
+   },
+   "estimand": "group_difference",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "ASSOCIATION",
+   "supported_claim": "ASSOCIATION",
+   "claim_ceiling": "ASSOCIATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "STATISTICALLY_SIGNIFICANT"
+  },
+  "secs": 4.8
+ },
+ {
+  "ds": "flights",
+  "q": "Has the number of passengers grown over time?",
+  "cat": "TREND",
+  "truth": "{1949: 1520, 1950: 1676, 1951: 2042, 1952: 2364, 1953: 2700, 1954: 2867, 1955: 3408, 1956: 3939, 1957: 4421, 1958: 4572, 1959: 5140, 1960: 5714}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 0.5,
+  "answer": "passengers (total per year) is trending up: +383.1 per year (95% CI +355.4 to +410.8, p<0.001; Kendall tau=1.00), from about 1,746 to 5,142 (+194.5%) across 12 years (1949 to 1960). Typical year-to-year noise around the trend is about 168.8 (5.0% of the mean). Run-rate extrapolation: projected next year value is 5,854 (95% prediction interval 5,412 to 6,295). Persistence dynamics: lag-1 autocorrelation is 0.75 (strong trend momentum / persistence). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Validate current run-rate against near-term operational capacity and financial forecasts. | [Diagnostic Deep-Dive (1-2 weeks)]: Analyze period-to-period residuals to distinguish secular trend from seasonal or cyclical oscillations. | [Strategic & Commercial Mitigation (30-90 days)]: Calibrate medium-term targets and resourcing according to the projected trajectory. Recommended next steps: Project future run-rate and evaluate whether operational capacity matches the up trend.",
+  "finding": "passengers (total per year) is trending up: +383.1 per year (95% CI +355.4 to +410.8, p<0.001; Kendall tau=1.00), from about 1,746 to 5,142 (+194.5%) across 12 years (1949 to 1960). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'passengers' was aggregated as SUM because it is additive at the UNKNOWN grain.",
+  "contract": {
+   "target": "passengers",
+   "grouping": [],
+   "predictors": [],
+   "time": [
+    "year"
+   ],
+   "bound": {
+    "OUTCOME": [
+     "passengers"
+    ],
+    "TIME_VARIABLE": [
+     "year"
+    ]
+   },
+   "estimand": "trend",
+   "task": "DESCRIPTIVE",
+   "requested_aggregation": "SUM",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "DESCRIPTIVE",
+   "claim_type": "OBSERVATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 1.6
+ },
+ {
+  "ds": "flights",
+  "q": "Which month has the highest average passengers?",
+  "cat": "RANK",
+  "truth": "{'Apr': 267.083, 'Aug': 351.083, 'Dec': 261.833, 'Feb': 235.0, 'Jan': 241.75, 'Jul': 351.333, 'Jun': 311.667, 'Mar': 270.167, 'May': 271.833, 'Nov': 232.833, 'Oct': 266.583, 'Sep': 302.417}",
+  "ok": true,
+  "truth_ok": true,
+  "result_class": "CORRECT",
+  "all_classes": [],
+  "truth_detail": "answer + contract match independent ground truth",
+  "status": "COMPLETED",
+  "verdict": "OBSERVED",
+  "conf": 1.0,
+  "answer": "Jul has the highest average passengers: 351.3 (n=12). Ranking by average passengers: Jul: 351.3 (n=12); Aug: 351.1 (n=12); Jun: 311.7 (n=12); Sep: 302.4 (n=12); May: 271.8 (n=12); Mar: 270.2 (n=12); Apr: 267.1 (n=12); Oct: 266.6 (n=12); Dec: 261.8 (n=12); Jan: 241.8 (n=12); Feb: 235.0 (n=12); Nov: 232.8 (n=12). Top vs runner-up (Aug): +0.25 (95% CI -132.1 to +132.6, p=1.00) -- not a reliable gap. Opportunity sizing: elevating 6 month segments currently below median (268.6) to the median benchmark represents +17.78 in potential passengers expansion (6.3% overall lift). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Verify data collection hygiene and ensure Jul's lead is not an artifact of tracking anomalies. | [Diagnostic Deep-Dive (1-2 weeks)]: Benchmark operational and commercial playbooks separating top performer (Jul) from peer benchmarks. | [Strategic & Commercial Mitigation (30-90 days)]: Execute targeted growth initiative to elevate bottom-quartile segments to the median performance tier (potential lift: 17.78). Recommended next steps: Investigate operational practices distinguishing Jul from Aug.",
+  "finding": "Jul has the highest average passengers: 351.3 (n=12). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'passengers' was averaged (MEAN) rather than summed, because it is not additive across rows.",
+  "contract": {
+   "target": "passengers",
+   "grouping": [
+    "month"
+   ],
+   "predictors": [],
+   "time": [],
+   "bound": {
+    "GROUPING_DIMENSION": [
+     "month"
+    ],
+    "OUTCOME": [
+     "passengers"
+    ]
+   },
+   "estimand": "ranking",
+   "task": "COMPARISON",
+   "requested_aggregation": "MEAN",
+   "requested_claim": "OBSERVATION",
+   "supported_claim": "OBSERVATION",
+   "claim_ceiling": "OBSERVATION",
+   "problem_class": "COMPARISON",
+   "claim_type": "ASSOCIATION",
+   "verdict_type": "OBSERVED"
+  },
+  "secs": 4.1
+ }
+]

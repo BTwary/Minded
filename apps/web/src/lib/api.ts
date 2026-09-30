@@ -11,7 +11,7 @@ import {
   VerificationState,
 } from "../types";
 
-const API_BASE =
+export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 /**
@@ -769,3 +769,20 @@ export async function migrateLocalStorageToCloud(data: CloudBackupConfig) {
     body: JSON.stringify(data),
   });
 }
+
+export interface QueryExecutionResult {
+  columns?: string[];
+  rows?: any[];
+  execution_time_ms?: number;
+  row_count?: number;
+  detail?: string;
+}
+
+export async function executeQuery(sql: string, projectId: string): Promise<QueryExecutionResult> {
+  return authFetchJson(`${API_BASE}/query/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sql, project_id: projectId }),
+  });
+}
+

@@ -11,6 +11,7 @@ import uuid
 
 import numpy as np
 import pandas as pd
+from scipy import stats as sps
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 os.environ.setdefault("AAOS_BUSINESS_TIMEZONE", "UTC")
@@ -136,6 +137,87 @@ class TestAssociationAndTrend(unittest.TestCase):
         r = build_analyst_result("Has revenue grown over time?", df, target="rev", time_col="m")
         self.assertFalse(any("excluded" in c for c in r.caveats))
         self.assertEqual(r.numbers["periods"], 36)
+
+    def test_acceptance_1_yearly_observations_with_missing_year(self):
+        """1. 5 yearly observations with a missing year — expected slope 10/year."""
+        from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+        years = np.array([2000, 2001, 2002, 2004, 2005], dtype=float)
+        y = 100.0 + 10.0 * (years - 2000)
+        df = pd.DataFrame({"year": years, "val": y})
+        r = build_analyst_result("Has val grown over the years?", df, target="val", time_col="year")
+        self.assertIsNotNone(r)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], 10.0, places=3)
+        coords = canonical_time_coordinates(df["year"])
+        lr = sps.linregress(coords, y)
+        self.assertAlmostEqual(lr.slope, 10.0, places=3)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], lr.slope, places=3)
+
+    def test_acceptance_2_contiguous_monthly_observations_annual_slope(self):
+        """2. 72 contiguous monthly observations with true slope 120/year — both paths must report 120/year."""
+        from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+        dates = pd.date_range("2010-01-01", periods=72, freq="MS")
+        m = np.arange(72, dtype=float)
+        y = 500.0 + 120.0 * (m / 12.0)
+        df = pd.DataFrame({"date": dates, "val": y})
+        r = build_analyst_result("What is the annual trend in val over the years?", df, target="val", time_col="date")
+        self.assertIsNotNone(r)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], 120.0, places=2)
+        coords = canonical_time_coordinates(df["date"], target_unit="year")
+        lr = sps.linregress(coords, y)
+        self.assertAlmostEqual(lr.slope, 120.0, places=2)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], lr.slope, places=2)
+
+    def test_acceptance_3_quarterly_observations_annualized_slope(self):
+        """3. Quarterly observations with an annualized slope — both paths must use the same annual coordinate."""
+        from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+        dates = pd.date_range("2018-01-01", periods=16, freq="QS")
+        q = np.arange(16, dtype=float)
+        y = 200.0 + 40.0 * (q / 4.0)
+        df = pd.DataFrame({"date": dates, "val": y})
+        r = build_analyst_result("What is the annual trend in val over the years?", df, target="val", time_col="date")
+        self.assertIsNotNone(r)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], 40.0, places=2)
+        coords = canonical_time_coordinates(df["date"], target_unit="year")
+        lr = sps.linregress(coords, y)
+        self.assertAlmostEqual(lr.slope, 40.0, places=2)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], lr.slope, places=2)
+
+    def test_acceptance_4_gapped_monthly_observations_elapsed_calendar_time(self):
+        """4. Irregular/gapped monthly observations — slope must reflect actual elapsed calendar time."""
+        from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+        dates = pd.to_datetime(["2020-01-01", "2020-02-01", "2020-05-01", "2020-08-01", "2021-01-01"])
+        m = np.array([0, 1, 4, 7, 12], dtype=float)
+        y = 100.0 + 120.0 * (m / 12.0)
+        df = pd.DataFrame({"date": dates, "val": y})
+        r = build_analyst_result("What is the annual trend in val over the years?", df, target="val", time_col="date")
+        self.assertIsNotNone(r)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], 120.0, places=2)
+        coords = canonical_time_coordinates(df["date"], target_unit="year")
+        lr = sps.linregress(coords, y)
+        self.assertAlmostEqual(lr.slope, 120.0, places=2)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], lr.slope, places=2)
+
+    def test_acceptance_5_nontemporal_numeric_column_not_interpreted_as_calendar(self):
+        """5. Non-temporal numeric column supplied as a candidate time field — must not be silently interpreted as calendar time."""
+        from packages.analytics_core.src.statistics.analytical_math import resolve_canonical_temporal_axis
+        s = pd.Series([1500.0, 2000.0, 2500.0, 3200.0, 4000.0], name="weight")
+        axis = resolve_canonical_temporal_axis(s)
+        self.assertEqual(axis.inferred_grain, "none")
+        self.assertEqual(axis.coordinate_unit, "unit")
+        np.testing.assert_array_equal(axis.coordinate_values, np.array([0.0, 500.0, 1000.0, 1700.0, 2500.0]))
+
+    def test_acceptance_6_cross_path_identical_coordinate_and_slope(self):
+        """6. Same dataset through _trend and canonical_time_coordinates — identical coordinate unit and slope basis."""
+        from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+        years = np.array([1990, 1992, 1993, 1996, 1999, 2000, 2005], dtype=float)
+        y = 42.0 + 3.14 * (years - 1990)
+        df = pd.DataFrame({"year": years, "target": y})
+        r = build_analyst_result("Has target grown over years?", df, target="target", time_col="year")
+        self.assertIsNotNone(r)
+        coords = canonical_time_coordinates(df["year"])
+        lr = sps.linregress(coords, y)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], lr.slope, places=4)
+        self.assertAlmostEqual(r.numbers["slope_per_period"], 3.14, places=4)
 
 
 class TestPeriodChange(unittest.TestCase):

@@ -207,6 +207,9 @@ class QuestionRoleProposal:
     referenced_columns: List[str] = field(default_factory=list)
     target_column: Optional[str] = None
     requested_explanatory: Optional[Sequence[str]] = None
+    grouping_columns: Optional[List[str]] = None
+    time_column: Optional[str] = None
+    canonical_roles_authoritative: bool = False
 
     def __post_init__(self) -> None:
         if self.requested_explanatory is not None:
@@ -220,16 +223,28 @@ class QuestionRoleProposal:
             object.__setattr__(self, "explanatory_columns", tuple(self.explanatory_columns))
             object.__setattr__(self, "referenced_columns", tuple(self.referenced_columns))
             object.__setattr__(self, "requested_explanatory", tuple(self.explicit_explanatory_columns()))
+        if self.grouping_columns is not None:
+            object.__setattr__(self, "grouping_columns", tuple(self.grouping_columns))
 
     @classmethod
     def from_plan_semantics(cls, plan_semantics: Any) -> "QuestionRoleProposal":
         """Build from a compiled plan's SemanticContract (``plan.semantics``).
         Tolerates a missing/partial contract by producing an empty proposal
         (which resolves nothing), never by raising."""
+        auth = bool(
+            getattr(plan_semantics, "canonical_roles_authoritative", False)
+            or (
+                getattr(plan_semantics, "resolution_confidence", 0.0) >= 0.70
+                and "canonical_question_contract" in getattr(plan_semantics, "semantic_evidence", {})
+            )
+        )
         return cls(
             explanatory_columns=list(getattr(plan_semantics, "explanatory_columns", None) or []),
             referenced_columns=list(getattr(plan_semantics, "referenced_columns", None) or []),
             target_column=getattr(plan_semantics, "target_column", None),
+            grouping_columns=list(getattr(plan_semantics, "grouping_columns", [])) if getattr(plan_semantics, "grouping_columns", None) is not None else None,
+            time_column=getattr(plan_semantics, "time_column", None),
+            canonical_roles_authoritative=auth,
         )
 
     def explicit_explanatory_columns(self) -> List[str]:

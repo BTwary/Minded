@@ -410,6 +410,23 @@ export default function SettingsPage() {
             </p>
           </div>
         </div>
+
+        {/* Local Application Data & Storage Isolation */}
+        <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-xl space-y-2 text-xs">
+          <div className="flex items-center space-x-2 text-slate-200 font-semibold">
+            <HardDrive className="w-4 h-4 text-emerald-400" />
+            <span>Local Application Data &amp; Diagnostics</span>
+          </div>
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            Your datasets, investigation history, and local analytical states are persisted in your user profile:
+          </p>
+          <div className="p-2.5 bg-slate-950 rounded-lg border border-slate-800/80 font-mono text-[11px] text-emerald-300 break-all select-all">
+            %LOCALAPPDATA%\Minded\AAOS
+          </div>
+          <p className="text-[11px] text-slate-500">
+            This directory remains independent of application installation files. Reinstalling or updating MindEd AA-OS preserves your analytical records and local datasets.
+          </p>
+        </div>
       </div>
 
       {/* Bring Your Own Model (BYOM) Selection */}
@@ -488,7 +505,7 @@ export default function SettingsPage() {
               type="text"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="e.g. http://localhost:11434 or https://api.openai.com/v1"
+              placeholder="e.g. http://127.0.0.1:11434"
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
             />
           </div>

@@ -66,8 +66,8 @@ export default function Logo({ size = "md", collapsed = false }: LogoProps) {
               AA-OS
             </span>
           </div>
-          <span className="text-[10px] text-amber-200/60 font-mono tracking-wider uppercase">
-            Autonomous Analytical OS
+          <span className="text-[10px] text-emerald-400/80 font-mono tracking-wider">
+            Autonomous Data Analyst
           </span>
         </div>
       )}

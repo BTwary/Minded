@@ -391,7 +391,16 @@ class MethodRegistry:
             time_col=(getattr(semantic, "time_column", None) if semantic is not None and task == "FORECAST" else None),
             weights=(getattr(getattr(semantic, "metric_definition", None), "weight_column", None) if semantic is not None else None),
         )
-        reasons.extend(universal.reasons)
+        u_reasons = list(universal.reasons)
+        is_descriptive_or_ranking = (
+            task in {"DESCRIPTIVE", "RANKING", "COMPARISON", "TREND", "COUNT"}
+            or (getattr(semantic, "ranking_direction", None) is not None)
+            or (getattr(getattr(plan, "semantics", None), "ranking_direction", None) is not None)
+            or _is_finite_entity_population(semantic, df)
+        )
+        if is_descriptive_or_ranking:
+            u_reasons = [r for r in u_reasons if r != "group_contains_fewer_than_two_observations"]
+        reasons.extend(u_reasons)
         if code == "association_numeric":
             expl = list(getattr(semantic, "explanatory_columns", []) or [])
             if target and expl and all(c in df.columns for c in [expl[0], target]):
@@ -439,15 +448,18 @@ class MethodRegistry:
             if not grouping or not target or grouping[0] not in df.columns or target not in df.columns:
                 reasons.append("grouping_or_outcome_missing")
             else:
-                groups = {k: g[target].tolist() for k, g in df[[grouping[0], target]].dropna().groupby(grouping[0])}
-                # A proven entity/catalog grain is a finite observed population.
-                # Do not apply sampled-data subgroup minima to it: singleton
-                # categories can still be described exactly, but the result must
-                # remain finite-population/descriptive (no population p-value).
-                finite_population = _is_finite_entity_population(semantic, df)
-                result = independent_groups(
-                    groups, method=code, min_group_n=(1 if finite_population else 2), min_groups=2
-                )
+                if is_descriptive_or_ranking and (grouping[0] == target or not pd.api.types.is_numeric_dtype(df[target])):
+                    if df[grouping[0]].nunique(dropna=True) < 2:
+                        reasons.append("insufficient_groups:2")
+                else:
+                    if grouping[0] == target:
+                        groups = {k: g[target].tolist() for k, g in df[[grouping[0]]].dropna().groupby(grouping[0])}
+                    else:
+                        groups = {k: g[target].tolist() for k, g in df[[grouping[0], target]].dropna().groupby(grouping[0])}
+                    finite_population = _is_finite_entity_population(semantic, df)
+                    result = independent_groups(
+                        groups, method=code, min_group_n=(1 if (finite_population or is_descriptive_or_ranking) else 2), min_groups=2
+                    )
         elif code == "stable_segmentation":
             if len(df) < 30:
                 reasons.append("too_few_rows:30")
@@ -639,16 +651,25 @@ class MethodRegistry:
             ok, errors = cls.validate(code, row_count=len(df), roles=roles, blocked_reasons=blocked)
         preflight = cls.preflight(code, df, plan)
         preflight_reasons = list(preflight.get("reasons", []))
+        is_descriptive_or_ranking = (
+            task in {"DESCRIPTIVE", "RANKING", "COMPARISON", "TREND", "COUNT"}
+            or (getattr(semantic, "ranking_direction", None) is not None)
+            or (getattr(getattr(plan, "semantics", None), "ranking_direction", None) is not None)
+            or (getattr(plan, "estimand", {}).get("requested_aggregation") in {"COUNT", "RATE", "MEAN"})
+            or _is_finite_entity_population(semantic, df)
+        )
+        if is_descriptive_or_ranking:
+            preflight_reasons = [
+                r for r in preflight_reasons
+                if r not in {"group_contains_fewer_than_two_observations"}
+            ]
         if code == "comparison_group_effect" and _is_finite_entity_population(semantic, df):
-            # Singleton categories are valid observations in a complete finite
-            # catalog. The contrast remains descriptive over the observed
-            # entities; suppress only the sampled-data singleton gate.
             preflight_reasons = [
                 r for r in preflight_reasons
                 if r not in {"group_contains_fewer_than_two_observations", "insufficient_groups:2"}
             ]
         errors.extend(f"statistical_preflight:{r}" for r in preflight_reasons)
-        if code == "comparison_group_effect" and _is_finite_entity_population(semantic, df):
+        if code == "comparison_group_effect" and (is_descriptive_or_ranking or _is_finite_entity_population(semantic, df)):
             ok = not errors
         else:
             ok = ok and not preflight_reasons
@@ -663,6 +684,7 @@ class MethodRegistry:
             "uncertainty_method": cls.get(code).uncertainty_method,
             "verification_method": cls.get(code).verification_method,
             "executor_id": cls.get(code).executor_id,
+            "descriptive_small_n_waived": is_descriptive_or_ranking,
             "preflight": preflight,
         }
 

@@ -23,6 +23,8 @@ EXCLUDE_DIR_NAMES = {
     ".vscode",
     "temp_p2_test",
     "data_store",
+    "bundle",
+    "out",
 }
 
 EXCLUDE_EXTENSIONS = {
@@ -38,6 +40,7 @@ EXCLUDE_EXTENSIONS = {
     ".tmp",
     ".log",
     ".pkl",
+    ".exe",
 }
 
 EXCLUDE_EXACT_FILES = {
@@ -106,17 +109,11 @@ def make_archive(dest_zip_path: str):
         print(f" -> Completed {dest_zip_path}: {total_files} files packaged ({file_size_kb:.1f} KB).")
 
 def main():
-    destinations = [
-        os.path.join(DOWNLOADS_DIR, "Minded_AAOS_v32_2026-09-26_session17_question_resolution_release_gate_fix.zip"),
-        os.path.join(DOWNLOADS_DIR, "Minded_AAOS_v29_offline_desktop_certified_final.zip"),
-        os.path.join(DOWNLOADS_DIR, "DataBase-AI-Platform.zip"),
-        os.path.join(DOWNLOADS_DIR, "DataBase.zip"),
-        os.path.join(WORKSPACE_DIR, "DataBase-AI-Platform.zip"),
-        os.path.join(WORKSPACE_DIR, "DataBase.zip"),
-    ]
-    for dest in destinations:
-        make_archive(dest)
-    print("\nAll clean source archives successfully generated!")
+    import sys
+    dest_name = sys.argv[1] if len(sys.argv) > 1 else "MindEd_AAOS_v40_Release1.0_candidate.zip"
+    dest = os.path.join(DOWNLOADS_DIR, dest_name) if not os.path.isabs(dest_name) else dest_name
+    make_archive(dest)
+    print("\nClean source archive successfully generated!")
 
 if __name__ == "__main__":
     main()

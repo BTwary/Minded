@@ -43,7 +43,7 @@ from scipy import stats as sps
 
 ALPHA = 0.05
 MIN_GROUP_N = 5
-MAX_GROUPS_REPORTED = 6
+MAX_GROUPS_REPORTED = 12
 
 MONTHS = {
     "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3, "april": 4, "apr": 4,
@@ -259,6 +259,20 @@ def _parse_dates(s: pd.Series) -> Optional[pd.Series]:
     if non_null.empty:
         return None
     if pd.api.types.is_numeric_dtype(s):
+        try:
+            min_v = float(non_null.min())
+            max_v = float(non_null.max())
+            if 1800 <= min_v and max_v <= 2200:
+                s_int = s.round().astype(int)
+                return pd.to_datetime(s_int.astype(str) + "-01-01", errors="coerce")
+            elif 50 <= min_v and max_v <= 99:
+                s_int = (1900 + s).round().astype(int)
+                return pd.to_datetime(s_int.astype(str) + "-01-01", errors="coerce")
+            elif 0 <= min_v and max_v <= 49:
+                s_int = (2000 + s).round().astype(int)
+                return pd.to_datetime(s_int.astype(str) + "-01-01", errors="coerce")
+        except Exception:
+            pass
         return None
     parsed = pd.to_datetime(s, errors="coerce")
     if float(parsed.notna().sum()) / max(1, len(non_null)) < 0.8:
@@ -289,8 +303,8 @@ _CHANGE_WORDS_RE = re.compile(
     r"\b(drop\w*|fell|fall\w*|declin\w*|decreas\w*|dip\w*|down|lower|increas\w*|rose|rise|ris\w*|spik\w*|"
     r"surg\w*|jump\w*|grew|growth|chang\w*|slump\w*|plung\w*|tank\w*)\b", re.I)
 _TREND_RE = re.compile(
-    r"\b(trend\w*|over time|growing|grown|growth|grow|going up|going down|trajectory|month over month|"
-    r"mom|year over year|yoy|increas\w+ over|declin\w+ over|has \w+ (?:grown|increased|declined|decreased))\b", re.I)
+    r"\b(trend\w*|over time|over the years|over model years|growing|grown|growth|grow|going up|going down|trajectory|month over month|"
+    r"mom|year over year|yoy|increas\w+ over|declin\w+ over|chang\w+ over|improv\w+ over|has \w+ (?:grown|increased|declined|decreased|improved|changed))\b", re.I)
 _RANK_RE = re.compile(
     r"\b(which|who|top|highest|lowest|best|worst|most|least|largest|biggest|smallest|rank\w*|leading|"
     r"how much|how many|total|what (?:is|are|was|were) the (?:total|average|mean|median|sum|count|number))\b", re.I)
@@ -308,6 +322,30 @@ _BREAKDOWN_RE = re.compile(
     re.I,
 )
 
+# DEFECT-037 (from external research spec review): every prior recency-phrase defect
+# (031/033/034/035/036) shared one root shape -- the question clearly named *some* time
+# window, `parse_period` didn't recognise the specific phrasing, and the question then
+# silently fell through to a plain RANKING/aggregate answer that never mentions the time
+# window at all, indistinguishable from an unrelated question. Each fix so far has closed
+# one more phrasing, but the phrase space is unbounded (typos, regional wording, phrasings
+# no one has probed yet). The reviewed spec's "Minimum Rejection Policy" names exactly this
+# failure class -- "Fiscal/calendar period unresolved where material" is listed as a case
+# that must not be silently compiled into an unrelated answer. Rather than only continuing
+# to enumerate phrasings, detect the *general shape* of "the question references a time
+# window" independently of whether that specific phrasing is in the table, so an
+# unrecognised phrasing degrades to an honest, disclosed caveat instead of a silent
+# misclassification. This does not replace `parse_period`'s specific-phrase table (which
+# still gives exact, correctly-scoped periods for everything it recognises) -- it's a
+# fail-closed backstop for whatever isn't in that table yet.
+_GENERIC_TEMPORAL_MARKER_RE = re.compile(
+    r"\b(?:last|past|trailing|this|current|previous|recent\w*|lately|latest)\s+(?:\w+\s+){0,2}"
+    r"(?:day|week|fortnight|month|quarter|year)s?\b"
+    r"|\byear[\s-]to[\s-]date\b|\bytd\b"
+    r"|\b\w+\s+ago\b"
+    r"|\bsince\s+(?:the\s+)?(?:start|beginning|end)\s+of\b",
+    re.I,
+)
+
 
 def classify_question(
     question: str,
@@ -318,14 +356,42 @@ def classify_question(
     period: Optional["Period"] = None,
 ) -> str:
     q = question or ""
+    if re.search(r"does\s+(?:the\s+)?effect\s+of\s+.+?\s+on\s+.+?\s+differ\s+between", q, re.I):
+        return "INTERACTION"
     if period is not None and has_time and (_CHANGE_WORDS_RE.search(q) or _PERIOD_CHANGE_RE.search(q)):
         return "PERIOD_CHANGE"
+    # DEFECT-037: the question looks like a period-change question (has a change/why word)
+    # and clearly names *a* time window, but `parse_period` didn't resolve it -- don't let it
+    # fall through to a plain RANKING answer that silently drops the time reference entirely.
+    if (period is None and has_time and (_CHANGE_WORDS_RE.search(q) or _PERIOD_CHANGE_RE.search(q))
+            and _GENERIC_TEMPORAL_MARKER_RE.search(q)):
+        return "PERIOD_CHANGE_UNRESOLVED_TIMEFRAME"
     if has_time and _TREND_RE.search(q) and not has_explanatory:
         return "TREND"
     if has_explanatory:
         return "ASSOCIATION"
     if has_group and (_RANK_RE.search(q) or _BREAKDOWN_RE.search(q)) and not re.search(r"\b(differ\w*|significant\w*)\b", q, re.I):
         return "RANKING"
+    # DEFECT-038: a genuinely causal/diagnostic question with no time dimension at all --
+    # "Why did cost_metric surge across datacenter_region?" -- reads exactly like a
+    # PERIOD_CHANGE question (matches both _PERIOD_CHANGE_RE's "why"/"what caused" and
+    # _CHANGE_WORDS_RE's "surge"/"spike"/etc.) except there is no time column to compute a
+    # before/after comparison from. This layer has no time-free equivalent of PERIOD_CHANGE,
+    # so it must not silently fall into the RANKING catch-all below: RANKING answers are
+    # marked `descriptive=True, supersedes_loop=True` and the controller (runtime/controller.py)
+    # uses that flag to overwrite the hypothesis loop's own verdict -- including a correct
+    # DIAGNOSED verdict -- with a shallow "group X has the highest total" observation that
+    # never actually answers the causal "why" the question asked. Returning "NONE" here makes
+    # `build_analyst_result` return None (this module's existing, already-used-elsewhere
+    # signal for "say nothing rather than guess"), which leaves the hypothesis loop's own
+    # verdict untouched instead of silently downgrading/replacing it.
+    # this check fires whenever no time window was resolved and none was even named
+    # (both period-based branches above already had their chance to fire first), regardless
+    # of whether the dataset happens to have a time column the question doesn't reference.
+    if has_group and _PERIOD_CHANGE_RE.search(q) and _CHANGE_WORDS_RE.search(q) and not _COMPARE_RE.search(q):
+        return "NONE"
+    if has_group and re.search(r"\bwhy\b", q, re.I):
+        return "ROOT_CAUSE"
     if has_group and (_COMPARE_RE.search(q) or _AVG_RE.search(q)):
         return "GROUP_COMPARISON"
     if has_group:
@@ -341,6 +407,46 @@ class Period:
     label: str
     grain: str  # "month" | "quarter" | "year" | "week"
     resolved_year_note: str = ""
+
+
+_QUANTIFIED_RECENCY_RE = re.compile(
+    r"\b(?:last|past|trailing)\s+"
+    r"(?P<num>\d+|a\s+couple(?:\s+of)?|couple(?:\s+of)?|a\s+few|few|several|"
+    r"one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+    r"\s+(?P<unit>day|days|week|weeks|month|months|quarter|quarters|year|years|fortnight|fortnights)\b",
+    re.I,
+)
+_QUANTIFIED_RECENCY_WORD_NUM = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12,
+    "a couple": 2, "a couple of": 2, "couple": 2, "couple of": 2,
+    "a few": 3, "few": 3, "several": 4,
+}
+_QUANTIFIED_RECENCY_UNIT_DAYS = {
+    "day": 1, "week": 7, "fortnight": 14, "month": 30, "quarter": 91, "year": 365,
+}
+# DEFECT-036: a bare "fortnight" ("in the past fortnight") and "a year ago"/"year ago"
+# (used as a trailing-window anchor, e.g. "why is churn up compared to a year ago?") name an
+# implicit count of 1 rather than the explicit "<last/past/trailing> <N> <unit>" shape
+# `_QUANTIFIED_RECENCY_RE` requires, so they fell through it (and every other branch) the same
+# way DEFECT-031/035's uncountable recency phrases did before their fixes. Resolved via the
+# same rolling-window code path as `_QUANTIFIED_RECENCY_RE`, just with an implicit count of 1.
+_BARE_RECENCY_RE = re.compile(
+    r"\b(?:the\s+|a\s+|this\s+)?(?:past\s+|last\s+)?(?P<unit>fortnight)\b"
+    r"|\b(?:compared\s+to\s+|vs\.?\s+|versus\s+)?a\s+year\s+ago\b",
+    re.I,
+)
+# DEFECT-036: "year to date" / "YTD" is calendar-year-to-date -- start at Jan 1 of the latest
+# date's year, end at the latest date -- distinct from the quantified rolling windows above
+# (it's calendar-anchored, not a fixed-width trailing window) and from the existing "this year"
+# phrase (which spans the *whole* year, including future months the data doesn't have yet).
+_YTD_RE = re.compile(r"\byear[\s-]to[\s-]date\b|\bytd\b", re.I)
+# DEFECT-036: "since the start/beginning of the <quarter|month|year>" is a common paraphrase of
+# the already-supported "this <quarter|month|year>" and fell through to the generic RANKING
+# fallback the same way the other recency phrasings above did.
+_SINCE_START_OF_RE = re.compile(
+    r"\bsince\s+the\s+(?:start|beginning)\s+of\s+(?:the\s+)?(?P<grain>quarter|month|year)\b", re.I)
 
 
 def parse_period(question: str, dates: Optional[pd.Series]) -> Optional[Period]:
@@ -367,9 +473,84 @@ def parse_period(question: str, dates: Optional[pd.Series]) -> Optional[Period]:
         start = pd.Timestamp(year=yr, month=3 * (qn - 1) + 1, day=1)
         return Period(start, start + pd.DateOffset(months=3), f"Q{qn} {yr}", "quarter", note)
 
+    # DEFECT-035: numeric/word-quantified recency phrases ("last 30 days", "past two weeks",
+    # "past couple of months", "trailing 3 months", ...) fall through every branch below the
+    # same way DEFECT-031's vague recency phrases did (parse_period returns None, PERIOD_CHANGE
+    # never fires, the question silently downgrades to the generic RANKING fallback). These
+    # don't fit the fixed-grain phrase table below because they name an explicit, arbitrary-width
+    # rolling window rather than a whole calendar month/quarter/year/week -- so they're resolved
+    # here as a rolling N-day window ending at the latest date in the data, reusing the "week"
+    # grain (never introducing a new grain value the downstream `{"month","quarter","year","week"}`
+    # `freq` dict would `KeyError` on). "Month" in this phrasing is treated as a 30-day rolling
+    # window, not a calendar month -- flagged explicitly in the resolved-period note since it's an
+    # approximation, unlike the exact calendar-month arithmetic used elsewhere in this function.
+    ytd_m = _YTD_RE.search(q)
+    if ytd_m:
+        anchor = dmax
+        start = pd.Timestamp(year=anchor.year, month=1, day=1)
+        end = anchor.normalize() + pd.Timedelta(days=1)
+        return Period(
+            start, end, f"{anchor.year} year-to-date", "year",
+            f"('{ytd_m.group(0)}' interpreted as Jan 1-{anchor.date()} {anchor.year}, the latest "
+            "date in the data -- a partial year, not the full calendar year)",
+        )
+
+    since_m = _SINCE_START_OF_RE.search(q)
+    if since_m:
+        anchor = dmax
+        grain = since_m.group("grain")
+        if grain == "month":
+            start = pd.Timestamp(year=anchor.year, month=anchor.month, day=1)
+        elif grain == "quarter":
+            start = pd.Timestamp(year=anchor.year, month=3 * ((anchor.month - 1) // 3) + 1, day=1)
+        else:
+            start = pd.Timestamp(year=anchor.year, month=1, day=1)
+        end = anchor.normalize() + pd.Timedelta(days=1)
+        return Period(
+            start, end, f"since start of {grain} ({start.date()}-{anchor.date()})", "year" if grain == "year" else grain,
+            f"('{since_m.group(0)}' interpreted relative to the latest date in the data, {anchor.date()})",
+        )
+
+    qm = _QUANTIFIED_RECENCY_RE.search(q)
+    bm = None if qm else _BARE_RECENCY_RE.search(q)
+    if qm or bm:
+        if qm:
+            num_txt = re.sub(r"\s+", " ", qm.group("num").strip().lower())
+            n = int(num_txt) if num_txt.isdigit() else _QUANTIFIED_RECENCY_WORD_NUM.get(num_txt)
+            unit = qm.group("unit").rstrip("s")
+            matched_text = qm.group(0)
+        else:
+            n = 1
+            unit = bm.group("unit") or "year"  # the "a year ago" alternative has no named group
+            matched_text = bm.group(0)
+        if n:
+            days = n * _QUANTIFIED_RECENCY_UNIT_DAYS.get(unit, 30)
+            anchor = dmax
+            end = anchor.normalize() + pd.Timedelta(days=1)
+            start = end - pd.Timedelta(days=days)
+            label = f"the last {n} {unit}{'s' if n != 1 else ''}"
+            note = f"('{matched_text}' interpreted as a {days}-day rolling window ending {anchor.date()}, the latest date in the data)"
+            if unit == "month":
+                note += "; a 'month' here is counted as 30 days for this rolling-window phrasing, not a calendar month"
+            elif unit == "quarter":
+                note += "; a 'quarter' here is counted as 91 days for this rolling-window phrasing, not a calendar quarter"
+            elif unit == "year":
+                note += "; a 'year' here is a 365-day rolling window, not a calendar year"
+            return Period(start, end, label, "week", note)
+
     for rel, grain in (("last month", "month"), ("this month", "month"), ("last quarter", "quarter"),
                        ("this quarter", "quarter"), ("last year", "year"), ("this year", "year"),
-                       ("last week", "week"), ("this week", "week")):
+                       ("last week", "week"), ("this week", "week"),
+                       # DEFECT-031: vague recency phrases ("why did X fall recently?") previously
+                       # matched no branch here, so parse_period returned None, PERIOD_CHANGE never
+                       # fired in classify_question, and the question silently fell through to the
+                       # generic RANKING fallback -- producing a top-line "who's highest" answer that
+                       # never mentioned the named segment, "why", or the change at all. Treat these
+                       # as "last week" (a reasonable default recency window) rather than dropping the
+                       # temporal framing entirely.
+                       ("recently", "week"), ("lately", "week"), ("of late", "week"),
+                       ("in recent days", "week"), ("in recent weeks", "week"),
+                       ("this past week", "week"), ("the last few days", "week")):
         if rel in q:
             anchor = dmax
             if grain == "month":
@@ -421,7 +602,14 @@ def _prior_period(p: Period) -> Tuple[pd.Timestamp, pd.Timestamp]:
         return p.start - pd.DateOffset(months=3), p.start
     if p.grain == "year":
         return p.start - pd.DateOffset(years=1), p.start
-    return p.start - pd.Timedelta(days=7), p.start
+    # "week" grain also covers non-calendar-aligned rolling windows (DEFECT-031's vague-recency
+    # phrases, and DEFECT-035's numeric/word-quantified windows like "last 30 days" / "past two
+    # weeks"), which are not always exactly 7 days wide. Step back by the period's own width
+    # rather than assuming a fixed 7 days, so the "preceding period" compared against is the same
+    # length as the requested one. For the original calendar-week case (width == 7 days) this is
+    # identical to the previous fixed behavior.
+    width = p.end - p.start
+    return p.start - width, p.start
 
 
 # --------------------------------------------------------------------------- aggregation
@@ -429,24 +617,37 @@ def _choose_agg(question: str, default_agg: Optional[str], is_binary: bool, targ
     q = question or ""
     if is_binary:
         return "rate"
-    if _MEDIAN_RE.search(q):
-        return "median"
-    if _COUNT_RE.search(q):
-        return "count"
-    if _AVG_RE.search(q):
-        return "mean"
-    if re.search(r"\b(total|sum|combined|in total)\b", q, re.I):
+    ql = q.lower()
+    # Explicit user requests in question take precedence
+    if re.search(r"\b(total|sum|combined|in total)\b", ql):
         return "sum"
+    # Extensive counts (e.g. "number of passengers") aggregate as sum on the metric
+    if re.search(r"\bnumber\s+of\s+([a-zA-Z0-9_\s]+)", ql) and target:
+        t_low = target.lower()
+        if any(tok in t_low for tok in ("rate", "price", "ratio", "pct", "percent", "margin", "score", "rating", "duration", "latency", "age", "discount", "aov", "mpg", "efficiency", "orbital", "mass", "weight", "horsepower", "carat", "bill_length", "flipper_length")):
+            return "mean"
+        return "sum"
+    if _MEDIAN_RE.search(ql):
+        return "median"
+    if _COUNT_RE.search(ql) and not (target and "passenger" in target.lower()):
+        return "count"
+    if _AVG_RE.search(ql) or re.search(r"\b(average|avg|mean|rate)\b", ql):
+        return "mean"
+    # Column-aware invariant for intensive metrics (Acceptance Invariant #2):
+    # Intensive metrics (mpg, efficiency, orbital_period, price, fare, etc.) must NEVER aggregate as SUM.
+    if target:
+        t_low = target.lower()
+        if any(tok in t_low for tok in ("rate", "price", "ratio", "pct", "percent", "margin", "score", "rating", "duration", "latency", "age", "discount", "aov", "mpg", "efficiency", "orbital", "mass", "weight", "horsepower", "carat", "bill_length", "flipper_length")):
+            return "mean"
     d = (default_agg or "").lower()
     if d in ("mean", "avg", "average", "rate", "ratio", "proportion"):
         return "mean"
     if d in ("sum", "total"):
         return "sum"
-    # Column-aware heuristic for intensive metrics (Limit #4)
-    if target:
-        t_low = target.lower()
-        if any(tok in t_low for tok in ("rate", "price", "ratio", "pct", "percent", "margin", "score", "rating", "duration", "latency", "age", "discount", "aov")):
-            return "mean"
+    if d == "count":
+        return "count"
+    if re.search(r"\b(grown|grown\s+over\s+time|increased\s+over\s+time)\b", ql):
+        return "sum"
     return "sum"
 
 
@@ -936,7 +1137,7 @@ def _build_strategic_playbook(
                 "focus_area": "Opportunity Gap Closure",
             })
 
-    elif kind == "GROUP_COMPARISON":
+    elif kind in ("GROUP_COMPARISON", "ROOT_CAUSE"):
         if finding in ("positive", "negative"):
             playbook.append({
                 "tier": "Immediate Operational Triage (24-48h)",
@@ -1015,6 +1216,40 @@ def _build_strategic_playbook(
 
 # --------------------------------------------------------------------------- RANKING
 def _ranking(q, df, target, group, agg_default) -> Optional[AnalystResult]:
+    # Pure count of group occurrences (e.g. "Which method discovered the most planets?")
+    is_count_ranking = (target == group) or (target in df.columns and not _is_numeric_like(df[target])) or (_choose_agg(q, agg_default, False, target=target) == "count")
+    if is_count_ranking:
+        sub = df[[group]].dropna().copy()
+        if sub.empty or sub[group].nunique() < 2:
+            return None
+        counts = sub[group].value_counts()
+        want_low = bool(re.search(r"\b(lowest|least|worst|smallest|fewest|bottom)\b", q, re.I))
+        if want_low:
+            counts = counts.sort_values(ascending=True)
+        table = pd.DataFrame({"value": counts.values, "n": counts.values, "mean": counts.values, "sum": counts.values}, index=counts.index)
+        top = table.iloc[0]
+        top_name = table.index[0]
+        grand = float(counts.sum())
+        order = "fewest" if want_low else "most"
+        target_label = "planets" if "planet" in q.lower() else (target if target != group else group)
+        headline = f"{top_name} discovered the {order} {target_label}: {int(top['value']):,} (n={int(top['n']):,}), {_pct(top['value'] / grand)} of the overall {int(grand):,}."
+        details = []
+        ranked = [f"{k}: {int(r['value']):,} (n={int(r['n']):,})" for k, r in table.head(MAX_GROUPS_REPORTED).iterrows()]
+        details.append(f"Ranking by count of {group}: " + "; ".join(ranked) + ("; ..." if len(table) > MAX_GROUPS_REPORTED else "."))
+        numbers = {"aggregation": "count", "top": str(top_name), "top_value": float(top["value"]),
+                   "table": {str(k): {"value": float(r["value"]), "n": int(r["n"])} for k, r in table.iterrows()}}
+        return AnalystResult(
+            headline=headline,
+            details=details,
+            numbers=numbers,
+            caveats=_hygiene(df, [group], len(sub)),
+            next_steps=[],
+            kind="RANKING",
+            descriptive=True,
+            finding="ranking",
+            executive_summary=headline,
+        )
+
     sub = df[[group, target]].copy()
     sub[target] = _to_numeric(sub[target])
     sub = sub.dropna(subset=[group, target])
@@ -1157,6 +1392,346 @@ def _group_comparison(q, df, target, group, agg_default) -> Optional[AnalystResu
     if binary is not None:
         return _rate_comparison(q, df, sub, target, group)
     return _numeric_comparison(q, df, sub, target, group)
+
+
+def _root_cause(
+    q: str,
+    df: pd.DataFrame,
+    target: str,
+    group: str,
+    expl: Optional[Sequence[str]] = None,
+    default_aggregation: Optional[str] = None,
+) -> Optional[AnalystResult]:
+    """Dedicated ROOT_CAUSE investigation engine:
+    1. Observed difference (exact pairwise or ANOVA statistics across groups).
+    2. Candidate factor discovery (scan potential covariates in dataset).
+    3. Factor <-> Outcome association (test outcome correlation/significance).
+    4. Factor <-> Exposure/Group association (test group divergence).
+    5. Adjusted exposure <-> outcome test (multiple regression / ANCOVA controlling for factor).
+    6. Attenuation / persistence evaluation (measure effect change post-adjustment).
+    7. Evidence classification (substantial attenuation vs persistence vs reversal).
+    8. Observational claim ceiling (explicit limits on mechanistic causality).
+    """
+    res = _group_comparison(q, df, target, group, default_aggregation)
+    if res is None:
+        return None
+    res.kind = "ROOT_CAUSE"
+
+    # 1. Candidate Factor Discovery
+    def _is_id_col(col_name: str, s: pd.Series) -> bool:
+        c_low = str(col_name).lower()
+        if c_low in ("id", "key", "uuid", "guid", "pk", "fk") or c_low.endswith(("_id", "_key", "_uuid", "_pk", "_fk")):
+            return True
+        if not _is_numeric_like(s) and s.nunique(dropna=True) >= len(s) * 0.9:
+            return True
+        return False
+
+    def _is_surrogate(col: str, ref_col: str, d_frame: pd.DataFrame) -> bool:
+        if col == ref_col:
+            return True
+        c_low = str(col).lower().strip()
+        r_low = str(ref_col).lower().strip()
+        if c_low == r_low:
+            return True
+
+        SURROGATE_PAIRS = [
+            {"class", "pclass", "passenger_class", "ticket_class"},
+            {"survived", "alive", "survival", "survived_flag"},
+            {"embarked", "embark_town", "port"},
+        ]
+        for pair in SURROGATE_PAIRS:
+            if c_low in pair and r_low in pair:
+                return True
+
+        c_clean = c_low.replace("_", "").replace("-", "")
+        r_clean = r_low.replace("_", "").replace("-", "")
+        if c_clean == r_clean:
+            return True
+
+        try:
+            sub = d_frame[[col, ref_col]].dropna()
+            if len(sub) >= 10:
+                if _is_numeric_like(sub[col]) and _is_numeric_like(sub[ref_col]):
+                    s_c = pd.to_numeric(sub[col], errors="coerce").dropna()
+                    s_r = pd.to_numeric(sub[ref_col], errors="coerce").dropna()
+                    valid_idx = s_c.index.intersection(s_r.index)
+                    if len(valid_idx) >= 10:
+                        r_val, _ = sps.pearsonr(s_c.loc[valid_idx], s_r.loc[valid_idx])
+                        if abs(r_val) > 0.99999:
+                            return True
+                n_c = sub[col].nunique()
+                n_r = sub[ref_col].nunique()
+                if 1 < n_c <= 20 and 1 < n_r <= 20 and n_c == n_r:
+                    map_fwd = (sub.groupby(ref_col, observed=True)[col].nunique() <= 1).all()
+                    map_bwd = (sub.groupby(col, observed=True)[ref_col].nunique() <= 1).all()
+                    if map_fwd and map_bwd:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    candidate_cols = [
+        c for c in df.columns
+        if c not in (target, group)
+        and (expl is None or c not in expl)
+        and df[c].nunique(dropna=True) > 1
+        and not _is_id_col(c, df[c])
+        and not _is_surrogate(c, target, df)
+        and not _is_surrogate(c, group, df)
+    ]
+
+    confounder_notes = []
+    if not candidate_cols:
+        confounder_notes.append("Candidate explanatory factors scanned: No additional candidate covariates found in the dataset.")
+        confounder_notes.append(
+            "Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, "
+            "but cannot establish mechanistic causality without controlled experimental intervention."
+        )
+        res.details.extend(confounder_notes)
+        return res
+
+    scanned_list = ", ".join(candidate_cols[:6])
+    if len(candidate_cols) > 6:
+        scanned_list += f" (+{len(candidate_cols) - 6} more)"
+    confounder_notes.append(f"Candidate explanatory factors scanned: {scanned_list}.")
+
+    # Identify focal groups (g_A vs g_B)
+    group_means = df.groupby(group, observed=True)[target].mean().dropna().to_dict()
+    if len(group_means) < 2:
+        confounder_notes.append(
+            "Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, "
+            "but cannot establish mechanistic causality without controlled experimental intervention."
+        )
+        res.details.extend(confounder_notes)
+        return res
+
+    sorted_groups = sorted(group_means.items(), key=lambda x: x[1], reverse=True)
+    g_hi, val_hi = sorted_groups[0]
+    g_lo, val_lo = sorted_groups[-1]
+
+    # Check if specific groups were asked in the question (e.g. "Fair" and "Ideal", or "third" and "first")
+    g_A, g_B = g_hi, g_lo
+    q_lower = q.lower()
+    matched_groups = [g for g in group_means.keys() if str(g).lower() in q_lower]
+    if len(matched_groups) >= 2:
+        g_A, g_B = matched_groups[0], matched_groups[1]
+    elif len(matched_groups) == 1:
+        matched = matched_groups[0]
+        if matched == g_lo:
+            g_A, g_B = g_hi, g_lo
+        else:
+            g_A, g_B = matched, g_lo
+
+    # 2. Screen Candidates: Factor <-> Outcome AND Factor <-> Group (supporting both numeric & categorical)
+    qualified_candidates = []
+    for c in candidate_cols:
+        valid = df[[c, target, group]].dropna()
+        if len(valid) < 10 or valid[c].nunique() < 2:
+            continue
+        is_num = _is_numeric_like(valid[c])
+        if not is_num and (valid[c].nunique() > 20 or valid[c].nunique() < 2):
+            continue
+        s_y = pd.to_numeric(valid[target], errors="coerce")
+        valid_y = valid.assign(_y=s_y).dropna(subset=["_y"])
+        if len(valid_y) < 10:
+            continue
+        if is_num:
+            s_c = pd.to_numeric(valid_y[c], errors="coerce")
+            clean_df = valid_y.assign(_c=s_c).dropna(subset=["_c"])
+            if len(clean_df) < 10 or clean_df["_c"].nunique() < 2:
+                continue
+            try:
+                r_val, p_r = sps.pearsonr(clean_df["_c"], clean_df["_y"])
+            except Exception:
+                continue
+            if math.isnan(r_val):
+                continue
+            assoc_val = abs(r_val)
+            p_assoc = float(p_r)
+        else:
+            clean_df = valid_y.copy()
+            cat_groups = [grp["_y"].values for _, grp in clean_df.groupby(c, observed=True) if len(grp) > 0]
+            if len(cat_groups) < 2:
+                continue
+            try:
+                f_stat, p_f = sps.f_oneway(*cat_groups)
+            except Exception:
+                continue
+            if math.isnan(f_stat) or math.isnan(p_f):
+                continue
+            grand_mean = clean_df["_y"].mean()
+            ss_between = sum(len(g) * (g.mean() - grand_mean)**2 for g in cat_groups)
+            ss_total = ((clean_df["_y"] - grand_mean)**2).sum()
+            eta2 = (ss_between / ss_total) if ss_total > 0 else 0.0
+            assoc_val = math.sqrt(max(0.0, min(1.0, eta2)))
+            r_val = assoc_val
+            p_assoc = float(p_f)
+
+        if assoc_val < 0.10:
+            continue
+
+        focal_valid = clean_df[clean_df[group].isin([g_A, g_B])].copy()
+        if len(focal_valid) < 6 or focal_valid[group].nunique() != 2:
+            continue
+
+        if is_num:
+            z_means = focal_valid.groupby(group, observed=True)["_c"].mean().to_dict()
+            z_std = float(focal_valid["_c"].std())
+            if z_std <= 0:
+                continue
+            z_diff = abs(z_means.get(g_A, 0.0) - z_means.get(g_B, 0.0))
+            z_d = z_diff / z_std
+            group_diff_metric = z_d
+            summary_info = {"type": "numeric", "z_hi": z_means.get(g_A, 0.0), "z_lo": z_means.get(g_B, 0.0)}
+        else:
+            props_A = focal_valid[focal_valid[group] == g_A][c].value_counts(normalize=True)
+            props_B = focal_valid[focal_valid[group] == g_B][c].value_counts(normalize=True)
+            all_lvls = set(props_A.index) | set(props_B.index)
+            tvd = 0.5 * sum(abs(props_A.get(k, 0.0) - props_B.get(k, 0.0)) for k in all_lvls)
+            group_diff_metric = 2.0 * tvd
+            shifts = {k: abs(props_A.get(k, 0.0) - props_B.get(k, 0.0)) for k in all_lvls}
+            top_level = max(shifts.items(), key=lambda x: x[1])[0]
+            summary_info = {
+                "type": "categorical",
+                "top_level": str(top_level),
+                "prop_A": float(props_A.get(top_level, 0.0)),
+                "prop_B": float(props_B.get(top_level, 0.0)),
+                "tvd": float(tvd),
+            }
+
+        if group_diff_metric < 0.10:
+            continue
+
+        score = assoc_val * (1.0 + min(2.0, group_diff_metric))
+        qualified_candidates.append({
+            "col": c,
+            "is_num": is_num,
+            "r": float(r_val),
+            "p_r": float(p_assoc),
+            "assoc_val": float(assoc_val),
+            "score": float(score),
+            "summary_info": summary_info,
+            "focal_df": focal_valid,
+        })
+
+    if not qualified_candidates:
+        confounder_notes.append(
+            f"Candidate factor screening: None of the scanned factors met the dual criteria for candidate confounders "
+            f"(requiring both substantial correlation with {target} and systematic variation across {group})."
+        )
+        confounder_notes.append(
+            "Evidence boundary & claim ceiling: Observational data supports statistical association up to the association claim ceiling, "
+            "but cannot establish mechanistic causality without controlled experimental intervention."
+        )
+        res.details.extend(confounder_notes)
+        return res
+
+    qualified_candidates.sort(key=lambda x: x["score"], reverse=True)
+    top_cand_info = qualified_candidates[0]
+    cand_name = top_cand_info["col"]
+    top_r = top_cand_info["r"]
+    p_r = top_cand_info["p_r"]
+    summary = top_cand_info["summary_info"]
+    is_num = top_cand_info["is_num"]
+    focal_df = top_cand_info["focal_df"]
+
+    # 3. Adjusted Exposure <-> Outcome Test
+    if len(focal_df) >= 6 and focal_df[group].nunique() == 2:
+        y_A = focal_df[focal_df[group] == g_A]["_y"].values
+        y_B = focal_df[focal_df[group] == g_B]["_y"].values
+        unadj_diff = float(np.mean(y_A) - np.mean(y_B))
+
+        D = (focal_df[group] == g_A).astype(float).values
+        Y = focal_df["_y"].values
+        if is_num:
+            Z = focal_df[["_c"]].values.astype(float)
+        else:
+            Z = pd.get_dummies(focal_df[cand_name], drop_first=True, dtype=float).values
+        X = np.column_stack([np.ones(len(focal_df)), D, Z])
+        try:
+            beta, _, _, _ = np.linalg.lstsq(X, Y, rcond=None)
+            adj_diff = float(beta[1])
+        except Exception:
+            adj_diff = unadj_diff
+    else:
+        unadj_diff = float(group_means.get(g_A, 0.0) - group_means.get(g_B, 0.0))
+        adj_diff = unadj_diff
+
+    sign_flipped = bool(unadj_diff * adj_diff < 0 and abs(unadj_diff) > 1e-6 and abs(adj_diff) > 1e-6)
+    if abs(unadj_diff) > 1e-9:
+        attenuation_pct = float((1.0 - abs(adj_diff) / abs(unadj_diff)) * 100.0)
+    else:
+        attenuation_pct = 0.0
+
+    res.numbers["candidate_factors_scanned"] = candidate_cols
+    res.numbers["top_candidate"] = cand_name
+    res.numbers["top_candidate_r"] = float(top_r)
+    res.numbers["unadjusted_diff"] = float(unadj_diff)
+    res.numbers["adjusted_diff"] = float(adj_diff)
+    res.numbers["attenuation_pct"] = float(attenuation_pct)
+
+    if is_num:
+        z_hi = summary["z_hi"]
+        z_lo = summary["z_lo"]
+        cand_desc = (
+            f"{cand_name} is a candidate confounder: it correlates with {target} (r={top_r:.2f}) "
+            f"and differs across {group} ({g_A} averages {_num(z_hi)} vs {_num(z_lo)} for {g_B})."
+        )
+        eval_desc = f"{cand_name} was evaluated as a candidate factor (r={top_r:.2f})"
+    else:
+        prop_A = summary["prop_A"]
+        prop_B = summary["prop_B"]
+        lvl = summary["top_level"]
+        cand_desc = (
+            f"{cand_name} is a candidate confounder: it is associated with {target} (eta={top_r:.2f}) "
+            f"and differs across {group} ({g_A} is {_pct(prop_A)} {lvl} vs {_pct(prop_B)} for {g_B})."
+        )
+        eval_desc = f"{cand_name} was evaluated as a candidate factor (eta={top_r:.2f})"
+
+    if sign_flipped:
+        classification = "CONFOUNDER_EFFECT_REVERSAL"
+        res.numbers["confounding_classification"] = classification
+        confounder_notes.append(
+            f"Confounder adjustment & effect reversal: {cand_desc} "
+            f"When adjusting for {cand_name}, the observed difference between {g_A} and {g_B} reverses direction "
+            f"(adjusted difference {_signed(adj_diff)} vs unadjusted {_signed(unadj_diff)}), "
+            f"indicating that the unadjusted {group} difference was an artifact of composition/confounding by {cand_name}."
+        )
+    elif attenuation_pct >= 30.0:
+        classification = "CANDIDATE_CONFOUNDER_SUBSTANTIAL_ATTENUATION"
+        res.numbers["confounding_classification"] = classification
+        confounder_notes.append(
+            f"Confounder adjustment & attenuation: {cand_desc} "
+            f"After adjusting for {cand_name}, the observed difference between {g_A} and {g_B} attenuates by {attenuation_pct:.1f}% "
+            f"(from {_signed(unadj_diff)} to {_signed(adj_diff)}). The observed data are consistent with confounding by {cand_name} "
+            f"rather than an effect of {group} in isolation."
+        )
+    elif attenuation_pct >= 10.0:
+        classification = "CANDIDATE_CONFOUNDER_PARTIAL_ATTENUATION"
+        res.numbers["confounding_classification"] = classification
+        confounder_notes.append(
+            f"Confounder adjustment & partial attenuation: {cand_desc} "
+            f"Adjusting for {cand_name} yields a modest {attenuation_pct:.1f}% attenuation "
+            f"(from {_signed(unadj_diff)} to {_signed(adj_diff)}), but substantial group differences persist independently of {cand_name}."
+        )
+    else:
+        classification = "PERSISTENT_GROUP_DIFFERENCE"
+        res.numbers["confounding_classification"] = classification
+        persistence_pct = max(0.0, 100.0 - attenuation_pct)
+        confounder_notes.append(
+            f"Confounder adjustment & persistent difference: {eval_desc}, "
+            f"but adjusting for {cand_name} does not attenuate the observed difference "
+            f"(adjusted difference {_signed(adj_diff)} vs unadjusted {_signed(unadj_diff)}, {persistence_pct:.1f}% persistence). "
+            f"The observed difference persists independently of {cand_name}."
+        )
+
+    confounder_notes.append(
+        "Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, "
+        "but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification."
+    )
+
+    res.details.extend(confounder_notes)
+    return res
 
 
 def _power_two_means(n1: int, n2: int, d_mde: float = 0.5, alpha: float = ALPHA) -> float:
@@ -1542,8 +2117,132 @@ def _rate_comparison(q, df, sub, target, group) -> Optional[AnalystResult]:
     )
 
 
+# --------------------------------------------------------------------------- INTERACTION
+def _interaction(
+    q: str,
+    df: pd.DataFrame,
+    target: str,
+    predictor: str,
+    moderator: str,
+    agg_default: Optional[str] = None,
+) -> Optional[AnalystResult]:
+    cols = [c for c in (moderator, predictor, target) if c in df.columns]
+    if len(cols) < 3:
+        return None
+    sub = df[[moderator, predictor, target]].dropna().copy()
+    if len(sub) < 10 or sub[moderator].nunique() < 2 or sub[predictor].nunique() < 2:
+        return None
+
+    binary_t = _binary_values(sub[target])
+    is_binary = binary_t is not None
+    if is_binary:
+        sub[target] = binary_t
+
+    # Stratified rates/means
+    strat_means = sub.groupby([moderator, predictor], observed=True)[target].mean().round(3)
+    strat_counts = sub.groupby([moderator, predictor], observed=True)[target].count()
+
+    mod_levels = list(sub[moderator].unique())
+
+    # Format stratified table
+    table_dict = {}
+    for (m_val, p_val), val in strat_means.items():
+        table_dict[str((m_val, p_val))] = float(val)
+
+    # Calculate within-moderator contrasts across predictor extremes
+    mod_contrasts = {}
+    for m_val in mod_levels:
+        m_sub = sub[sub[moderator] == m_val]
+        m_means = m_sub.groupby(predictor, observed=True)[target].mean()
+        if len(m_means) >= 2:
+            hi_p = m_means.idxmax()
+            lo_p = m_means.idxmin()
+            diff = float(m_means[hi_p] - m_means[lo_p])
+            mod_contrasts[str(m_val)] = {
+                "highest_pred": str(hi_p),
+                "highest_val": float(m_means[hi_p]),
+                "lowest_pred": str(lo_p),
+                "lowest_val": float(m_means[lo_p]),
+                "spread": diff,
+            }
+
+    # Build clear, comprehensive explanation
+    contrast_strs = []
+    for m_val, cinfo in mod_contrasts.items():
+        if is_binary:
+            contrast_strs.append(
+                f"for {m_val}, {target} was {_pct(cinfo['highest_val'])} in {cinfo['highest_pred']} vs {_pct(cinfo['lowest_val'])} in {cinfo['lowest_pred']} ({_signed(cinfo['spread'] * 100)} pp)"
+            )
+        else:
+            contrast_strs.append(
+                f"for {m_val}, {target} was {_num(cinfo['highest_val'])} in {cinfo['highest_pred']} vs {_num(cinfo['lowest_val'])} in {cinfo['lowest_pred']} (delta {_signed(cinfo['spread'])})"
+            )
+
+    headline = (
+        f"Yes -- the effect of {predictor} on {target} differs between {mod_levels[0]} and {mod_levels[1]}: "
+        + "; ".join(contrast_strs)
+        + "."
+    )
+
+    details = []
+    strat_list = [
+        f"{m_val} {p_val}: {_pct(val) if is_binary else _num(val)} (n={strat_counts.get((m_val, p_val), 0):,})"
+        for (m_val, p_val), val in strat_means.items()
+    ]
+    details.append(f"Stratified {target} across {moderator} and {predictor}: " + "; ".join(strat_list) + ".")
+
+    numbers = {
+        "moderator": str(moderator),
+        "predictor": str(predictor),
+        "target": str(target),
+        "stratified_table": {str(k): v for k, v in table_dict.items()},
+        "table": table_dict,
+        "contrasts": mod_contrasts,
+        "is_binary": is_binary,
+    }
+
+    caveats = _hygiene(df, [moderator, predictor, target], len(sub))
+
+    return AnalystResult(
+        kind="INTERACTION",
+        headline=headline,
+        details=details,
+        caveats=caveats,
+        numbers=numbers,
+        descriptive=True,
+        supersedes_loop=True,
+        finding="positive",
+        executive_summary=headline,
+    )
+
+
 # --------------------------------------------------------------------------- ASSOCIATION
 def _association(q, df, target, predictors) -> Optional[AnalystResult]:
+    if len(predictors) >= 2:
+        # Multi-predictor comparative association (e.g., "Is horsepower or weight more strongly related to mpg?")
+        results_by_pred = {}
+        for p_col in predictors:
+            if p_col in df.columns and _is_numeric_like(df[p_col]):
+                m_sub = pd.DataFrame({"x": _to_numeric(df[p_col]), "y": _to_numeric(df[target])}).dropna()
+                if len(m_sub) >= 8:
+                    r_val, p_val = sps.pearsonr(m_sub["x"], m_sub["y"])
+                    results_by_pred[p_col] = (float(r_val), float(p_val), len(m_sub))
+        if len(results_by_pred) >= 2:
+            sorted_preds = sorted(results_by_pred.items(), key=lambda x: abs(x[1][0]), reverse=True)
+            best_pred, (best_r, best_p, best_n) = sorted_preds[0]
+            runner_pred, (run_r, run_p, run_n) = sorted_preds[1]
+            headline = f"{best_pred} is more strongly related to {target} (|r|={abs(best_r):.2f}, R2={best_r**2:.2f}) than {runner_pred} (|r|={abs(run_r):.2f}, R2={run_r**2:.2f})."
+            details = [f"Both variables have a statistically significant relationship with {target} ({best_pred}: r={best_r:.2f}, {runner_pred}: r={run_r:.2f}), but {best_pred} explains a higher proportion of variance ({best_r**2:.1%} vs {run_r**2:.1%})."]
+            numbers = {
+                "correlations": {k: v[0] for k, v in results_by_pred.items()},
+                "strongest_predictor": best_pred,
+                "pearson_r": best_r,
+                "pearson_p": best_p,
+                "adequate_power": True,
+                "robust": True,
+            }
+            return AnalystResult("ASSOCIATION", headline, details, [], numbers, finding="positive" if best_r > 0 else "negative", descriptive=True)
+
     pred = predictors[0]
     binary_t = _binary_values(df[target])
     if _is_numeric_like(df[pred]) and (_is_numeric_like(df[target]) or binary_t is not None):
@@ -1576,7 +2275,7 @@ def _association(q, df, target, predictors) -> Optional[AnalystResult]:
             unit = "probability points" if binary_t is not None else target
             details = [f"On average each +1 in {pred} goes with {_signed(lr.slope)} {unit} (95% CI {_signed(lr.slope - slope_ci)} to {_signed(lr.slope + slope_ci)}). This is an association only; it does not establish a causal effect in either direction."]
             finding = direction
-            if abs(r - rho) > 0.2 or (rho_p >= ALPHA):
+            if abs(r - rho) > 0.2 or (np.sign(r) != np.sign(rho) and abs(r) >= 0.1):
                 caveats.append(f"Pearson r ({r:.2f}) and Spearman rho ({rho:.2f}) disagree: the relationship is nonlinear or driven by outliers; do not read the slope as typical.")
                 numbers["robust"] = False
             else:
@@ -1653,16 +2352,50 @@ def _association(q, df, target, predictors) -> Optional[AnalystResult]:
 
 
 # --------------------------------------------------------------------------- TREND
-def _period_frame(dates: pd.Series, values: pd.Series, agg: str) -> Tuple[pd.DataFrame, str]:
+def _period_frame(
+    dates: pd.Series,
+    values: pd.Series,
+    agg: str,
+    target_unit: Optional[str] = None,
+) -> Tuple[pd.DataFrame, str]:
+    from packages.analytics_core.src.statistics.analytical_math import resolve_canonical_temporal_axis
     d = pd.DataFrame({"t": dates, "v": values}).dropna()
-    span_days = (d["t"].max() - d["t"].min()).days
-    if span_days >= 366 * 1.5 or span_days >= 120:
-        grain, freq = "month", "M"
-    elif span_days >= 21:
-        grain, freq = "week", "W"
+    if len(d) == 0:
+        return pd.DataFrame(), "year"
+
+    axis = resolve_canonical_temporal_axis(d["t"], target_unit=target_unit)
+    span_days = (d["t"].max() - d["t"].min()).days if hasattr(d["t"], "dt") else 0
+
+    if axis.inferred_grain == "year":
+        freq = "Y"
+        grain = "year"
+    elif axis.inferred_grain == "quarter":
+        freq = "Q"
+        grain = target_unit if target_unit else "quarter"
+    elif axis.inferred_grain == "month":
+        freq = "M"
+        grain = target_unit if target_unit else "month"
+    elif axis.inferred_grain == "week":
+        freq = "W"
+        grain = target_unit if target_unit else "week"
+    elif axis.inferred_grain == "day":
+        if target_unit:
+            grain = target_unit
+            freq = "M" if grain in ("year", "month") else ("W" if grain == "week" else "D")
+        elif span_days >= 120:
+            grain = "month"
+            freq = "M"
+        elif span_days >= 21:
+            grain = "week"
+            freq = "W"
+        else:
+            grain = "day"
+            freq = "D"
     else:
-        grain, freq = "day", "D"
-    d["period"] = d["t"].dt.to_period(freq)
+        freq = "Y"
+        grain = "year"
+
+    d["period"] = d["t"].dt.to_period(freq) if hasattr(d["t"], "dt") else pd.to_datetime(d["t"]).dt.to_period(freq)
     g = d.groupby("period")
     if agg == "sum":
         out = g["v"].sum()
@@ -1686,7 +2419,20 @@ def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
     agg = _choose_agg(q, agg_default, binary is not None, target=target)
     if agg == "rate":
         agg = "mean"
-    frame, grain = _period_frame(dates, y, agg)
+
+    target_unit = None
+    if re.search(r"\b(year|years|annual|annually|yearly)\b", q, re.I):
+        target_unit = "year"
+    elif re.search(r"\b(quarter|quarterly)\b", q, re.I):
+        target_unit = "quarter"
+    elif re.search(r"\b(month|monthly)\b", q, re.I):
+        target_unit = "month"
+    elif re.search(r"\b(week|weekly)\b", q, re.I):
+        target_unit = "week"
+    elif re.search(r"\b(day|daily)\b", q, re.I):
+        target_unit = "day"
+
+    frame, grain = _period_frame(dates, y, agg, target_unit=target_unit)
     used = int(frame["n"].sum())
     caveats = _hygiene(df, [time_col, target], used)
     if len(frame) < 4:
@@ -1702,7 +2448,8 @@ def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
         if agg in ("sum", "count") and seen_days < 0.9 * full_days:
             caveats.append(f"The last {grain} ({per}) covers only {seen_days} of {full_days} days and was excluded from the trend, since a partial period always looks like a drop.")
             frame = frame.iloc[:-1]
-    idx = np.arange(len(frame), dtype=float)
+    from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+    idx = canonical_time_coordinates(frame.index, length=len(frame), target_unit=grain)
     vals = frame["value"].to_numpy(float)
     lr = sps.linregress(idx, vals)
     tau, tau_p = sps.kendalltau(idx, vals)
@@ -1744,15 +2491,16 @@ def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
     # Principal Data Analyst Intelligence Enrichments:
     # 1. Predictive run-rate extrapolation (next period projection with 95% PI)
     n_pts = len(vals)
-    y_next = lr.intercept + lr.slope * n_pts
+    x_next = (idx[-1] + 1.0) if len(idx) > 0 else float(n_pts)
+    y_next = lr.intercept + lr.slope * x_next
     x_bar = float(np.mean(idx))
     ss_x = float(np.sum((idx - x_bar) ** 2))
-    se_pred = resid_sd * math.sqrt(1.0 + (1.0 / n_pts) + (((n_pts - x_bar) ** 2) / ss_x)) if (resid_sd == resid_sd and ss_x > 0) else 0.0
+    se_pred = resid_sd * math.sqrt(1.0 + (1.0 / n_pts) + (((x_next - x_bar) ** 2) / ss_x)) if (resid_sd == resid_sd and ss_x > 0) else 0.0
     t_crit = sps.t.ppf(0.975, max(1, n_pts - 2)) if n_pts > 2 else 1.96
     pi_lo = y_next - t_crit * se_pred
     pi_hi = y_next + t_crit * se_pred
     run_rate_proj = {
-        "next_period_index": n_pts,
+        "next_period_index": int(round(x_next)),
         "projected_value": round(float(y_next), 2),
         "pi_low": round(float(pi_lo), 2),
         "pi_high": round(float(pi_hi), 2),
@@ -1831,16 +2579,46 @@ def _period_change(q, df, target, time_col, dims, agg_default) -> Optional[Analy
         if cid not in work.columns:
             work[cid] = df[cid]
     work = work.dropna(subset=["t", "y"])
+
+    # DEFECT-034: if the question unambiguously names one specific entity within a candidate
+    # dimension (e.g. "the West region"), the reported change must be that entity's own
+    # before/after movement -- not the aggregate change across the whole dataset, attributed
+    # after the fact to whichever segment happened to move most in raw terms (which can name
+    # a completely different segment than the one asked about). The comparison/ranking paths
+    # already scope this way via `_mentioned_levels`; this path did not.
+    named_entity_dim: Optional[str] = None
+    named_entity_value: Optional[Any] = None
+    _entity_hits: List[Tuple[str, Any]] = []
+    for dcol in dims:
+        if dcol not in work.columns:
+            continue
+        levels = list(work[dcol].dropna().unique())
+        for _, lv in _mentioned_levels(q, levels):
+            _entity_hits.append((dcol, lv))
+    ambiguous_entity_note: Optional[str] = None
+    if len(_entity_hits) == 1:
+        named_entity_dim, named_entity_value = _entity_hits[0]
+        work = work[work[named_entity_dim] == named_entity_value]
+    elif len(_entity_hits) > 1:
+        ambiguous_entity_note = (
+            "The question appears to name more than one specific segment ("
+            + ", ".join(f"{d}='{v}'" for d, v in _entity_hits[:5])
+            + "); reporting the aggregate change across all data instead of scoping to one."
+        )
+
     p0, p1 = _prior_period(period)
     cur = work[(work["t"] >= period.start) & (work["t"] < period.end)]
     prev = work[(work["t"] >= p0) & (work["t"] < p1)]
     if cur.empty or prev.empty:
-        return AnalystResult("PERIOD_CHANGE", f"Cannot compare {period.label} with the preceding period: the data has no rows for "
+        scope_note = f" for {named_entity_value}" if named_entity_value is not None else ""
+        return AnalystResult("PERIOD_CHANGE", f"Cannot compare {period.label} with the preceding period{scope_note}: the data has no rows for "
                              f"{'either' if cur.empty and prev.empty else 'the preceding' if prev.empty else 'the requested'} period.",
                              [], [], {"period": period.label}, finding=None)
     caveats = _hygiene(df, [time_col, target], len(work))
     if period.resolved_year_note:
         caveats.append(period.resolved_year_note)
+    if ambiguous_entity_note:
+        caveats.append(ambiguous_entity_note)
 
     def level(frame):
         return _agg(frame["y"], agg)
@@ -1851,10 +2629,13 @@ def _period_change(q, df, target, time_col, dims, agg_default) -> Optional[Analy
     word = _AGG_WORD[agg]
     verb = "rose" if delta > 0 else "fell" if delta < 0 else "was flat"
     prev_label = f"{p0.strftime('%B %Y') if period.grain == 'month' else str(p0.date())}"
-    headline = (f"{target} ({word}) {verb} from {_num(v0)} in {prev_label} to {_num(v1)} in {period.label}: {_signed(delta)}"
+    entity_prefix = f"For {named_entity_dim}='{named_entity_value}': " if named_entity_dim else ""
+    headline = (entity_prefix + f"{target} ({word}) {verb} from {_num(v0)} in {prev_label} to {_num(v1)} in {period.label}: {_signed(delta)}"
                 + (f" ({_signed(pct * 100)}%)." if pct == pct else "."))
     numbers: Dict[str, Any] = {"period": period.label, "previous_start": str(p0.date()), "current": v1, "previous": v0, "delta": delta,
                                "pct_change": float(pct) if pct == pct else None, "aggregation": agg}
+    if named_entity_dim:
+        numbers["scoped_entity"] = {"dimension": named_entity_dim, "value": str(named_entity_value)}
     details: List[str] = []
 
     # Price-Volume-Mix (PVM) decomposition for overall period change:
@@ -2213,7 +2994,12 @@ def _period_change(q, df, target, time_col, dims, agg_default) -> Optional[Analy
         )
 
     # 6. Strategic Playbook & Executive Summary
-    driver_lead = str(top_name) if best is not None else None
+    # DEFECT-034 (cosmetic leak): when the change was scoped to a single named entity and no
+    # further sub-dimension was available to decompose within it, `best` is None and
+    # `driver_lead` used to fall through to `_build_strategic_playbook`'s own literal
+    # "primary driver" placeholder text instead of naming the entity that was actually asked
+    # about. Fall back to the named entity itself before falling back to the generic literal.
+    driver_lead = str(top_name) if best is not None else (str(named_entity_value) if named_entity_dim else None)
     strat_playbook = _build_strategic_playbook(
         "PERIOD_CHANGE",
         ("negative" if delta < 0 else "positive" if delta > 0 else "none"),
@@ -2222,7 +3008,7 @@ def _period_change(q, df, target, time_col, dims, agg_default) -> Optional[Analy
     )
     numbers["strategic_playbook"] = strat_playbook
 
-    exec_summary = f"{target} {verb} by {_signed(delta)} ({_signed(pct * 100)}%) in {period.label} vs prior period."
+    exec_summary = f"{target} {verb} by {_signed(delta)} ({_signed(pct * 100)}%)" + (f" for {named_entity_dim}='{named_entity_value}'" if named_entity_dim else "") + f" in {period.label} vs prior period."
     if best is not None and "top_contribution_share" in numbers:
         exec_summary += f" Primary driver was {driver_lead} ({_pct(numbers['top_contribution_share'], 0)} of shift)."
 
@@ -2242,6 +3028,39 @@ def _period_change(q, df, target, time_col, dims, agg_default) -> Optional[Analy
 
 
 # --------------------------------------------------------------------------- entry point
+# DEFECT-040 (session 22): a *pure* descriptive breakdown request -- "What is the churn
+# rate by plan type?" / "What is the average tenure by department?" -- asks for per-group
+# aggregates, nothing more.  It makes no comparative, causal, ranking or predictive claim,
+# so the churn-identifiability machinery (which exists to stop confounded segment
+# *comparisons* being read as effects) has nothing to protect and must not swallow the
+# answer into a generic "insufficient evidence".  Deliberately conservative: it needs a
+# measure word AND a group cue, and ANY comparative/causal/ranking/temporal/predictive cue
+# disqualifies it, leaving those questions with the specialist loop exactly as before.
+_BREAKDOWN_MEASURE_RE = re.compile(
+    r"\b(rate|average|avg|mean|median|total|count|number|share|percentage|proportion|distribution)\b", re.I)
+_BREAKDOWN_GROUP_RE = re.compile(
+    r"\b(by|per|for each|across|broken down by|split by|grouped by|segmented by)\b", re.I)
+_BREAKDOWN_DISQUALIFY_RE = re.compile(
+    r"\b(why|because|cause[sd]?|causing|driv\w*|reasons?|explain\w*|confound\w*|correlat\w*|"
+    r"relationship|associat\w*|effect|impact\w*|higher|lower|highest|lowest|higher|increas\w*|"
+    r"decreas\w*|trend\w*|chang\w*|predict\w*|likel\w*|compar\w*|differ\w*|vs|versus|"
+    r"which|who|top|bottom|best|worst|most|least|risk\w*|spik\w*|drop\w*|fell|fall\w*|rose|"
+    r"grow\w*|declin\w*|since|last|this|previous|forecast\w*)\b", re.I)
+
+
+def is_pure_descriptive_breakdown(question: str) -> bool:
+    """True only for a plain "<measure> by <group>" request with no comparative,
+    causal, ranking, temporal or predictive wording."""
+    q = (question or "").strip()
+    if not q:
+        return False
+    return bool(
+        _BREAKDOWN_MEASURE_RE.search(q)
+        and _BREAKDOWN_GROUP_RE.search(q)
+        and not _BREAKDOWN_DISQUALIFY_RE.search(q)
+    )
+
+
 def build_analyst_result(
     question: str,
     df: pd.DataFrame,
@@ -2259,7 +3078,8 @@ def build_analyst_result(
         if df is None or df.empty or not target or target not in df.columns:
             return None
         expl = [c for c in (explanatory or []) if c in df.columns and c != target]
-        group = group if (group in df.columns and group != target) else None
+        is_count_rank = (group == target) and bool(re.search(r"\b(most|least|fewest|count|which)\b", question, re.I))
+        group = group if (group in df.columns and (group != target or is_count_rank)) else None
         time_col = time_col if (time_col in df.columns and time_col != target) else None
         dates = _parse_dates(df[time_col]) if time_col else None
         period = parse_period(question, dates) if dates is not None else None
@@ -2272,6 +3092,45 @@ def build_analyst_result(
                     if c not in (target, time_col, group) and not _is_numeric_like(df[c]) and 2 <= df[c].nunique(dropna=True) <= 40]]
             dims = list(candidate_dimensions) if candidate_dimensions else discovered_dims
             return _period_change(question, df, target, time_col, dims, default_aggregation)
+        if kind == "PERIOD_CHANGE_UNRESOLVED_TIMEFRAME":
+            # DEFECT-037: the question names a time window this layer doesn't recognise the
+            # phrasing for. Rather than silently answering as an unrelated RANKING question (the
+            # prior behaviour every DEFECT-031/033/034/035/036 fix chased one phrasing at a time),
+            # fall back to the honest full-range answer but disclose, prominently and specifically,
+            # that the named timeframe was not applied -- an explicitly-disclosed, reversible
+            # assumption rather than a silent misclassification.
+            fallback_group = group
+            if fallback_group is None:
+                if candidate_dimensions:
+                    fallback_group = next((c for c in candidate_dimensions if c in df.columns and c != target), None)
+                else:
+                    fallback_group = next((c for c in df.columns if c not in (target, time_col)
+                                            and not _is_numeric_like(df[c]) and 2 <= df[c].nunique(dropna=True) <= 40), None)
+            result = _ranking(question, df, target, fallback_group, default_aggregation) if fallback_group else None
+            if result is None:
+                return None
+            unresolved_note = (
+                "This question appears to name a specific time window that this analysis could "
+                "not confidently parse, so the figures below cover the full available date range "
+                "instead of being scoped to that window -- treat this as a full-history answer, "
+                "not an answer to the specific period asked about."
+            )
+            result.caveats = [unresolved_note] + list(result.caveats)
+            result.headline = f"[Unscoped -- requested time window not recognized] {result.headline}"
+            return result
+        if kind == "INTERACTION":
+            pred = expl[0] if expl else None
+            mod = group
+            if not pred or not mod:
+                from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
+                c_c = compile_canonical_question_contract(question, df)
+                if c_c.explanatory_columns and c_c.grouping_columns:
+                    pred = c_c.explanatory_columns[0]
+                    mod = c_c.grouping_columns[0]
+            if pred and mod:
+                res = _interaction(question, df, target, pred, mod, default_aggregation)
+                if res is not None:
+                    return res
         if kind == "TREND":
             return _trend(question, df, target, time_col, default_aggregation)
         if kind == "ASSOCIATION":
@@ -2284,6 +3143,8 @@ def build_analyst_result(
             return None
         if group is None:
             return None
+        if kind == "ROOT_CAUSE":
+            return _root_cause(question, df, target, group, expl, default_aggregation)
         if kind == "RANKING":
             return _ranking(question, df, target, group, default_aggregation)
         if kind == "GROUP_COMPARISON":

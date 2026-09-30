@@ -529,6 +529,12 @@ def assert_single_primary_per_identity(experiments: List[Any]) -> None:
         seen[ident] = getattr(exp, "code", "?")
 
 
+# Registry methods whose estimate is invariant to swapping which of the two
+# columns is called "outcome" vs "predictor" (numeric Pearson/Spearman-style
+# pair).  association_categorical_binary is directional and is NOT listed.
+SYMMETRIC_ASSOCIATION_METHODS = frozenset({"association_numeric"})
+
+
 def detect_plan_final_contract_conflicts(plan: Any, final: FinalAnalyticalContract) -> List[Dict[str, Any]]:
     """Compare the compiler PROPOSAL (plan) against the FINAL contract.
 
@@ -551,13 +557,41 @@ def detect_plan_final_contract_conflicts(plan: Any, final: FinalAnalyticalContra
         add("problem_class", plan_task, final.canonical_task, "BLOCKING")
 
     plan_target = getattr(sem, "target_column", None)
+    plan_preds = sorted(dict.fromkeys(getattr(sem, "explanatory_columns", None) or []))
+    final_preds = sorted(final.predictor_columns)
+
+    # DEFECT-039 (session 22): a symmetric bivariate association has no
+    # outcome/predictor direction.  "Is churn correlated with support tickets?"
+    # has the compiler naming (target=support_tickets, predictor=churned) while
+    # canonical semantic resolution names (target=churned, predictor=support_tickets)
+    # -- the SAME two columns with roles swapped.  Pearson/point-biserial are
+    # invariant to that swap, so it is not a disagreement about the analysis and
+    # must not fail-close a clean question.  Deliberately narrow: only the
+    # symmetric registry method (association_numeric), only exactly one column
+    # on each side, and only when the column *sets* are identical.  Any other
+    # difference (different columns, a directional method such as
+    # association_categorical_binary, multivariate OLS) keeps BLOCKING.
+    symmetric_role_swap = bool(
+        plan_target and final.target_column
+        and plan_target != final.target_column
+        and final.canonical_task == "ASSOCIATION"
+        and final.selected_method_code in SYMMETRIC_ASSOCIATION_METHODS
+        and len(plan_preds) == 1 and len(final_preds) == 1
+        and plan_preds[0] == final.target_column
+        and final_preds[0] == plan_target
+    )
+    if symmetric_role_swap:
+        add("target_column", plan_target, final.target_column, "OVERRIDDEN")
+        add("predictor_columns", plan_preds, final_preds, "OVERRIDDEN")
+        plan_target = None  # already recorded; skip the generic checks below
+        plan_preds = []
+        final_preds = []
+
     if plan_target and final.target_column and plan_target != final.target_column:
         add("target_column", plan_target, final.target_column, "BLOCKING")
     elif plan_target and not final.target_column:
         add("target_column", plan_target, None, "OVERRIDDEN")
 
-    plan_preds = sorted(dict.fromkeys(getattr(sem, "explanatory_columns", None) or []))
-    final_preds = sorted(final.predictor_columns)
     if plan_preds and final_preds and not set(final_preds).issubset(plan_preds):
         # The final contract holds a predictor the proposal never made: canonical
         # resolution may only narrow a proposal, never introduce one.

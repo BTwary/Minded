@@ -72,7 +72,7 @@ def test_money_alias_resolves_revenue_across_safe_customer_region_join():
     customers = pd.DataFrame({"customer_id":["C1","C2","C3"],"region":["North","South","North"]})
     from packages.analytics_core.src.engines.intent import IntentEngine
     from packages.analytics_core.src.engines.semantic import SemanticEngine
-    intent = IntentEngine.parse_intent("Which region made the most money?", available_columns=list(dict.fromKeys([*orders.columns,*customers.columns])))
+    intent = IntentEngine.parse_intent("Which region made the most money?", available_columns=list(dict.fromkeys([*orders.columns,*customers.columns])))
     resolution = SemanticEngine.resolve_schema_static(intent, {"orders":orders,"customers":customers})
     assert resolution.primary_dataset_name == "orders"
     assert resolution.target_metric_col == "revenue"

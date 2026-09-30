@@ -245,17 +245,55 @@ class BeliefEngine:
         )
 
     @staticmethod
-    def bayes_factor_trend(y: Sequence[float]) -> BayesianEvidence:
+    def bayes_factor_trend(y: Sequence[float], x: Optional[Sequence[float]] = None) -> BayesianEvidence:
         """Approximate BF10 for linear temporal trend vs intercept-only model."""
-        values = np.asarray(y, dtype=float)
-        values = values[np.isfinite(values)]
+        raw_vals = np.asarray(y, dtype=float)
+        mask = np.isfinite(raw_vals)
+        values = raw_vals[mask]
         n = int(len(values))
         if n < 8 or np.std(values) <= 0:
             return BayesianEvidence(1.0, "NEUTRAL_INADEQUATE_TREND", n, ("At least 8 finite time periods and non-zero variance are required.",))
-        x = np.arange(n, dtype=float)
-        slope, intercept = np.polyfit(x, values, 1)
+        if x is None:
+            return BayesianEvidence(
+                1.0,
+                "UNRESOLVED_TEMPORAL_COORDINATES",
+                n,
+                ("Explicit canonical temporal coordinates are required for trend evaluation.",),
+                diagnostic="missing_temporal_coordinates",
+            )
+        try:
+            x_arr = np.asarray(x, dtype=float)
+        except Exception as exc:
+            return BayesianEvidence(
+                1.0,
+                "INVALID_TEMPORAL_COORDINATES",
+                n,
+                (f"Failed to parse temporal coordinates: {exc}",),
+                diagnostic="invalid_temporal_coordinates",
+            )
+        if len(x_arr) == len(raw_vals):
+            x_coord = x_arr[mask]
+        elif len(x_arr) == n:
+            x_coord = x_arr
+        else:
+            return BayesianEvidence(
+                1.0,
+                "INVALID_TEMPORAL_COORDINATES_LENGTH",
+                n,
+                (f"Temporal coordinates length ({len(x_arr)}) does not match data length ({n}).",),
+                diagnostic=f"coordinate_length_mismatch: got {len(x_arr)}, expected {n}",
+            )
+        if not np.all(np.isfinite(x_coord)) or np.std(x_coord) <= 0:
+            return BayesianEvidence(
+                1.0,
+                "INVALID_TEMPORAL_COORDINATES",
+                n,
+                ("Temporal coordinates must be finite and contain non-zero variance.",),
+                diagnostic="degenerate_temporal_coordinates",
+            )
+        slope, intercept = np.polyfit(x_coord, values, 1)
         sse0 = float(np.sum((values - np.mean(values)) ** 2))
-        sse1 = float(np.sum((values - (slope * x + intercept)) ** 2))
+        sse1 = float(np.sum((values - (slope * x_coord + intercept)) ** 2))
         if sse1 <= 0:
             bf = 1e12
         else:
@@ -266,7 +304,7 @@ class BeliefEngine:
             bf,
             "BIC_GAUSSIAN_LINEAR_TREND",
             n,
-            ("Ordered observations are equally spaced after aggregation.", "Gaussian residuals with constant variance.", "BIC is used as an approximate Bayes factor."),
+            ("Ordered observations with temporal coordinates.", "Gaussian residuals with constant variance.", "BIC is used as an approximate Bayes factor."),
             diagnostic=f"slope={slope:.6g}",
         )
 
@@ -348,7 +386,15 @@ class BeliefEngine:
             numeric = [c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])]
             trend_col = effective_metric_col if effective_metric_col in numeric else (numeric[0] if len(numeric) == 1 else None)
             if trend_col is not None:
-                ev = BeliefEngine.bayes_factor_trend(frame[trend_col].to_numpy())
+                time_cols = [c for c in frame.columns if c != trend_col]
+                x_coord = None
+                if time_cols:
+                    from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+                    try:
+                        x_coord = canonical_time_coordinates(frame[time_cols[0]])
+                    except Exception:
+                        x_coord = None
+                ev = BeliefEngine.bayes_factor_trend(frame[trend_col].to_numpy(), x=x_coord)
                 for i, h in enumerate(hypotheses):
                     if getattr(h, "hypothesis_code", "") not in codes:
                         continue
@@ -361,7 +407,19 @@ class BeliefEngine:
 
         # Continuous relationship experiment.
         if str(aggregation_type).upper() == "CORRELATION":
-            numeric = [c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])]
+            # DEFECT-039 (session 22): the group-model frame preference above
+            # ("primary_df if it is longer than result_df") is meaningless for a
+            # bivariate correlation and actively wrong when the pair had missing
+            # values: the experiment's result_df is the pairwise-complete
+            # (NaN-dropped) pair, hence shorter than primary_df, so the full
+            # multi-column primary_df was selected, no unique second numeric
+            # column could be identified, and the evidence silently became
+            # NEUTRAL_NO_ATTRIBUTABLE_EVIDENCE (BF=1.0) for a genuine, highly
+            # significant association.  The correlation estimator's evidence is
+            # exactly the experiment's own two-column result, so use it whenever
+            # it is available; fall back to the generic frame only when it isn't.
+            corr_frame = result_df if (result_df is not None and not result_df.empty) else frame
+            numeric = [c for c in corr_frame.columns if pd.api.types.is_numeric_dtype(corr_frame[c])]
             corr_pair = None
             if effective_metric_col in numeric:
                 others = [c for c in numeric if c != effective_metric_col]
@@ -370,7 +428,7 @@ class BeliefEngine:
             elif len(numeric) == 2:
                 corr_pair = (numeric[0], numeric[1])
             if corr_pair is not None:
-                ev = BeliefEngine.bayes_factor_correlation(frame[corr_pair[0]], frame[corr_pair[1]])
+                ev = BeliefEngine.bayes_factor_correlation(corr_frame[corr_pair[0]], corr_frame[corr_pair[1]])
                 for i, h in enumerate(hypotheses):
                     if getattr(h, "hypothesis_code", "") not in codes:
                         continue

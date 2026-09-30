@@ -86,6 +86,7 @@ class AnalysisContractVersionData:
     # v28 SemanticBindingSet authority: canonical bindings carry full provenance
     # and drive target/explanatory/time/group compatibility projections
     semantic_bindings: Optional[List[Dict[str, Any]]] = None
+    canonical_roles_authoritative: bool = False
 
     @property
     def semantic_binding_set(self) -> Any:
@@ -141,8 +142,9 @@ class AnalysisContractManager:
         grain_proven: bool = False,
         epistemic_manifest: Optional[Dict[str, Any]] = None,
         semantic_bindings: Optional[List[Dict[str, Any]]] = None,
+        canonical_roles_authoritative: bool = False,
     ) -> AnalysisContractVersionData:
-        if semantic_bindings:
+        if semantic_bindings and not canonical_roles_authoritative:
             from packages.schemas.src.semantic_binding import SemanticBindingSet
             sbs = SemanticBindingSet.from_dict_list(semantic_bindings)
             if target_column is None:
@@ -194,6 +196,7 @@ class AnalysisContractManager:
             grain_proven=grain_proven,
             epistemic_manifest=epistemic_manifest or {},
             semantic_bindings=semantic_bindings,
+            canonical_roles_authoritative=canonical_roles_authoritative,
         )
 
     @staticmethod
@@ -205,14 +208,20 @@ class AnalysisContractManager:
         new_active_warnings: Optional[List[str]] = None,
         adjusted_claim_ceiling: Optional[str] = None,
         new_semantic_bindings: Optional[List[Dict[str, Any]]] = None,
+        canonical_roles_authoritative: Optional[bool] = None,
     ) -> AnalysisContractVersionData:
         """Spawns an immutable next version (e.g. v2) preserving replanning lineage."""
+        auth = (
+            canonical_roles_authoritative
+            if canonical_roles_authoritative is not None
+            else getattr(previous, "canonical_roles_authoritative", False)
+        )
         semantic_bindings = new_semantic_bindings if new_semantic_bindings is not None else previous.semantic_bindings
         target_col = previous.target_column
         expl_cols = list(previous.explanatory_columns)
         time_col = previous.time_column
         grp_dim = previous.group_dimension
-        if new_semantic_bindings is not None:
+        if new_semantic_bindings is not None and not auth:
             from packages.schemas.src.semantic_binding import SemanticBindingSet
             sbs = SemanticBindingSet.from_dict_list(new_semantic_bindings)
             target_col = sbs.projected_target_column() or target_col
@@ -260,4 +269,5 @@ class AnalysisContractManager:
             grain_proven=previous.grain_proven,
             epistemic_manifest=dict(previous.epistemic_manifest),
             semantic_bindings=semantic_bindings,
+            canonical_roles_authoritative=auth,
         )

@@ -49,6 +49,7 @@ from packages.analytics_core.src.statistics.inference import (
     execute_two_group, execute_multi_group, execute_categorical, execute_correlation, execute_regression,
 )
 from packages.schemas.src.analysis import (
+    CalculationTraceSchema,
     FirstClassExperiment,
     GrainPreservationStatus,
     PredictionEvidenceRecord,
@@ -680,31 +681,49 @@ class ScientificTransitionService:
                     ordered = result_df.dropna(subset=[y_col])
                     y = ordered[y_col].astype(float).values
                     if len(y) >= 3 and np.std(y) > 0:
-                        x = np.arange(len(y), dtype=float)
-                        slope, intercept, r_value, p_value, _std_err = _scipy_stats.linregress(x, y)
-                        r_sq_pct = float(np.clip((r_value ** 2) * 100.0, 0.0, 100.0))
-                        eta_sq = r_sq_pct
-                        result.forecast_slope = float(slope)
-                        result.forecast_p_value = float(p_value)
-                        # Chronological holdout backtest vs. naive baseline
-                        if len(y) >= 5:
-                            split = max(1, int(len(y) * 0.8))
-                            train_x, test_x = x[:split], x[split:]
-                            train_y, test_y = y[:split], y[split:]
-                            if len(test_y) >= 1 and len(train_y) >= 2:
-                                t_slope, t_intercept, _, _, _ = _scipy_stats.linregress(train_x, train_y)
-                                trend_pred = t_slope * test_x + t_intercept
-                                naive_pred = np.full_like(test_y, train_y[-1])
-                                trend_mae = float(np.mean(np.abs(test_y - trend_pred)))
-                                naive_mae = float(np.mean(np.abs(test_y - naive_pred)))
-                                result.forecast_backtest_trend_mae = trend_mae
-                                result.forecast_backtest_naive_mae = naive_mae
-                                if naive_mae > 0 and trend_mae >= naive_mae:
-                                    # Trend does not beat the naive baseline
-                                    # out-of-sample -- do not let a merely
-                                    # significant in-sample slope masquerade
-                                    # as genuine predictive signal.
-                                    eta_sq = min(eta_sq, 4.0)
+                        from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+                        time_candidate = None
+                        sem_time = getattr(semantic, "time_col", None) or getattr(semantic, "time_dimension_col", None)
+                        if sem_time and sem_time in ordered.columns and sem_time != y_col:
+                            time_candidate = sem_time
+                        else:
+                            other_cols = [c for c in ordered.columns if c != y_col]
+                            if other_cols:
+                                time_candidate = other_cols[0]
+                        x = None
+                        if time_candidate:
+                            try:
+                                x = canonical_time_coordinates(ordered[time_candidate], length=len(y))
+                            except Exception:
+                                x = None
+                        if x is not None and len(x) == len(y) and np.std(x) > 0:
+                            slope, intercept, r_value, p_value, _std_err = _scipy_stats.linregress(x, y)
+                            r_sq_pct = float(np.clip((r_value ** 2) * 100.0, 0.0, 100.0))
+                            eta_sq = r_sq_pct
+                            result.forecast_slope = float(slope)
+                            result.forecast_p_value = float(p_value)
+                            # Chronological holdout backtest vs. naive baseline
+                            if len(y) >= 5:
+                                split = max(1, int(len(y) * 0.8))
+                                train_x, test_x = x[:split], x[split:]
+                                train_y, test_y = y[:split], y[split:]
+                                if len(test_y) >= 1 and len(train_y) >= 2 and np.std(train_x) > 0:
+                                    t_slope, t_intercept, _, _, _ = _scipy_stats.linregress(train_x, train_y)
+                                    trend_pred = t_slope * test_x + t_intercept
+                                    naive_pred = np.full_like(test_y, train_y[-1])
+                                    trend_mae = float(np.mean(np.abs(test_y - trend_pred)))
+                                    naive_mae = float(np.mean(np.abs(test_y - naive_pred)))
+                                    result.forecast_backtest_trend_mae = trend_mae
+                                    result.forecast_backtest_naive_mae = naive_mae
+                                    if naive_mae > 0 and trend_mae >= naive_mae:
+                                        # Trend does not beat the naive baseline
+                                        # out-of-sample -- do not let a merely
+                                        # significant in-sample slope masquerade
+                                        # as genuine predictive signal.
+                                        eta_sq = min(eta_sq, 4.0)
+                        else:
+                            result.forecast_slope = None
+                            result.forecast_p_value = None
             except Exception as exc:
                 eta_sq = None
                 result.statistical_inference = {
@@ -1029,7 +1048,25 @@ class ScientificTransitionService:
             ],
         )
         trace_dict = trace.to_dict()
-        raw_obs.calculation_trace = trace_dict
+        # P0 fix: raw_obs is a Pydantic BaseModel (RawObservationRecord) whose
+        # calculation_trace field is typed Optional[CalculationTraceSchema].
+        # Direct attribute assignment of a plain dict bypasses Pydantic
+        # validation entirely (validate_assignment is not enabled on this
+        # model), leaving the field holding a raw dict instead of a validated
+        # CalculationTraceSchema instance. raw_obs was already appended by
+        # reference into state_mgr's runtime state (record_raw_observation,
+        # above) before this trace became available, so every real
+        # investigation's canonical_runtime_state snapshot
+        # (scientific_state_snapshot.build_scientific_state_snapshot ->
+        # runtime_state.model_dump(mode="json")) ended up serializing a
+        # raw dict where a CalculationTraceSchema was declared, which
+        # Pydantic can only best-effort duck-type and flags with a
+        # "PydanticSerializationUnexpectedValue" warning on every experiment
+        # that recorded evidence -- corrupting the audit/reproducibility
+        # trace this schema exists to guarantee. Validate before assigning,
+        # matching the pattern already used by record_calculation_trace and
+        # evidence_ledger.py's EvidenceRecord construction.
+        raw_obs.calculation_trace = CalculationTraceSchema.model_validate(trace_dict)
         state_mgr.record_calculation_trace(trace_dict)
         result.calculation_trace = trace_dict
 

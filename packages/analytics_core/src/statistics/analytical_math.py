@@ -10,6 +10,7 @@ Provides verified mathematical primitives across 6 core domains:
 6. Anomaly & Change Detection (IQR, Z-score, MAD-based Modified Z-score, distribution shift distance)
 """
 import math
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
@@ -203,6 +204,280 @@ def frequency_table(series: pd.Series, top_n: int = 20) -> List[Dict[str, Any]]:
 # 2. TIME SERIES ANALYTICS
 # ==============================================================================
 
+@dataclass(frozen=True)
+class CanonicalTemporalAxis:
+    """Canonical temporal-axis definition shared by trend estimation, belief, and forecasting.
+
+    Attributes:
+        coordinate_values: Real elapsed temporal coordinates (e.g. elapsed years or months).
+        coordinate_unit: Unit in which coordinates/slopes are expressed ('year', 'month', etc.).
+        source_time_column: Name of the originating column if resolved from a DataFrame.
+        inferred_grain: Physical observation frequency ('year', 'quarter', 'month', 'week', 'day', 'none').
+    """
+    coordinate_values: np.ndarray
+    coordinate_unit: str
+    source_time_column: Optional[str]
+    inferred_grain: str
+
+
+def resolve_canonical_temporal_axis(
+    time_series_or_df: Any,
+    time_col: Optional[str] = None,
+    length: Optional[int] = None,
+    target_unit: Optional[str] = None,
+) -> CanonicalTemporalAxis:
+    """Determine canonical temporal coordinates and reporting unit from actual time values.
+
+    One authoritative source of truth for:
+    1. _period_frame / trend preparation
+    2. canonical_time_coordinates
+    Ensures that reported slope and internal regression slope use the exact same coordinate system.
+    """
+    source_col = time_col
+    series = time_series_or_df
+
+    if isinstance(time_series_or_df, pd.DataFrame):
+        df = time_series_or_df
+        if len(df) == 0:
+            return CanonicalTemporalAxis(np.array([], dtype=float), target_unit or "unit", time_col, "none")
+        if time_col and time_col in df.columns:
+            source_col = time_col
+        else:
+            dt_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+            if dt_cols:
+                source_col = dt_cols[0]
+            else:
+                named = [c for c in df.columns if any(k in str(c).lower() for k in ("time", "date", "year", "period", "month", "quarter", "day"))]
+                if named:
+                    source_col = named[0]
+                elif isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)):
+                    series = df.index
+                    source_col = None
+                elif len(df.columns) > 0:
+                    source_col = df.columns[0]
+        if source_col is not None:
+            series = df[source_col]
+
+    if series is None:
+        return CanonicalTemporalAxis(np.array([], dtype=float), target_unit or "unit", source_col, "none")
+
+    # 1. PeriodIndex
+    pindex = None
+    if isinstance(series, pd.PeriodIndex):
+        pindex = series
+    elif hasattr(series, "index") and isinstance(series.index, pd.PeriodIndex):
+        pindex = series.index
+
+    if pindex is not None and len(pindex) > 0:
+        fc = (pindex.freqstr or (pindex.freq.name if hasattr(pindex.freq, "name") else "")).upper()
+        if fc.startswith("Y") or fc.startswith("A"):
+            inferred_grain = "year"
+        elif fc.startswith("Q"):
+            inferred_grain = "quarter"
+        elif fc.startswith("M"):
+            inferred_grain = "month"
+        elif fc.startswith("W"):
+            inferred_grain = "week"
+        else:
+            inferred_grain = "day"
+
+        chosen_unit = target_unit or inferred_grain
+        p0 = pindex[0]
+        deltas = np.array([(p - p0).n for p in pindex], dtype=float)
+
+        if chosen_unit == "year":
+            if inferred_grain == "year":
+                coords = deltas
+            elif inferred_grain == "quarter":
+                coords = deltas / 4.0
+            elif inferred_grain == "month":
+                coords = deltas / 12.0
+            elif inferred_grain == "week":
+                coords = deltas / 52.1775
+            elif inferred_grain == "day":
+                coords = deltas / 365.25
+            else:
+                coords = deltas
+        elif chosen_unit == "quarter":
+            if inferred_grain == "quarter":
+                coords = deltas
+            elif inferred_grain == "year":
+                coords = deltas * 4.0
+            elif inferred_grain == "month":
+                coords = deltas / 3.0
+            else:
+                coords = deltas
+        elif chosen_unit == "month":
+            if inferred_grain == "month":
+                coords = deltas
+            elif inferred_grain == "year":
+                coords = deltas * 12.0
+            elif inferred_grain == "quarter":
+                coords = deltas * 3.0
+            else:
+                coords = deltas
+        else:
+            coords = deltas
+            chosen_unit = inferred_grain
+
+        return CanonicalTemporalAxis(coords, chosen_unit, source_col, inferred_grain)
+
+    if not isinstance(series, pd.Series):
+        try:
+            series = pd.Series(series)
+        except Exception:
+            return CanonicalTemporalAxis(np.array([], dtype=float), target_unit or "unit", source_col, "none")
+
+    if len(series) == 0:
+        return CanonicalTemporalAxis(np.array([], dtype=float), target_unit or "unit", source_col, "none")
+
+    # 2. Pure Numeric Columns (inspect for genuine calendar years vs non-temporal numbers)
+    if pd.api.types.is_numeric_dtype(series):
+        s_num = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+        clean_num = s_num[np.isfinite(s_num)]
+        if len(clean_num) >= 2:
+            min_v = float(clean_num.min())
+            max_v = float(clean_num.max())
+            col_str = str(source_col or series.name or "").lower()
+            is_int_like = np.all(np.isclose(clean_num, np.round(clean_num)))
+            is_year_like = (
+                (1800 <= min_v and max_v <= 2200 and is_int_like)
+                or (0 <= min_v and max_v <= 99 and "year" in col_str and is_int_like)
+            )
+            if is_year_like:
+                inferred_grain = "year"
+                chosen_unit = target_unit or "year"
+                coords = s_num - s_num[0]
+                if chosen_unit == "month":
+                    coords = coords * 12.0
+                elif chosen_unit == "quarter":
+                    coords = coords * 4.0
+                return CanonicalTemporalAxis(coords, chosen_unit, source_col, inferred_grain)
+            else:
+                # Acceptance Test 5: non-temporal numeric column supplied as candidate time field
+                # must not be silently interpreted as calendar time.
+                return CanonicalTemporalAxis(s_num - s_num[0], "unit", source_col, "none")
+
+    # 3. Datetime Series
+    dt = None
+    try:
+        if isinstance(series, pd.DatetimeIndex):
+            dt = series
+        elif pd.api.types.is_datetime64_any_dtype(series):
+            dt = pd.to_datetime(series)
+        else:
+            parsed = pd.to_datetime(series, errors="coerce")
+            if parsed.notna().sum() >= len(series) * 0.8:
+                dt = parsed
+    except Exception:
+        dt = None
+
+    if dt is not None and len(dt) > 0 and dt.notna().sum() > 0:
+        clean_dt = pd.Series(dt).dropna().drop_duplicates().sort_values()
+        if len(clean_dt) >= 2:
+            sec_diffs = clean_dt.diff().dropna().dt.total_seconds().to_numpy()
+            day_diffs = sec_diffs / 86400.0
+            min_days = float(np.min(day_diffs))
+            median_days = float(np.median(day_diffs))
+
+            all_first_day = (clean_dt.dt.day == 1).all()
+            all_jan_first = all_first_day and (clean_dt.dt.month == 1).all()
+
+            if all_jan_first and min_days >= 350:
+                inferred_grain = "year"
+            elif all_first_day:
+                m_vals = clean_dt.dt.year * 12 + clean_dt.dt.month
+                m_diffs = np.diff(m_vals.to_numpy())
+                min_m = float(np.min(m_diffs)) if len(m_diffs) > 0 else 1.0
+                if min_m >= 12 and np.all(m_diffs % 12 == 0):
+                    inferred_grain = "year"
+                elif min_m >= 3 and np.all(m_diffs % 3 == 0) and clean_dt.dt.month.isin([1, 4, 7, 10]).all():
+                    inferred_grain = "quarter"
+                else:
+                    inferred_grain = "month"
+            else:
+                if 350 <= median_days <= 370 or (min_days >= 350 and np.allclose(day_diffs % 365, 0, atol=15)):
+                    inferred_grain = "year"
+                elif 80 <= median_days <= 100 or (min_days >= 80 and np.allclose(day_diffs % 90, 0, atol=8)):
+                    inferred_grain = "quarter"
+                elif 25 <= median_days <= 35 or (min_days >= 25 and np.allclose(day_diffs % 30, 0, atol=5)):
+                    inferred_grain = "month"
+                elif 6 <= median_days <= 8 or (min_days >= 6 and np.allclose(day_diffs % 7, 0, atol=1)):
+                    inferred_grain = "week"
+                elif median_days >= 0.8:
+                    inferred_grain = "day"
+                else:
+                    inferred_grain = "day"
+        else:
+            inferred_grain = "day"
+
+        chosen_unit = target_unit or inferred_grain
+        t0 = dt.iloc[0] if hasattr(dt, "iloc") else dt[0]
+
+        if chosen_unit == "year":
+            if inferred_grain == "year":
+                coords = np.array([float(d.year - t0.year) for d in dt], dtype=float)
+            elif inferred_grain == "month":
+                coords = np.array([((d.year - t0.year) * 12 + (d.month - t0.month)) / 12.0 for d in dt], dtype=float)
+            elif inferred_grain == "quarter":
+                coords = np.array([((d.year - t0.year) * 4 + (d.quarter - t0.quarter)) / 4.0 for d in dt], dtype=float)
+            else:
+                coords = np.array([(d - t0).total_seconds() / (365.25 * 86400.0) for d in dt], dtype=float)
+
+        elif chosen_unit == "quarter":
+            if inferred_grain == "quarter":
+                coords = np.array([float((d.year - t0.year) * 4 + (d.quarter - t0.quarter)) for d in dt], dtype=float)
+            elif inferred_grain == "month":
+                coords = np.array([((d.year - t0.year) * 12 + (d.month - t0.month)) / 3.0 for d in dt], dtype=float)
+            elif inferred_grain == "year":
+                coords = np.array([float(d.year - t0.year) * 4.0 for d in dt], dtype=float)
+            else:
+                coords = np.array([(d - t0).total_seconds() / (91.3125 * 86400.0) for d in dt], dtype=float)
+
+        elif chosen_unit == "month":
+            if inferred_grain in ("month", "year", "quarter"):
+                coords = np.array([float((d.year - t0.year) * 12 + (d.month - t0.month)) for d in dt], dtype=float)
+            else:
+                coords = np.array([(d - t0).total_seconds() / (30.4375 * 86400.0) for d in dt], dtype=float)
+
+        elif chosen_unit == "week":
+            coords = np.array([(d - t0).total_seconds() / (7.0 * 86400.0) for d in dt], dtype=float)
+        else:
+            coords = np.array([(d - t0).total_seconds() / 86400.0 for d in dt], dtype=float)
+
+        return CanonicalTemporalAxis(coords, chosen_unit, source_col, inferred_grain)
+
+    # 4. Fallback: arbitrary sequence or unrecognized
+    return CanonicalTemporalAxis(np.array([], dtype=float), "unit", source_col, "none")
+
+
+def canonical_time_coordinates(
+    time_series_or_df: Any,
+    time_col: Optional[str] = None,
+    length: Optional[int] = None,
+    target_unit: Optional[str] = None,
+) -> np.ndarray:
+    """Extract authoritative chronological coordinates (period deltas from t0) for trend regression.
+
+    Fail-closed: Returns canonical chronological coordinates only when a valid temporal axis
+    and grain can be resolved. Rejects missing inputs, non-temporal numeric columns, and
+    unrecognized sequences without falling back to ordinal row indices (np.arange).
+    """
+    if time_series_or_df is None:
+        raise ValueError("Canonical temporal coordinates require a valid time series or dataframe, received None.")
+    axis = resolve_canonical_temporal_axis(time_series_or_df, time_col=time_col, length=length, target_unit=target_unit)
+    if axis.inferred_grain == "none" or len(axis.coordinate_values) == 0:
+        col_name = time_col or getattr(time_series_or_df, "name", None) or "input"
+        raise ValueError(
+            f"Cannot resolve canonical temporal coordinates for {col_name!r}: non-temporal or unidentifiable grain."
+        )
+    if length is not None and len(axis.coordinate_values) != length:
+        raise ValueError(
+            f"Resolved temporal coordinates length ({len(axis.coordinate_values)}) does not match expected length ({length})."
+        )
+    return axis.coordinate_values
+
+
 def time_series_summary(
     df: pd.DataFrame,
     time_col: str,
@@ -225,7 +500,10 @@ def time_series_summary(
         return {"error": "Time series analysis requires at least 2 chronological observations."}
 
     vals = sub_df[value_col].values.astype(float)
-    x = np.arange(n, dtype=float)
+    try:
+        x = canonical_time_coordinates(sub_df[time_col])
+    except Exception as exc:
+        return {"error": f"Failed to extract canonical time coordinates: {exc}"}
 
     # 1. Period-over-Period deltas
     pop_deltas = np.diff(vals)

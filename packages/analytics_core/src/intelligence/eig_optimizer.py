@@ -166,6 +166,8 @@ class EIGOptimizer:
         # when the synthesizer/experiment itself supplied an explicit value.
 
         for exp in candidates:
+            if exp.replication_of and exp.replication_of not in executed_codes:
+                continue
             if exp.code in executed_codes and not (exp.replication_of or exp.refinement_of):
                 continue
             if exp.fingerprint and exp.fingerprint in executed_fingerprints and not (exp.replication_of or exp.refinement_of):

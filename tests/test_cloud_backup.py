@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import create_engine
 
 from apps.api.src.models.entities import Base, Project
-from packages.analytics_core.src.backup.portable_backup import BackupError, PortableBackupBuilder, PortableBackupRestorer
+from packages.analytics_core.src.backup.portable_backup import BackupError, BackupScope, PortableBackupBuilder, PortableBackupRestorer
 from packages.analytics_core.src.providers.storage import LocalStorageProvider
 
 
@@ -25,6 +25,7 @@ def test_encrypted_backup_round_trip_and_migration_shape():
             storage_root=str(storage),
             passphrase="correct horse battery staple",
             include_source_files=True,
+            scope=BackupScope.SYSTEM,
         )
         restorer = PortableBackupRestorer()
         manifest = restorer.inspect_manifest(backup, passphrase="correct horse battery staple")

@@ -100,6 +100,7 @@ class SemanticContract:
     resolution_confidence: float = 0.0
     semantic_evidence: Dict[str, Any] = field(default_factory=dict)
     ranking_direction: Optional[str] = None
+    canonical_roles_authoritative: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,6 +114,7 @@ class SemanticContract:
             "resolution_confidence": float(self.resolution_confidence),
             "semantic_evidence": dict(self.semantic_evidence),
             "ranking_direction": self.ranking_direction,
+            "canonical_roles_authoritative": bool(self.canonical_roles_authoritative),
         }
 
 
@@ -208,6 +210,9 @@ class UniversalQuestionCompiler:
         "average order value": "aov",
     }
 
+    _UNDEFINED_VALUE_RE = re.compile(r"\b(worth|valuable|worthiest)\b", re.I)
+    _AUTHORITATIVE_VALUE_COLUMN_RE = re.compile(r"\b(value|worth|ltv|lifetime|clv)\b", re.I)
+
     _CAUSAL = re.compile(r"\b(caus(e|ed|es|al)|treatment effect|intervention|effect of)\b", re.I)
     _RECON = re.compile(r"\b(discrep\w*|reconcil\w*|math(?:ematical)?|formula\w*|consistent\w*|mismatch\w*|ties?|add\s+up)\b", re.I)
     _DATA_QUALITY = re.compile(r"\b(clean|quality|missing|duplicate|invalid|outlier|anomal|inconsisten|corrupt|bias)\b", re.I)
@@ -226,7 +231,7 @@ class UniversalQuestionCompiler:
     # churn probability" (no "rate").
     _GROUP_NOUNS = re.compile(r"\b(segments?|tiers?|groups?|cohorts?|categories|category|regions?|plans?)\b", re.I)
     _FORECAST = re.compile(r"\b(forecast|project|future|next quarter|next year|will .* increase|will .* decrease|trend)\b", re.I)
-    _COMPARE = re.compile(r"\b(compare|difference|higher|lower|highest|lowest|best|worst|top|bottom|more|less|versus|vs\.?|between)\b", re.I)
+    _COMPARE = re.compile(r"\b(compare|difference|higher|lower|highest|lowest|best|worst|top|bottom|more|less|most|least|versus|vs\.?|between)\b", re.I)
     # NOTE: each alternative below is a genuine word-stem prefix (e.g.
     # "correlat" is meant to catch "correlation"/"correlated"/"correlates"),
     # v20-C4.2.2c: was a separately-maintained pattern; now a direct alias
@@ -252,21 +257,127 @@ class UniversalQuestionCompiler:
         ql = q.lower()
         from packages.analytics_core.src.intelligence.question_intelligence import interpret_question
         from packages.analytics_core.src.intelligence.nl_semantic_interpreter import interpret_with_schema
+        from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
         interpreted = interpret_question(q)
         semantic_proposal = interpret_with_schema(q, [str(c) for c in df.columns], ai_provider=ai_provider)
+        c_contract = compile_canonical_question_contract(q, df, semantic)
         task = cls._classify(ql)
-        if task == "GENERAL_EXPLORATION" and semantic_proposal.task != "GENERAL_EXPLORATION":
+        if c_contract.resolution_confidence >= 0.70 and c_contract.task_family != "GENERAL_EXPLORATION":
+            if c_contract.task_family == "RANKING":
+                task = "COMPARISON"
+            elif c_contract.task_family == "GROUP_COMPARISON":
+                task = "COMPARISON"
+            elif c_contract.task_family == "MULTI_ASSOCIATION":
+                task = "ASSOCIATION"
+            elif c_contract.task_family == "INTERACTION":
+                task = "ASSOCIATION"
+            elif c_contract.task_family == "COUNT":
+                task = "COMPARISON" if c_contract.grouping_columns else "DESCRIPTIVE"
+            elif c_contract.task_family == "TREND":
+                task = "DESCRIPTIVE"
+            elif c_contract.task_family == "CAUSAL_REQUEST":
+                task = "CAUSAL" if cls._CAUSAL.search(ql) else "ASSOCIATION"
+            elif c_contract.task_family == "ROOT_CAUSE":
+                task = "DIAGNOSTIC"
+            elif c_contract.task_family == "DIAGNOSTIC":
+                task = "DIAGNOSTIC"
+            elif c_contract.task_family == "PREDICTION":
+                task = "PREDICTION"
+            elif c_contract.task_family in TASKS:
+                task = c_contract.task_family
+        elif task == "GENERAL_EXPLORATION" and semantic_proposal.task != "GENERAL_EXPLORATION":
             task = semantic_proposal.task
         # Broad language interpretation is a proposal layer only. The deterministic
         # classifier remains authoritative; use the interpreter to enrich unresolved
         # context and compound-question traceability without allowing it to execute SQL.
         business = cls._business_context(q, task)
-        semantics = cls._semantic_contract(semantic, df, ql, semantic_proposal)
+        semantics = cls._semantic_contract(semantic, df, ql, semantic_proposal, task=task)
+        # Canonical-role authority: once the canonical contract is confident and
+        # names a task family, its role assignments are authoritative INCLUDING
+        # explicit absence. ``grouping=()`` / ``time=None`` / ``explanatory=()``
+        # clear whatever the semantic proposal added; proposal-only role columns
+        # must not survive into the executed plan.
+        canonical_authoritative = (
+            c_contract.resolution_confidence >= 0.70
+            and c_contract.task_family != "GENERAL_EXPLORATION"
+        )
+        if canonical_authoritative or (
+            c_contract.target_column or c_contract.grouping_columns or c_contract.explanatory_columns
+        ):
+            if canonical_authoritative:
+                proposal_role_cols = set(semantics.grouping_columns) | set(semantics.explanatory_columns)
+                if semantics.time_column:
+                    proposal_role_cols.add(semantics.time_column)
+                if semantics.target_column:
+                    proposal_role_cols.add(semantics.target_column)
+                semantics.target_column = c_contract.target_column
+                semantics.grouping_columns = list(c_contract.grouping_columns)
+                semantics.explanatory_columns = list(c_contract.explanatory_columns)
+                semantics.time_column = c_contract.time_column
+                semantics.ranking_direction = c_contract.ranking_direction
+            else:
+                proposal_role_cols = set()
+                if c_contract.target_column:
+                    semantics.target_column = c_contract.target_column
+                if c_contract.grouping_columns:
+                    semantics.grouping_columns = list(c_contract.grouping_columns)
+                if c_contract.explanatory_columns:
+                    semantics.explanatory_columns = list(c_contract.explanatory_columns)
+                if c_contract.time_column:
+                    semantics.time_column = c_contract.time_column
+                if c_contract.ranking_direction:
+                    semantics.ranking_direction = c_contract.ranking_direction
+            all_cols = list(c_contract.explanatory_columns) + list(c_contract.grouping_columns)
+            if c_contract.target_column:
+                all_cols.append(c_contract.target_column)
+            if c_contract.time_column:
+                all_cols.append(c_contract.time_column)
+            canonical_role_cols = {c for c in all_cols if c in df.columns}
+            # Drop proposal-only role columns (roles the canonical contract did
+            # not assign); keep columns merely named in the question.
+            retained = [c for c in semantics.referenced_columns if c not in (proposal_role_cols - canonical_role_cols)]
+            semantics.referenced_columns = sorted(set(retained) | canonical_role_cols)
+            semantics.resolution_confidence = max(semantics.resolution_confidence, c_contract.resolution_confidence)
+            semantics.canonical_roles_authoritative = bool(canonical_authoritative)
+            semantics.semantic_evidence["canonical_question_contract"] = c_contract.to_dict()
+
         hypotheses = cls._hypotheses(task, semantics, q)
         evidence = cls._evidence(task, semantics)
         experiments = cls._experiments(task, semantics)
         estimand = cls._estimand(task, semantics, quality_assessment)
+        if c_contract.requested_aggregation:
+            estimand["requested_aggregation"] = c_contract.requested_aggregation
+        if c_contract.estimand:
+            estimand["canonical_estimand"] = c_contract.estimand
+        if hasattr(c_contract, "requested_claim"):
+            estimand["requested_claim"] = c_contract.requested_claim
+            estimand["supported_claim"] = c_contract.supported_claim
+            estimand["claim_ceiling"] = c_contract.claim_ceiling
         unresolved = cls._unresolved(task, semantics, business, quality_assessment)
+        if not c_contract.unresolved_roles and c_contract.target_column and c_contract.resolution_confidence >= 0.7:
+            unresolved = [u for u in unresolved if not u.startswith("Could not uniquely resolve") and not u.startswith("Target variable could not be resolved")]
+
+        # "Worth"/"valuable" have no authoritative meaning until a business
+        # definition (lifetime value, total revenue, margin, ...) is named or
+        # exists as a column. Silently ranking by whatever numeric column the
+        # semantic layer happened to default to would answer a different,
+        # invented question. Fail closed instead of substituting a metric.
+        if cls._UNDEFINED_VALUE_RE.search(ql) and not any(
+            cls._AUTHORITATIVE_VALUE_COLUMN_RE.search(str(c)) for c in df.columns
+        ):
+            msg = (
+                "Question asks which entities are 'worth'/'valuable' the most, but no "
+                "authoritative metric (e.g. lifetime value, total revenue) is named in the "
+                "question or present as a column; refusing to substitute an arbitrary numeric column."
+            )
+            if msg not in unresolved:
+                unresolved.append(msg)
+            semantics.notes.append(msg)
+            semantics.target_column = None
+            semantics.grouping_columns = []
+            semantics.ranking_direction = None
+            semantics.resolution_confidence = min(semantics.resolution_confidence, 0.2)
+
         semantics.notes.extend([f"Universal NL interpreter: {n}" for n in interpreted.notes])
         semantics.notes.extend([f"Schema-grounded semantic proposal: {n}" for n in semantic_proposal.limitations])
         semantics.semantic_evidence["nl_proposal"] = {"source": semantic_proposal.source, "confidence": semantic_proposal.confidence, "task": semantic_proposal.task}
@@ -332,7 +443,7 @@ class UniversalQuestionCompiler:
         # questions such as "Which products are performing badly?" from falling
         # into generic exploration, whose preflight has no declared contrast
         # estimand.
-        if re.search(r"\b(perform(?:ing|ance)|ranking|ranked|best|worst|top|bottom)\b", q, re.I):
+        if re.search(r"\b(perform(?:ing|ance)|ranking|ranked|best|worst|top|bottom|most|least)\b", q, re.I):
             return "COMPARISON"
         # Segmentation requires an explicit discovery/group-construction
         # intent, not merely the word ``segment`` used as a grouping dimension.
@@ -410,7 +521,7 @@ class UniversalQuestionCompiler:
         )
 
     @staticmethod
-    def _semantic_contract(semantic: Any, df: pd.DataFrame, ql: str, proposal: Any = None) -> SemanticContract:
+    def _semantic_contract(semantic: Any, df: pd.DataFrame, ql: str, proposal: Any = None, task: str = "") -> SemanticContract:
         """Resolve question roles with explicit evidence and calibrated ambiguity.
 
         Resolution order:
@@ -947,6 +1058,9 @@ class UniversalQuestionCompiler:
     @staticmethod
     def _unresolved(task: str, s: SemanticContract, b: BusinessContextContract, quality: Any) -> List[str]:
         u: List[str] = []
+        for note in s.notes:
+            if "Could not uniquely resolve" in note and note not in u:
+                u.append(note)
         if task in {"ASSOCIATION", "CAUSAL", "FORECAST", "PREDICTION"} and not s.target_column:
             u.append("Target variable could not be resolved confidently.")
         if task == "ASSOCIATION" and not s.explanatory_columns:

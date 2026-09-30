@@ -6,10 +6,16 @@ import MiningCursorTrail from "../components/MiningCursorTrail";
 import { ThemeProvider } from "../components/ThemeProvider";
 
 export const metadata = {
-  title: "MindEd AA-OS — Autonomous Analytical Intelligence Operating System",
-  description: "Local-first autonomous analytical workspace for real, traceable data investigation, statistical analysis, forecasting, causal reasoning, verification, and human review.",
+  applicationName: "MindEd AA-OS",
+  title: "MindEd AA-OS",
+  description: "Local-first autonomous data analyst companion",
+  manifest: "/site.webmanifest",
   icons: {
-    icon: "/favicon.svg",
+    icon: [
+      { url: "/icons/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "any" },
+    ],
+    apple: "/icons/icon-192.png",
   },
 };
 
@@ -21,9 +27,10 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
-        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
         <link rel="alternate icon" href="/favicon.ico" type="image/x-icon" />
-        <link rel="apple-touch-icon" href="/favicon.svg" />
+        <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+        <link rel="manifest" href="/site.webmanifest" />
       </head>
       <body className="bg-slate-950 text-slate-100 flex min-h-screen">
         <ThemeProvider>

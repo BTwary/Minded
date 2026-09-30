@@ -28,35 +28,47 @@ class CompoundObjectivePlan:
 
 
 _DEPENDENCY_RE = re.compile(
-    r"\b(?:those|these|such|that|the same|affected|above|previous|earlier|mentioned)\b"
+    r"\b(?:those|these|such|that|the same|affected|above|previous|earlier|mentioned|it|its)\b"
     r"|\b(?:among|for|of|within)\s+(?:those|these)\b",
     re.I,
 )
+# Task-lead words that legitimately start a second analytical clause after
+# "and" / a comma. "how", "when", "should" and "could" cover follow-up
+# clauses like "... and how has it changed" or "... and should we act on it"
+# that were previously left unsplit and fell through as one confused intent.
+_TASK_LEAD_WORDS = (
+    r"forecast|predict|compare|why|what|which|how|when|did|does|is|are|"
+    r"will|would|should|could|can|identify|find|determine|rank|check"
+)
 _TASK_AFTER_AND_RE = re.compile(
-    r"\s+\band\s+(?=(?:forecast|predict|compare|why|what|which|did|does|is|are|will|identify|find|determine|rank|check)\b)",
+    rf"\s+\band\s+(?=(?:{_TASK_LEAD_WORDS})\b)",
     re.I,
 )
 _COMMA_CLAUSE_RE = re.compile(
-    r",\s*(?=(?:and\s+)?(?:why|what|which|did|does|is|are|can|will|identify|find|determine|rank|check)\b)",
+    rf",\s*(?=(?:and\s+)?(?:{_TASK_LEAD_WORDS})\b)",
     re.I,
 )
+_METRIC_TOKEN = r"(?:revenue|sales|profit|cost|costs|margin|orders|customers|churn|conversion|quantity|units|price|discount)"
 _METRIC_ENUM_RE = re.compile(
-    r"(?P<prefix>.*?)(?P<metrics>revenue|sales|profit|cost|margin|orders|customers)(?:\s*,\s*(?P<more>(?:revenue|sales|profit|cost|margin|orders|customers)(?:\s*,\s*(?:revenue|sales|profit|cost|margin|orders|customers))*))?\s+and\s+(?P<last>revenue|sales|profit|cost|margin|orders|customers)(?P<suffix>\s+(?:by|per|across|for each)\b.*)$",
+    rf"(?P<prefix>.*?)(?P<metrics>{_METRIC_TOKEN})(?:\s*,\s*(?P<more>{_METRIC_TOKEN}(?:\s*,\s*{_METRIC_TOKEN})*))?\s+and\s+(?P<last>{_METRIC_TOKEN})(?P<suffix>\s+(?:by|per|across|for each)\b.*)$",
+    re.I,
+)
+# Symmetric case: the metric list trails the grouping phrase instead of
+# leading it, e.g. "rank the top 5 products BY revenue and profit" -- the
+# original regex only handled "revenue and profit BY region", so a metric
+# enumeration placed after "by" fell through untouched and lost every
+# metric but whichever the single-target resolver happened to guess.
+_METRIC_ENUM_AFTER_BY_RE = re.compile(
+    rf"^(?P<prefix>.*\bby\s+)(?P<metrics>{_METRIC_TOKEN})(?:\s*,\s*(?P<more>{_METRIC_TOKEN}(?:\s*,\s*{_METRIC_TOKEN})*))?\s+and\s+(?P<last>{_METRIC_TOKEN})(?P<suffix>[^a-zA-Z]*)$",
     re.I,
 )
 
 
-def _metric_enumeration_objectives(question: str) -> list[str] | None:
-    """Expand "revenue and profit by region" into two explicit objectives."""
-    m = _METRIC_ENUM_RE.match(question.strip())
-    if not m:
-        return None
-    prefix = m.group("prefix")
-    metrics = [m.group("metrics")]
-    if m.group("more"):
-        metrics.extend([x.strip() for x in m.group("more").split(",")])
-    metrics.append(m.group("last"))
-    suffix = m.group("suffix")
+def _expand_metric_list(prefix: str, metrics_head: str, more: str | None, last: str, suffix: str) -> list[str] | None:
+    metrics = [metrics_head]
+    if more:
+        metrics.extend([x.strip() for x in more.split(",")])
+    metrics.append(last)
     # Preserve the user's wording while making every target independently executable.
     out = []
     seen = set()
@@ -67,6 +79,24 @@ def _metric_enumeration_objectives(question: str) -> list[str] | None:
         seen.add(key)
         out.append(f"{prefix}{metric}{suffix}".strip())
     return out if len(out) > 1 else None
+
+
+def _metric_enumeration_objectives(question: str) -> list[str] | None:
+    """Expand a conjunction of metrics into independently executable objectives.
+
+    Handles both "revenue and profit by region" (list before the grouping
+    clause) and "top 5 products by revenue and profit" (list after it).
+    """
+    q = question.strip()
+    m = _METRIC_ENUM_RE.match(q)
+    if m:
+        expanded = _expand_metric_list(m.group("prefix"), m.group("metrics"), m.group("more"), m.group("last"), m.group("suffix"))
+        if expanded:
+            return expanded
+    m = _METRIC_ENUM_AFTER_BY_RE.match(q)
+    if m:
+        return _expand_metric_list(m.group("prefix"), m.group("metrics"), m.group("more"), m.group("last"), m.group("suffix"))
+    return None
 
 
 def _split_clauses(question: str) -> list[str]:

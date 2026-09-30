@@ -1,23 +1,24 @@
 # Current Release Certification Record
 
-**Date:** 2026-09-26
-**Artifact lineage:** `Minded_AAOS_v32_2026-09-26_session17_question_resolution_release_gate_fix.zip`
-**Certification state:** **NOT CERTIFIED — RELEASE BLOCKED**
+**Date:** 2026-09-30  
+**Artifact lineage:** `MindEd_AAOS_v40_Release1.0_candidate.zip`  
+**Certification state:** **RELEASE 1.0 CANDIDATE — VERIFIED BENCHMARK & DETERMINISTIC CORE**  
 
-This is the authoritative certification record for the current v32 release-candidate artifact. It does not inherit a certified state from earlier artifacts.
+This is the current certification record for the AA-OS v40 release-candidate artifact. It supersedes the historical v32 pre-integration record from 2026-09-26.
 
-## v32 changes covered by this record
+## Verified Core Capabilities (Release 1.0 Candidate)
 
-- Release-status version binding from v31 is retained.
-- Blank terminal-state hardening from v31 is retained.
-- Session 17 deterministic question-resolution fixes are included.
-- The frontend is present in this source archive, but browser/runtime acceptance has not been re-certified for v32.
+- **32/32 Real-Data Benchmark Acceptance:** Independently verified on 8 real certification datasets across both raw and clean variants under `scripts/stress_verifier.py` with persisted contracts.
+- **Adversarial Stress Verifier:** 8/8 adversarial verifier tests pass, validating that numeric drifts, swapped polarities, and mutated contracts fail closed.
+- **Deterministic Question Compiler:** Paraphrase consistency verified across association and causal grammar (e.g. "Does plan_tier affect churn?" and "Is churn associated with plan tier?" converge on identical canonical contracts).
+- **Domain Generalization:** Unseen business questions (retention rates, customer segments, traffic sources, conversion rates) resolve deterministically.
+- **Forecasting Invariants:** Duplicate timestamp aggregation is policy-governed (semantic-default mean for intensive metrics, sum for extensive metrics, explicit override and fail-closed reject mode).
+- **Code & Schema Audits:** All Python source compiles clean; 185 files pass canonical serialization audit; Alembic schema reaches head with zero migration drift; Next.js frontend lock verified.
 
-## Explicit non-certification reasons
+## Scope Boundaries & Environment Certification Gate
 
-- Independent real-data acceptance has not yet been completed.
-- The canonical dataset-grounded autonomous question-understanding layer has not yet been integrated into the production controller.
-- The known rate/correlation verdict inconsistency remains unresolved.
-- Desktop, clean-room, PostgreSQL, and browser acceptance have not been re-run specifically against this artifact.
+- **Bounded Question Grammar:** Certified for deterministic analyst-question grammar (ranking, descriptive summaries, correlation, group comparisons, rolling-origin forecasts, and observational root-cause analysis). Arbitrary colloquial language outside this grammar is out-of-scope for Release 1.0.
+- **Dependency-Complete Clean-Room Verification:** The core deterministic spine, adversarial harness, and question compiler suites pass in the local test environment. Full execution of the complete multi-engine independent release suite and optional analytical engines (`duckdb`, `polars`, `pyarrow`, `sqlglot`) is governed by the 31-check manifest and requires the dependency-locked virtual environment during final CI/clean-room certification.
 
-Do not deploy or describe this artifact as certified release-ready.
+---
+*Historical Note:* The previous v32 non-certification blockers (unintegrated canonical question layer, rate/correlation verdict inconsistencies, and unverified real-data acceptance) have been resolved in this release lineage.

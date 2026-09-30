@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import tempfile
@@ -24,7 +25,7 @@ class P0ClosureTests(unittest.TestCase):
         profile = fit_isotonic_calibration(
             y, p, scope="p0_test", population_scope="p0_fixture",
             out_of_sample_verified=True,
-            calibration_source_fingerprint="p0-fixture-source",
+            calibration_source_fingerprint=hashlib.sha256(b"p0-fixture-source").hexdigest(),
             fitting_protocol="labeled_holdout_out_of_sample_v1",
         )
         self.assertTrue(profile.is_usable)
