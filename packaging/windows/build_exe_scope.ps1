@@ -59,21 +59,43 @@ $IconArgs = @()
 $AppIcon = Join-Path $PSScriptRoot 'app.ico'
 if (Test-Path $AppIcon -PathType Leaf) { $IconArgs = @('--icon', $AppIcon) }
 
-& $BuildPython -m PyInstaller --noconfirm --clean --name MindedAAOS --onedir --windowed `
+$OnefilePath = Join-Path $OfflineBundleRoot 'standalone'
+if (Test-Path $OnefilePath) { Remove-Item -Recurse -Force $OnefilePath }
+
+& $BuildPython -m PyInstaller --noconfirm --clean --name MindEd_AAOS_v1.0.0_Windows_x64 --onefile --windowed `
   --paths $Root `
+  --add-data "$StaticOut;frontend" `
+  --add-data "$AppIcon;." `
   --hidden-import webview.platforms.edgechromium `
   --hidden-import webview.platforms.winforms `
+  --hidden-import uvicorn.logging `
+  --hidden-import uvicorn.loops `
+  --hidden-import uvicorn.loops.auto `
+  --hidden-import uvicorn.protocols `
+  --hidden-import uvicorn.protocols.http `
+  --hidden-import uvicorn.protocols.http.auto `
+  --hidden-import uvicorn.protocols.websockets `
+  --hidden-import uvicorn.protocols.websockets.auto `
+  --hidden-import uvicorn.lifespan `
+  --hidden-import uvicorn.lifespan.on `
   --collect-all webview `
+  --collect-all apps `
+  --collect-all packages `
   --exclude-module pytest `
   --exclude-module _pytest `
   --exclude-module IPython `
   --exclude-module notebook `
   --exclude-module jupyter `
   @IconArgs `
-  --distpath $OfflineBundleRoot (Join-Path $Root 'packaging\windows\minded_entry.py')
+  --distpath $OnefilePath (Join-Path $Root 'packaging\windows\minded_entry.py')
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller bundle failed." }
 
+$BuiltExe = Join-Path $OnefilePath 'MindEd_AAOS_v1.0.0_Windows_x64.exe'
 $Bundle = Join-Path $OfflineBundleRoot 'MindedAAOS'
+New-Item -ItemType Directory -Force -Path $Bundle | Out-Null
+Copy-Item $BuiltExe (Join-Path $Bundle 'MindEd_AAOS_v1.0.0_Windows_x64.exe') -Force
+Copy-Item $BuiltExe (Join-Path $Bundle 'MindedAAOS.exe') -Force
+New-Item -ItemType Directory -Force -Path (Join-Path $Bundle '_internal') | Out-Null
 Copy-Item $StaticOut (Join-Path $Bundle 'frontend') -Recurse -Force
 $IconSrc = Join-Path $PSScriptRoot 'app.ico'
 if (Test-Path $IconSrc -PathType Leaf) { Copy-Item $IconSrc (Join-Path $Bundle 'app.ico') -Force }
@@ -81,9 +103,6 @@ Set-Content -Path (Join-Path $Bundle 'OFFLINE_MODE') -Value '1' -Encoding ascii
 
 $TargetExe = Join-Path $Bundle 'MindedAAOS.exe'
 $ProductExe = Join-Path $Bundle 'MindEd_AAOS_v1.0.0_Windows_x64.exe'
-if (Test-Path $TargetExe) {
-  Copy-Item $TargetExe $ProductExe -Force
-}
 
 # Produce SHA256SUMS.txt
 $SumsPath = Join-Path $Bundle 'SHA256SUMS.txt'
@@ -117,3 +136,4 @@ $Hashes | Out-File -FilePath $SumsPath -Encoding ascii
 Write-Host "Offline desktop bundle created at: $Bundle"
 Write-Host "Bundle artifacts:"
 Get-ChildItem -Path $Bundle | Select-Object Name, Length
+
