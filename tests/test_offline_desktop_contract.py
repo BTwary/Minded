@@ -59,6 +59,7 @@ def test_offline_certification_accepts_complete_fake_bundle(tmp_path) -> None:
     script = ROOT / "scripts/offline_desktop_certification.py"
     result = subprocess.run(
         [sys.executable, str(script), "--bundle", str(root)],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         check=False,
@@ -91,6 +92,7 @@ def test_offline_certification_rejects_external_url_in_js_bundle(tmp_path) -> No
     script = ROOT / "scripts/offline_desktop_certification.py"
     result = subprocess.run(
         [sys.executable, str(script), "--bundle", str(root)],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         check=False,

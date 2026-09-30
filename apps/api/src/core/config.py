@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 # Load local configuration before settings or downstream modules read os.environ.
 # Explicit override is intentionally disabled so real process environment values win.
 load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
+os.environ.setdefault("AAOS_BUSINESS_TIMEZONE", "UTC")
 from typing_extensions import Annotated
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +25,7 @@ except ImportError:
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Autonomous AI Data Analyst"
     API_V1_STR: str = "/api/v1"
+    BUSINESS_TIMEZONE: str = os.getenv("AAOS_BUSINESS_TIMEZONE", "UTC")
     SECRET_KEY: str = os.getenv("SECRET_KEY") or persistent_secret_key()
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
     

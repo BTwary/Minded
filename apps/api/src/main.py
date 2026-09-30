@@ -1,7 +1,9 @@
 """FastAPI Main Application Entrypoint."""
 from pathlib import Path
+import os
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
+os.environ.setdefault("AAOS_BUSINESS_TIMEZONE", "UTC")
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles

@@ -38,6 +38,7 @@ if sys.stderr is None:
 # Release invariants are established before importing the application module.
 # Force offline invariants unconditionally; host environment variables cannot override desktop release policy.
 os.environ["AAOS_OFFLINE_MODE"] = "1"
+os.environ["AAOS_BUSINESS_TIMEZONE"] = os.getenv("AAOS_BUSINESS_TIMEZONE", "UTC")
 os.environ["AI_ENABLED"] = "false"
 os.environ["AI_PROVIDER"] = "none"
 os.environ["TELEMETRY_ENABLED"] = "false"

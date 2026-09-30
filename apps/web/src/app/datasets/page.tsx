@@ -95,6 +95,7 @@ export default function DatasetsPage() {
     }
     formData.append("project_id", targetProject);
     formData.append("description", `Uploaded ${file.name}`);
+    formData.append("business_timezone", "UTC");
 
     try {
       await uploadDatasetFile(formData);

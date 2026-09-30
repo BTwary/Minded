@@ -184,13 +184,25 @@ class StorageService:
         resolved = self._resolve_read_path(file_path)
         ext = os.path.splitext(resolved)[1].lower()
         if ext == ".parquet":
-            return pd.read_parquet(resolved)
-        df, _report = RobustFileLoader().load(file_path=resolved)
+            df = pd.read_parquet(resolved)
+        else:
+            df, _report = RobustFileLoader().load(file_path=resolved)
+        if "business_timezone" not in df.attrs:
+            tz = os.getenv("AAOS_BUSINESS_TIMEZONE")
+            if tz:
+                df.attrs["business_timezone"] = tz
         return df
 
     def load_dataframe_with_report(self, file_path: str) -> Tuple[pd.DataFrame, Optional[IngestionReport]]:
         resolved = self._resolve_read_path(file_path)
         ext = os.path.splitext(resolved)[1].lower()
         if ext == ".parquet":
-            return pd.read_parquet(resolved), None
-        return RobustFileLoader().load(file_path=resolved)
+            df = pd.read_parquet(resolved)
+            report = None
+        else:
+            df, report = RobustFileLoader().load(file_path=resolved)
+        if "business_timezone" not in df.attrs:
+            tz = os.getenv("AAOS_BUSINESS_TIMEZONE")
+            if tz:
+                df.attrs["business_timezone"] = tz
+        return df, report

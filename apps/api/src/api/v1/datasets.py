@@ -35,6 +35,7 @@ async def upload_dataset(
     file: UploadFile = File(...),
     project_id: str = Form(...),
     description: Optional[str] = Form(None),
+    business_timezone: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -56,6 +57,7 @@ async def upload_dataset(
             filename=file.filename or "uploaded_data.csv",
             file_bytes=contents,
             description=description,
+            business_timezone=business_timezone,
         )
         version = (db.query(DatasetVersion)
                    .filter(DatasetVersion.dataset_id == dataset.id, DatasetVersion.version_number == dataset.current_version)

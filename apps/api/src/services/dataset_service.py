@@ -63,6 +63,7 @@ class DatasetService:
         filename: str,
         file_bytes: bytes,
         description: Optional[str] = None,
+        business_timezone: Optional[str] = None,
     ) -> Dataset:
         """Ingest raw dataset file, compute profile, convert to Parquet, and store version 1."""
         dataset_id = str(uuid.uuid4())
@@ -77,12 +78,18 @@ class DatasetService:
         # 2. Load into DataFrame (robustly: handles real-world encoding,
         #    delimiter, NA-token, and numeric-formatting issues)
         df, ingestion_report = self.storage.load_dataframe_with_report(raw_path)
+        tz = business_timezone or os.getenv("AAOS_BUSINESS_TIMEZONE", "UTC")
+        if tz:
+            df.attrs["business_timezone"] = tz
 
         # 3. Save as compressed Parquet
         parquet_path = self.storage.save_dataframe_as_parquet(dataset_id, 1, df)
 
         # 4. Profile dataset deterministically
         profile: DatasetProfileSchema = self.profiler.profile_dataframe(df, name, version=1)
+        profile_data = profile.model_dump(mode="json")
+        if tz:
+            profile_data["business_timezone"] = tz
 
         # 5. Create Dataset Record
         dataset = Dataset(
@@ -95,7 +102,7 @@ class DatasetService:
             row_count=len(df),
             column_count=len(df.columns),
             data_quality_score=profile.data_quality.overall_score,
-            profile_json=profile.model_dump(mode="json"),
+            profile_json=profile_data,
         )
         self.db.add(dataset)
 
