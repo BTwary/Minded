@@ -23,6 +23,8 @@ EXCLUDE_DIR_NAMES = {
     ".vscode",
     "temp_p2_test",
     "data_store",
+    "bundle",
+    "out",
 }
 
 EXCLUDE_EXTENSIONS = {
@@ -108,7 +110,7 @@ def make_archive(dest_zip_path: str):
 
 def main():
     import sys
-    dest_name = sys.argv[1] if len(sys.argv) > 1 else "minded.zip"
+    dest_name = sys.argv[1] if len(sys.argv) > 1 else "MindEd_AAOS_v40_Release1.0_candidate.zip"
     dest = os.path.join(DOWNLOADS_DIR, dest_name) if not os.path.isabs(dest_name) else dest_name
     make_archive(dest)
     print("\nClean source archive successfully generated!")

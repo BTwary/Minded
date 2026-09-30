@@ -120,6 +120,34 @@ class TestRootCauseConfounderRigor(unittest.TestCase):
         details_txt = " ".join(res.details)
         self.assertIn("none of the scanned factors met the dual criteria", details_txt.lower())
 
+    def test_categorical_confounder_discovery_and_dummy_adjustment(self):
+        """Unseen test case 5: Categorical confounder is discovered, evaluated via ANOVA/TVD, and dummy-adjusted."""
+        from packages.analytics_core.src.data.certification_data import load_dataset
+        df = load_dataset("titanic")
+        res = build_analyst_result("Why did First class have higher survival than Third class?", df, target="survived", group="class")
+
+        self.assertIsNotNone(res)
+        self.assertEqual(res.kind, "ROOT_CAUSE")
+        # Surrogates pclass and alive must not be selected as top_candidate
+        self.assertNotIn(res.numbers["top_candidate"], ["pclass", "alive", "class", "survived"])
+        # Top candidate must be a valid covariate such as who or sex or fare
+        self.assertIn(res.numbers["top_candidate"], ["who", "sex", "adult_male", "fare"])
+        # Attenuation should be evaluated
+        self.assertGreater(res.numbers["attenuation_pct"], 0.0)
+        self.assertIn("candidate confounder", " ".join(res.details).lower())
+
+    def test_surrogate_exclusion_prevents_recoded_duplicate_confounders(self):
+        """Unseen test case 6: Exposure and target surrogates (e.g. pclass for class, alive for survived) are excluded."""
+        from packages.analytics_core.src.data.certification_data import load_dataset
+        df = load_dataset("titanic")
+        res = build_analyst_result("Why did First class have higher survival than Third class?", df, target="survived", group="class")
+        scanned = res.numbers.get("candidate_factors_scanned", [])
+        self.assertNotIn("pclass", scanned)
+        self.assertNotIn("alive", scanned)
+        self.assertNotIn("class", scanned)
+        self.assertNotIn("survived", scanned)
+
 
 if __name__ == "__main__":
     unittest.main()
+

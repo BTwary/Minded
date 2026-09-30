@@ -36,43 +36,52 @@ def verify_certification_data() -> Dict[str, bool]:
 
 
 def load_dataset(name: str) -> pd.DataFrame:
-    """Load a certification dataset offline-first from data/certification,
-    falling back to online seaborn if the local cache is absent."""
-    try:
-        import seaborn as sns
-        if os.path.isdir(CERTIFICATION_DIR):
-            return sns.load_dataset(name, data_home=CERTIFICATION_DIR)
-        return sns.load_dataset(name)
-    except Exception:
-        # Fallback to direct pandas parsing if seaborn unavailable
-        csv_path = os.path.join(CERTIFICATION_DIR, f"{name}.csv")
-        if os.path.exists(csv_path):
-            df = pd.read_csv(csv_path)
-            # Post-process known types
-            if name == "titanic":
-                if "class" in df.columns:
-                    df["class"] = pd.Categorical(df["class"], ["First", "Second", "Third"])
-                if "deck" in df.columns:
-                    df["deck"] = pd.Categorical(df["deck"], list("ABCDEFG"))
-            elif name == "tips":
-                df["day"] = pd.Categorical(df["day"], ["Thur", "Fri", "Sat", "Sun"])
-                df["sex"] = pd.Categorical(df["sex"], ["Male", "Female"])
-                df["time"] = pd.Categorical(df["time"], ["Lunch", "Dinner"])
-                df["smoker"] = pd.Categorical(df["smoker"], ["Yes", "No"])
-            elif name == "penguins":
-                df["sex"] = df["sex"].str.title()
-            elif name == "diamonds":
-                df["color"] = pd.Categorical(df["color"], ["D", "E", "F", "G", "H", "I", "J"])
-                df["clarity"] = pd.Categorical(df["clarity"], ["IF", "VVS1", "VVS2", "VS1", "VS2", "SI1", "SI2", "I1"])
-                df["cut"] = pd.Categorical(df["cut"], ["Ideal", "Premium", "Very Good", "Good", "Fair"])
-            elif name == "taxis":
-                df["pickup"] = pd.to_datetime(df["pickup"])
-                df["dropoff"] = pd.to_datetime(df["dropoff"])
-            elif name == "flights":
-                months = df["month"].str[:3]
-                df["month"] = pd.Categorical(months, months.unique())
-            return df
-        raise
+    """Load an authoritative certification dataset from vendored local CSV with mandatory SHA-256 integrity check.
+    Zero network access, zero seaborn dependency, fail-closed on tampering or missing files."""
+    filename = f"{name}.csv"
+    if filename not in EXPECTED_CHECKSUMS:
+        raise ValueError(f"Dataset '{name}' is not an authorized certification dataset.")
+
+    expected_hash = EXPECTED_CHECKSUMS[filename]
+    csv_path = os.path.join(CERTIFICATION_DIR, filename)
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Authoritative certification dataset missing: {csv_path}")
+
+    with open(csv_path, "rb") as f:
+        actual_hash = hashlib.sha256(f.read()).hexdigest()
+
+    if actual_hash != expected_hash:
+        raise ValueError(
+            f"Cryptographic integrity violation for certification dataset '{filename}': "
+            f"expected SHA-256 {expected_hash}, got {actual_hash}. Refusing to load tampered data."
+        )
+
+    df = pd.read_csv(csv_path)
+    # Post-process known types
+    if name == "titanic":
+        if "class" in df.columns:
+            df["class"] = pd.Categorical(df["class"], ["First", "Second", "Third"])
+        if "deck" in df.columns:
+            df["deck"] = pd.Categorical(df["deck"], list("ABCDEFG"))
+    elif name == "tips":
+        df["day"] = pd.Categorical(df["day"], ["Thur", "Fri", "Sat", "Sun"])
+        df["sex"] = pd.Categorical(df["sex"], ["Male", "Female"])
+        df["time"] = pd.Categorical(df["time"], ["Lunch", "Dinner"])
+        df["smoker"] = pd.Categorical(df["smoker"], ["Yes", "No"])
+    elif name == "penguins":
+        if "sex" in df.columns:
+            df["sex"] = df["sex"].str.title()
+    elif name == "diamonds":
+        df["color"] = pd.Categorical(df["color"], ["D", "E", "F", "G", "H", "I", "J"])
+        df["clarity"] = pd.Categorical(df["clarity"], ["IF", "VVS1", "VVS2", "VS1", "VS2", "SI1", "SI2", "I1"])
+        df["cut"] = pd.Categorical(df["cut"], ["Ideal", "Premium", "Very Good", "Good", "Fair"])
+    elif name == "taxis":
+        df["pickup"] = pd.to_datetime(df["pickup"])
+        df["dropoff"] = pd.to_datetime(df["dropoff"])
+    elif name == "flights":
+        months = df["month"].str[:3]
+        df["month"] = pd.Categorical(months, months.unique())
+    return df
 
 
 def load_all_certification_datasets(

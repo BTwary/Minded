@@ -22,9 +22,10 @@
 # or `artifact_name` mismatched with that document's own declared header, is a
 # release-blocking failure by design, not an oversight to be tolerated.
 [release]
-version = "39"
-artifact_name = "minded.zip"
-status_document = "docs/AAOS_V39_RELEASE_STATUS.md"
+version = "40"
+artifact_name = "MindEd_AAOS_v40_Release1.0_candidate.zip"
+status_document = "docs/AAOS_V40_RELEASE_STATUS.md"
+
 
 [[check]]
 id = "compileall"

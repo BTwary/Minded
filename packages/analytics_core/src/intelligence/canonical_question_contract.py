@@ -161,6 +161,15 @@ APPROVED_SEMANTIC_ALIASES: Dict[str, List[str]] = {
     "churn": ["churned", "churn", "is_churned"],
     "churned": ["churned", "churn", "is_churned"],
     "churn rate": ["churned", "churn", "is_churned"],
+    "retention": ["retention_rate", "retention", "is_retained", "retained"],
+    "retention rate": ["retention_rate", "retention", "is_retained", "retained"],
+    "conversion": ["conversion_rate", "conversion", "is_converted", "converted"],
+    "conversion rate": ["conversion_rate", "conversion", "is_converted", "converted"],
+    "traffic source": ["traffic_source", "source", "channel"],
+    "traffic sources": ["traffic_source", "source", "channel"],
+    "traffic": ["traffic_source", "source", "channel"],
+    "advertising spend": ["advertising_spend", "ad_spend", "spend", "marketing_spend"],
+    "ad spend": ["advertising_spend", "ad_spend", "spend", "marketing_spend"],
     "plan tier": ["plan_tier", "plan"],
     "subscription plan": ["plan_tier", "plan"],
     "subscription plans": ["plan_tier", "plan"],
@@ -173,6 +182,8 @@ STEM_PREFIXES = {
     "surviv": "survived",
     "passeng": "passengers",
     "orbit": "orbital_period",
+    "retent": "retention_rate",
+    "convers": "conversion_rate",
 }
 
 # Stop words to ignore during category value scanning
@@ -287,6 +298,31 @@ def resolve_phrase_to_column(phrase: str, available_cols: Sequence[str]) -> Opti
             return cand
 
     return None
+
+
+def resolve_phrase_to_column_list(phrase: str, available_cols: Sequence[str]) -> List[str]:
+    """Resolve a compound phrase (e.g. 'price and marketing_spend' or 'price, marketing_spend, and discount') to a list of physical columns."""
+    p_str = phrase.strip()
+    if not p_str:
+        return []
+
+    # If the phrase has conjunctions ('and', '&') or commas, split first!
+    if re.search(r"\b(?:and|&)\b|,", p_str, flags=re.I):
+        parts = re.split(r",?\s+(?:and|&)\s+|,|\s+and\s+", p_str, flags=re.I)
+        cols_found: List[str] = []
+        for part in parts:
+            clean_part = part.strip()
+            if not clean_part:
+                continue
+            c = resolve_phrase_to_column(clean_part, available_cols)
+            if c and c not in cols_found:
+                cols_found.append(c)
+        if cols_found:
+            return cols_found
+
+    single = resolve_phrase_to_column(p_str, available_cols)
+    return [single] if single else []
+
 
 
 def scan_observed_category_values(
@@ -498,15 +534,15 @@ def compile_canonical_question_contract(
     if directional_match and not target:
         pred_phrase = directional_match.group(1).strip()
         target_phrase = directional_match.group(2).strip()
-        pred_col = resolve_phrase_to_column(pred_phrase, cols)
+        pred_cols = resolve_phrase_to_column_list(pred_phrase, cols)
         target_col = resolve_phrase_to_column(target_phrase, cols)
         if not target_col and semantic is not None:
             sem_tgt = getattr(semantic, "target_metric_col", None) or getattr(semantic, "churn_event_col", None)
             if sem_tgt and sem_tgt in cols:
                 target_col = sem_tgt
-        if pred_col and target_col:
+        if pred_cols and target_col:
             target = target_col
-            explanatory = [pred_col]
+            explanatory = pred_cols
             task_family = "CAUSAL_REQUEST"
             causal_language = True
             requested_claim = "CAUSAL"
@@ -514,8 +550,8 @@ def compile_canonical_question_contract(
             claim_ceiling = "ASSOCIATION"
             claim_type = "ASSOCIATION"
             estimand = "correlation" if pd.api.types.is_numeric_dtype(df[target_col]) or df[target_col].nunique() == 2 else "group_difference"
-            evidence["relation"] = {"type": "directional", "predictor": pred_col, "target": target_col}
-        elif target_col and not pred_col:
+            evidence["relation"] = {"type": "directional", "predictor": pred_cols, "target": target_col}
+        elif target_col and not pred_cols:
             target = target_col
             task_family = "CAUSAL_REQUEST"
             causal_language = True
@@ -531,11 +567,11 @@ def compile_canonical_question_contract(
     if effect_of_match and not target:
         pred_phrase = effect_of_match.group(1).strip()
         target_phrase = effect_of_match.group(2).strip()
-        pred_col = resolve_phrase_to_column(pred_phrase, cols)
+        pred_cols = resolve_phrase_to_column_list(pred_phrase, cols)
         target_col = resolve_phrase_to_column(target_phrase, cols)
-        if pred_col and target_col:
+        if pred_cols and target_col:
             target = target_col
-            explanatory = [pred_col]
+            explanatory = pred_cols
             task_family = "CAUSAL_REQUEST"
             causal_language = True
             requested_claim = "CAUSAL"
@@ -543,28 +579,71 @@ def compile_canonical_question_contract(
             claim_ceiling = "ASSOCIATION"
             claim_type = "ASSOCIATION"
             estimand = "correlation"
-            evidence["relation"] = {"type": "effect_of", "predictor": pred_col, "target": target_col}
+            evidence["relation"] = {"type": "effect_of", "predictor": pred_cols, "target": target_col}
 
-    # Symmetric: "Is survival correlated with fare?" / "Is tip correlated with total bill?"
+    # Symmetric: "Is survival correlated with fare?" / "Is tip correlated with total bill?" / "Are price and marketing_spend associated with annual_sales?"
     corr_match = re.search(
-        r"(?:is|are|was|were)\s+(.+?)\s+(?:correlated|associated|related)\s+with\s+(.+?)(?:\?|$)",
+        r"(?:is|are|was|were)\s+(.+?)\s+(correlated|associated|related)\s+with\s+(.+?)(?:\?|$)",
         ql,
     )
     if corr_match and not target:
         var1_phrase = corr_match.group(1).strip()
-        var2_phrase = corr_match.group(2).strip()
-        var1 = resolve_phrase_to_column(var1_phrase, cols)
-        var2 = resolve_phrase_to_column(var2_phrase, cols)
-        if var1 and var2:
-            target = var1
-            explanatory = [var2]
-            task_family = "ASSOCIATION"
+        verb = corr_match.group(2).strip().lower()
+        var2_phrase = corr_match.group(3).strip()
+        var1_cols = resolve_phrase_to_column_list(var1_phrase, cols)
+        var2_cols = resolve_phrase_to_column_list(var2_phrase, cols)
+        if var1_cols and var2_cols:
+            if len(var1_cols) > 1 and len(var2_cols) == 1:
+                target = var2_cols[0]
+                explanatory = var1_cols
+            elif len(var2_cols) > 1 and len(var1_cols) == 1:
+                target = var1_cols[0]
+                explanatory = var2_cols
+            else:
+                c1 = var1_cols[0]
+                c2 = var2_cols[0]
+                sem_tgt = None
+                if semantic is not None:
+                    sem_tgt = getattr(semantic, "target_metric_col", None) or getattr(semantic, "churn_event_col", None)
+                if sem_tgt and sem_tgt in (c1, c2):
+                    if sem_tgt == c1:
+                        target = c1
+                        explanatory = [c2]
+                    else:
+                        target = c2
+                        explanatory = [c1]
+                elif df is not None and c2 in df.columns and (
+                    pd.api.types.is_object_dtype(df[c2])
+                    or pd.api.types.is_string_dtype(df[c2])
+                    or isinstance(df[c2].dtype, pd.CategoricalDtype)
+                ) and c1 in df.columns and (
+                    pd.api.types.is_numeric_dtype(df[c1]) or pd.api.types.is_bool_dtype(df[c1])
+                ):
+                    target = c1
+                    explanatory = [c2]
+                elif df is not None and c1 in df.columns and (
+                    pd.api.types.is_object_dtype(df[c1])
+                    or pd.api.types.is_string_dtype(df[c1])
+                    or isinstance(df[c1].dtype, pd.CategoricalDtype)
+                ) and c2 in df.columns and (
+                    pd.api.types.is_numeric_dtype(df[c2]) or pd.api.types.is_bool_dtype(df[c2])
+                ):
+                    target = c2
+                    explanatory = [c1]
+                elif verb in ("associated", "related"):
+                    target = c2
+                    explanatory = [c1]
+                else:
+                    target = c1
+                    explanatory = [c2]
+
+            task_family = "MULTI_ASSOCIATION" if len(explanatory) > 1 else "ASSOCIATION"
             requested_claim = "ASSOCIATION"
             supported_claim = "ASSOCIATION"
             claim_ceiling = "ASSOCIATION"
             claim_type = "ASSOCIATION"
             estimand = "correlation"
-            evidence["relation"] = {"type": "symmetric_correlation", "var1": var1, "var2": var2}
+            evidence["relation"] = {"type": "symmetric_correlation", "var1": target, "var2": explanatory[0]}
 
     # 4. Trend: "Has X improved/grown/declined over time?" / "Has fuel efficiency improved over model years?" / "Has the number of passengers grown over time?"
     trend_match = re.search(
@@ -629,22 +708,43 @@ def compile_canonical_question_contract(
             estimand = "ranking"
             evidence["ranking"] = {"group": dim_col, "target": target, "direction": ranking_direction}
 
-    # 6. Group Comparison: "Do smokers tip more than non-smokers?" / "Do male penguins weigh more than female penguins?" / "Do credit card payers tip more than cash payers?"
+    # 6. Group Comparison: "Do smokers tip more than non-smokers?" / "Do male penguins weigh more than female penguins?" / "Do credit card payers tip more than cash payers?" / "Do enterprise customers have higher retention than SMB customers?"
     do_compare_match = re.search(
         r"(?:do|does|did|is|are)\s+(.+?)\s+([a-zA-Z0-9_]+)\s+(?:more|less|higher|lower)\s+than\s+(.+?)(?:\?|$)",
         ql,
     )
-    if do_compare_match and not target and not re.search(r"\bwhy\b", ql):
-        side_a = do_compare_match.group(1).strip()
-        action_metric = do_compare_match.group(2).strip()
-        side_b = do_compare_match.group(3).strip()
+    do_compare_metric_match = re.search(
+        r"(?:do|does|did|is|are)\s+(.+?)\s+(?:have|show|exhibit|experience)?\s*(?:more|less|higher|lower|greater)\s+([a-zA-Z0-9_\s]+?)\s+than\s+(.+?)(?:\?|$)",
+        ql,
+    )
+    if (do_compare_match or do_compare_metric_match) and not target and not re.search(r"\bwhy\b", ql):
+        if do_compare_match:
+            side_a = do_compare_match.group(1).strip()
+            action_metric = do_compare_match.group(2).strip()
+            side_b = do_compare_match.group(3).strip()
+        else:
+            side_a = do_compare_metric_match.group(1).strip()
+            action_metric = do_compare_metric_match.group(2).strip()
+            side_b = do_compare_metric_match.group(3).strip()
 
         cand_target = resolve_phrase_to_column(action_metric, cols)
+        if not cand_target and do_compare_match and do_compare_metric_match:
+            # Fall back to alternative match if Form A failed to resolve metric
+            side_a = do_compare_metric_match.group(1).strip()
+            action_metric = do_compare_metric_match.group(2).strip()
+            side_b = do_compare_metric_match.group(3).strip()
+            cand_target = resolve_phrase_to_column(action_metric, cols)
+
         grp_col_a = resolve_phrase_to_column(side_a, cols)
         grp_col_b = resolve_phrase_to_column(side_b, cols)
         cat_group, cat_vals = scan_observed_category_values(f"{side_a} {side_b}", df)
 
         chosen_group = grp_col_a if (grp_col_a and grp_col_a == grp_col_b) else (cat_group or grp_col_a or grp_col_b)
+        if not chosen_group and semantic is not None:
+            sem_grp = getattr(semantic, "group_dimension_col", None)
+            if sem_grp and sem_grp in cols:
+                chosen_group = sem_grp
+
         if cand_target and chosen_group and cand_target != chosen_group:
             target = cand_target
             grouping = [chosen_group]
@@ -672,7 +772,7 @@ def compile_canonical_question_contract(
             claim_ceiling = "ASSOCIATION"
             estimand = "group_difference"
 
-    # 8. Diagnostic / Why: "Why did third class passengers have lower survival than first class?" / "Why are Fair cut diamonds priced higher than Ideal cut on average?" / "Why do cars from the usa have lower mpg?"
+    # 8. Diagnostic / Why: "Why did third class passengers have lower survival than first class?" / "Why are Fair cut diamonds priced higher than Ideal cut on average?" / "Why do cars from the usa have lower mpg?" / "Why is conversion higher in paid traffic?"
     if re.search(r"\bwhy\b", ql) and not target:
         causal_language = True
         task_family = "ROOT_CAUSE"
@@ -681,18 +781,33 @@ def compile_canonical_question_contract(
         claim_ceiling = "ASSOCIATION"
         claim_type = "ASSOCIATION"
         estimand = "root_cause"
-        for phrase in ["survival", "price", "mpg", "fare", "tip", "body mass", "weight"]:
-            if phrase in ql:
-                c = resolve_phrase_to_column(phrase, cols)
-                if c:
+        if semantic is not None:
+            sem_tgt = getattr(semantic, "target_metric_col", None) or getattr(semantic, "churn_event_col", None)
+            if sem_tgt and sem_tgt in cols:
+                target = sem_tgt
+        if not target:
+            for phrase in ["survival", "price", "mpg", "fare", "tip", "body mass", "weight", "conversion", "retention", "revenue", "sales", "cost", "profit", "churn"]:
+                if phrase in ql:
+                    c = resolve_phrase_to_column(phrase, cols)
+                    if c:
+                        target = c
+                        break
+        if not target:
+            for c in cols:
+                c_norm = normalize_token(c)
+                if re.search(rf"\b{re.escape(c_norm)}\b", ql):
                     target = c
                     break
         g_cand, g_vals = scan_observed_category_values(q_clean, df)
         if g_cand and g_cand != target:
             grouping = [g_cand]
             comparison_values = g_vals
+        if not grouping and semantic is not None:
+            sem_grp = getattr(semantic, "group_dimension_col", None)
+            if sem_grp and sem_grp in cols and sem_grp != target:
+                grouping = [sem_grp]
         if not grouping:
-            for dim_phrase in ["passenger class", "class", "cut", "origin", "day", "clarity", "species"]:
+            for dim_phrase in ["passenger class", "class", "cut", "origin", "day", "clarity", "species", "traffic_source", "traffic source", "channel", "source", "segment", "customer segment", "region"]:
                 if dim_phrase in ql:
                     c = resolve_phrase_to_column(dim_phrase, cols)
                     if c and c != target:

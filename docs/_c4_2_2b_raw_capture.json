@@ -3,18 +3,18 @@
     "question": "Is price associated with annual_sales?",
     "intent_type": "CORRELATION",
     "plan_task": "ASSOCIATION",
-    "plan_target": "price",
+    "plan_target": "annual_sales",
     "plan_explanatory": [
-      "annual_sales"
+      "price"
     ],
     "plan_grouping": [],
-    "plan_time": "order_date",
+    "plan_time": null,
     "estimand_target": "annual_sales",
     "estimand_predictor": [
       "price"
     ],
     "estimand_comparison_dim": null,
-    "estimand_time": "order_date",
+    "estimand_time": null,
     "problem_class": "CORRELATIONAL",
     "selected_method_code": "association_numeric",
     "experiment_sql": "SELECT annual_sales, price FROM data_table WHERE annual_sales IS NOT NULL AND price IS NOT NULL"
@@ -22,7 +22,7 @@
   {
     "question": "Are annual_sales and price associated?",
     "intent_type": "CORRELATION",
-    "plan_task": "GENERAL_EXPLORATION",
+    "plan_task": "ASSOCIATION",
     "plan_target": "annual_sales",
     "plan_explanatory": [
       "price"
@@ -36,33 +36,35 @@
     "estimand_comparison_dim": null,
     "estimand_time": "order_date",
     "problem_class": "CORRELATIONAL",
-    "selected_method_code": null,
+    "selected_method_code": "association_numeric",
     "experiment_sql": "SELECT annual_sales, price FROM data_table WHERE annual_sales IS NOT NULL AND price IS NOT NULL"
   },
   {
     "question": "Are price and marketing_spend associated with annual_sales?",
     "intent_type": "CORRELATION",
     "plan_task": "ASSOCIATION",
-    "plan_target": "price",
+    "plan_target": "annual_sales",
     "plan_explanatory": [
-      "annual_sales"
+      "price",
+      "marketing_spend"
     ],
     "plan_grouping": [],
-    "plan_time": "order_date",
+    "plan_time": null,
     "estimand_target": "annual_sales",
     "estimand_predictor": [
+      "price",
       "marketing_spend"
     ],
     "estimand_comparison_dim": null,
-    "estimand_time": "order_date",
+    "estimand_time": null,
     "problem_class": "CORRELATIONAL",
     "selected_method_code": "association_numeric",
-    "experiment_sql": "SELECT annual_sales, marketing_spend FROM data_table WHERE annual_sales IS NOT NULL AND marketing_spend IS NOT NULL"
+    "experiment_sql": "SELECT annual_sales, price FROM data_table WHERE annual_sales IS NOT NULL AND price IS NOT NULL"
   },
   {
     "question": "Compare annual_sales between regions",
     "intent_type": "PERFORMANCE",
-    "plan_task": "GENERAL_EXPLORATION",
+    "plan_task": "COMPARISON",
     "plan_target": "annual_sales",
     "plan_explanatory": [],
     "plan_grouping": [
@@ -74,13 +76,13 @@
     "estimand_comparison_dim": "region",
     "estimand_time": "order_date",
     "problem_class": "COMPARATIVE",
-    "selected_method_code": null,
+    "selected_method_code": "comparison_group_effect",
     "experiment_sql": null
   },
   {
     "question": "Forecast annual_sales over time",
     "intent_type": "FORECAST",
-    "plan_task": "GENERAL_EXPLORATION",
+    "plan_task": "FORECAST",
     "plan_target": "annual_sales",
     "plan_explanatory": [],
     "plan_grouping": [],
@@ -90,47 +92,45 @@
     "estimand_comparison_dim": null,
     "estimand_time": "order_date",
     "problem_class": "FORECASTING",
-    "selected_method_code": null,
+    "selected_method_code": "forecast_rolling_origin",
     "experiment_sql": null
   },
   {
     "question": "Does plan tier affect cancellation rate?",
     "intent_type": "CORRELATION",
-    "plan_task": "GENERAL_EXPLORATION",
-    "plan_target": "plan_tier",
+    "plan_task": "ASSOCIATION",
+    "plan_target": "churned",
     "plan_explanatory": [
-      "marketing_spend"
-    ],
-    "plan_grouping": [
       "plan_tier"
     ],
-    "plan_time": "order_date",
+    "plan_grouping": [],
+    "plan_time": null,
     "estimand_target": "churned",
     "estimand_predictor": [
-      "marketing_spend"
+      "plan_tier"
     ],
     "estimand_comparison_dim": "plan_tier",
-    "estimand_time": "order_date",
-    "problem_class": "CORRELATIONAL",
+    "estimand_time": null,
+    "problem_class": "SURVIVAL_CHURN",
     "selected_method_code": null,
-    "experiment_sql": "SELECT churned, marketing_spend FROM data_table WHERE churned IS NOT NULL AND marketing_spend IS NOT NULL"
+    "experiment_sql": null
   },
   {
     "question": "Is price associated with annual_sales, not tenure?",
     "intent_type": "CORRELATION",
     "plan_task": "ASSOCIATION",
-    "plan_target": "price",
+    "plan_target": "annual_sales",
     "plan_explanatory": [
-      "annual_sales"
+      "price"
     ],
     "plan_grouping": [],
-    "plan_time": "order_date",
+    "plan_time": null,
     "estimand_target": "annual_sales",
     "estimand_predictor": [
       "price"
     ],
     "estimand_comparison_dim": null,
-    "estimand_time": "order_date",
+    "estimand_time": null,
     "problem_class": "CORRELATIONAL",
     "selected_method_code": "association_numeric",
     "experiment_sql": "SELECT annual_sales, price FROM data_table WHERE annual_sales IS NOT NULL AND price IS NOT NULL"
@@ -138,7 +138,7 @@
   {
     "question": "Which plan tier has higher churn rate?",
     "intent_type": "CHURN",
-    "plan_task": "GENERAL_EXPLORATION",
+    "plan_task": "COMPARISON",
     "plan_target": "plan_tier",
     "plan_explanatory": [],
     "plan_grouping": [
@@ -162,13 +162,13 @@
       "annual_sales"
     ],
     "plan_grouping": [],
-    "plan_time": "order_date",
+    "plan_time": null,
     "estimand_target": "price",
     "estimand_predictor": [
       "annual_sales"
     ],
     "estimand_comparison_dim": null,
-    "estimand_time": "order_date",
+    "estimand_time": null,
     "problem_class": "CORRELATIONAL",
     "selected_method_code": "association_numeric",
     "experiment_sql": "SELECT price, annual_sales FROM data_table WHERE price IS NOT NULL AND annual_sales IS NOT NULL"
@@ -182,6 +182,84 @@
       "price"
     ],
     "plan_grouping": [],
+    "plan_time": null,
+    "estimand_target": "annual_sales",
+    "estimand_predictor": [
+      "price"
+    ],
+    "estimand_comparison_dim": null,
+    "estimand_time": null,
+    "problem_class": "CORRELATIONAL",
+    "selected_method_code": "association_numeric",
+    "experiment_sql": "SELECT annual_sales, price FROM data_table WHERE annual_sales IS NOT NULL AND price IS NOT NULL"
+  },
+  {
+    "question": "What correlates with annual_sales?",
+    "intent_type": "CORRELATION",
+    "plan_task": "ASSOCIATION",
+    "plan_target": "annual_sales",
+    "plan_explanatory": [
+      "marketing_spend"
+    ],
+    "plan_grouping": [],
+    "plan_time": "order_date",
+    "estimand_target": "annual_sales",
+    "estimand_predictor": [
+      "marketing_spend"
+    ],
+    "estimand_comparison_dim": null,
+    "estimand_time": "order_date",
+    "problem_class": "CORRELATIONAL",
+    "selected_method_code": "association_numeric",
+    "experiment_sql": "SELECT annual_sales, marketing_spend FROM data_table WHERE annual_sales IS NOT NULL AND marketing_spend IS NOT NULL"
+  },
+  {
+    "question": "Is customer_id associated with annual_sales?",
+    "intent_type": "CORRELATION",
+    "plan_task": "ASSOCIATION",
+    "plan_target": "annual_sales",
+    "plan_explanatory": [
+      "customer_id"
+    ],
+    "plan_grouping": [],
+    "plan_time": null,
+    "estimand_target": "annual_sales",
+    "estimand_predictor": [
+      "customer_id"
+    ],
+    "estimand_comparison_dim": "customer_id",
+    "estimand_time": null,
+    "problem_class": "COMPARATIVE",
+    "selected_method_code": null,
+    "experiment_sql": null
+  },
+  {
+    "question": "Does marketing_spend cause an increase in annual_sales?",
+    "intent_type": "CAUSAL",
+    "plan_task": "CAUSAL",
+    "plan_target": "annual_sales",
+    "plan_explanatory": [
+      "marketing_spend"
+    ],
+    "plan_grouping": [],
+    "plan_time": null,
+    "estimand_target": "price",
+    "estimand_predictor": [],
+    "estimand_comparison_dim": null,
+    "estimand_time": null,
+    "problem_class": "DIAGNOSTIC",
+    "selected_method_code": null,
+    "experiment_sql": null
+  },
+  {
+    "question": "How does price correlate with annual_sales figures?",
+    "intent_type": "CORRELATION",
+    "plan_task": "ASSOCIATION",
+    "plan_target": "annual_sales",
+    "plan_explanatory": [
+      "price"
+    ],
+    "plan_grouping": [],
     "plan_time": "order_date",
     "estimand_target": "annual_sales",
     "estimand_predictor": [
@@ -191,82 +269,6 @@
     "estimand_time": "order_date",
     "problem_class": "CORRELATIONAL",
     "selected_method_code": "association_numeric",
-    "experiment_sql": "SELECT annual_sales, price FROM data_table WHERE annual_sales IS NOT NULL AND price IS NOT NULL"
-  },
-  {
-    "question": "What correlates with annual_sales?",
-    "intent_type": "CORRELATION",
-    "plan_task": "GENERAL_EXPLORATION",
-    "plan_target": "annual_sales",
-    "plan_explanatory": [
-      "marketing_spend"
-    ],
-    "plan_grouping": [],
-    "plan_time": "order_date",
-    "estimand_target": "annual_sales",
-    "estimand_predictor": [
-      "marketing_spend"
-    ],
-    "estimand_comparison_dim": null,
-    "estimand_time": "order_date",
-    "problem_class": "CORRELATIONAL",
-    "selected_method_code": null,
-    "experiment_sql": "SELECT annual_sales, marketing_spend FROM data_table WHERE annual_sales IS NOT NULL AND marketing_spend IS NOT NULL"
-  },
-  {
-    "question": "Is customer_id associated with annual_sales?",
-    "intent_type": "CORRELATION",
-    "plan_task": "ASSOCIATION",
-    "plan_target": "customer_id",
-    "plan_explanatory": [
-      "annual_sales"
-    ],
-    "plan_grouping": [],
-    "plan_time": "order_date",
-    "estimand_target": "annual_sales",
-    "estimand_predictor": [
-      "marketing_spend"
-    ],
-    "estimand_comparison_dim": null,
-    "estimand_time": "order_date",
-    "problem_class": "CORRELATIONAL",
-    "selected_method_code": null,
-    "experiment_sql": "SELECT annual_sales, marketing_spend FROM data_table WHERE annual_sales IS NOT NULL AND marketing_spend IS NOT NULL"
-  },
-  {
-    "question": "Does marketing_spend cause an increase in annual_sales?",
-    "intent_type": "CAUSAL",
-    "plan_task": "GENERAL_EXPLORATION",
-    "plan_target": "price",
-    "plan_explanatory": [],
-    "plan_grouping": [],
-    "plan_time": "order_date",
-    "estimand_target": "price",
-    "estimand_predictor": [],
-    "estimand_comparison_dim": null,
-    "estimand_time": "order_date",
-    "problem_class": "DIAGNOSTIC",
-    "selected_method_code": null,
-    "experiment_sql": null
-  },
-  {
-    "question": "How does price correlate with annual_sales figures?",
-    "intent_type": "CORRELATION",
-    "plan_task": "GENERAL_EXPLORATION",
-    "plan_target": "annual_sales",
-    "plan_explanatory": [
-      "price"
-    ],
-    "plan_grouping": [],
-    "plan_time": "order_date",
-    "estimand_target": "annual_sales",
-    "estimand_predictor": [
-      "price"
-    ],
-    "estimand_comparison_dim": null,
-    "estimand_time": "order_date",
-    "problem_class": "CORRELATIONAL",
-    "selected_method_code": null,
     "experiment_sql": "SELECT annual_sales, price FROM data_table WHERE annual_sales IS NOT NULL AND price IS NOT NULL"
   }
 ]

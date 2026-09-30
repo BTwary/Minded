@@ -39,7 +39,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.8
+  "secs": 3.0
  },
  {
   "ds": "titanic",
@@ -65,6 +65,7 @@
    "time": [],
    "bound": {
     "EXPLANATORY_VARIABLE": [
+     "age",
      "fare"
     ],
     "OUTCOME": [
@@ -81,7 +82,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.6
+  "secs": 2.7
  },
  {
   "ds": "titanic",
@@ -123,7 +124,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.1
+  "secs": 3.6
  },
  {
   "ds": "titanic",
@@ -149,7 +150,8 @@
    "time": [],
    "bound": {
     "EXPLANATORY_VARIABLE": [
-     "age"
+     "age",
+     "fare"
     ],
     "OUTCOME": [
      "survived"
@@ -165,7 +167,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.0
+  "secs": 1.8
  },
  {
   "ds": "titanic",
@@ -180,7 +182,7 @@
   "status": "COMPLETED",
   "verdict": "STATISTICALLY_SIGNIFICANT",
   "conf": 0.999999999999,
-  "answer": "Yes -- survived rate is 24.2% for Third (n=491) vs 63.0% for First (n=216): -38.73 percentage points (-61.51% relative), 95% CI -45.85 to -31.01 pp, chi-square p<0.001. Counterfactual opportunity: if First matched Third's survived rate (24.2%), it would generate -83.65 additional events across its 216 baseline observations. Candidate explanatory factors scanned: pclass, sex, age, sibsp, parch, fare (+7 more). Confounder adjustment & persistent difference: pclass was evaluated as a candidate factor (r=-0.34), but adjusting for pclass does not attenuate the observed difference (adjusted difference +0.38 vs unadjusted +0.387, 98.2% persistence). The observed difference persists independently of pclass. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Third to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: 107 rows (12.0%) are exact duplicates of another row; results include them. Recommended next steps: Evaluate whether practical uplift of -38.73 pp justifies rolling out Third. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
+  "answer": "Yes -- survived rate is 24.2% for Third (n=491) vs 63.0% for First (n=216): -38.73 percentage points (-61.51% relative), 95% CI -45.85 to -31.01 pp, chi-square p<0.001. Counterfactual opportunity: if First matched Third's survived rate (24.2%), it would generate -83.65 additional events across its 216 baseline observations. Candidate explanatory factors scanned: sex, age, sibsp, parch, fare, embarked (+5 more). Confounder adjustment & partial attenuation: who is a candidate confounder: it is associated with survived (eta=0.56) and differs across passenger_class (First is 42.1% woman vs 23.2% for Third). Adjusting for who yields a modest 14.8% attenuation (from +0.387 to +0.33), but substantial group differences persist independently of who. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Third to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: 107 rows (12.0%) are exact duplicates of another row; results include them. Recommended next steps: Evaluate whether practical uplift of -38.73 pp justifies rolling out Third. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
   "finding": "Yes -- survived rate is 24.2% for Third (n=491) vs 63.0% for First (n=216): -38.73 percentage points (-61.51% relative), 95% CI -45.85 to -31.01 pp, chi-square p<0.001. (deterministic recomputation from the resolved contract columns) Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
   "contract": {
    "target": "survived",
@@ -207,7 +209,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 5.1
+  "secs": 4.4
  },
  {
   "ds": "titanic",
@@ -235,6 +237,7 @@
    "time": [],
    "bound": {
     "EXPLANATORY_VARIABLE": [
+     "fare",
      "passenger_class"
     ],
     "GROUPING_DIMENSION": [
@@ -254,7 +257,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 1.1
+  "secs": 0.9
  },
  {
   "ds": "tips",
@@ -296,7 +299,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 1.8
+  "secs": 1.7
  },
  {
   "ds": "tips",
@@ -338,7 +341,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.3
+  "secs": 1.8
  },
  {
   "ds": "tips",
@@ -380,7 +383,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "NO_DETECTABLE_EFFECT"
   },
-  "secs": 4.0
+  "secs": 3.1
  },
  {
   "ds": "tips",
@@ -422,7 +425,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.2
+  "secs": 2.8
  },
  {
   "ds": "tips",
@@ -548,7 +551,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.1
+  "secs": 1.9
  },
  {
   "ds": "penguins",
@@ -590,7 +593,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.0
+  "secs": 1.9
  },
  {
   "ds": "penguins",
@@ -632,7 +635,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 3.7
+  "secs": 3.1
  },
  {
   "ds": "mpg",
@@ -674,7 +677,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 2.1
+  "secs": 1.6
  },
  {
   "ds": "mpg",
@@ -716,7 +719,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.3
+  "secs": 1.9
  },
  {
   "ds": "mpg",
@@ -758,7 +761,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.8
+  "secs": 3.9
  },
  {
   "ds": "mpg",
@@ -772,7 +775,7 @@
   "truth_detail": "answer + contract match independent ground truth",
   "status": "COMPLETED",
   "verdict": "STATISTICALLY_SIGNIFICANT",
-  "conf": 1.0,
+  "conf": 0.999999999999,
   "answer": "Average mpg differs across origin (p<0.001; 33.3% of the variation in mpg is explained by origin, a large share). Highest: japan (30.45); lowest: usa (20.08). By group -- japan: 30.45 (n=79); europe: 27.89 (n=70); usa: 20.08 (n=249). japan vs all other origin values combined: +8.65 (95% CI +7.08 to +10.23, p<0.001). Candidate explanatory factors scanned: cylinders, displacement, horsepower, weight, acceleration, model_year (+1 more). Confounder adjustment & attenuation: weight is a candidate confounder: it correlates with mpg (r=-0.83) and differs across origin (japan averages 2,221 vs 3,362 for usa). After adjusting for weight, the observed difference between japan and usa attenuates by 77.1% (from +10.37 to +2.38). The observed data are consistent with confounding by weight rather than an effect of origin in isolation. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for japan to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Recommended next steps: Investigate high-performing japan and underperforming usa for operational drivers.",
   "finding": "Average mpg differs across origin (p<0.001; 33.3% of the variation in mpg is explained by origin, a large share). Highest: japan (30.45); lowest: usa (20.08). (deterministic recomputation from the resolved contract columns) 'mpg' was averaged (MEAN) rather than summed, because it is not additive across rows.",
   "contract": {
@@ -800,7 +803,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 4.6
+  "secs": 3.0
  },
  {
   "ds": "mpg",
@@ -828,6 +831,7 @@
    "bound": {
     "EXPLANATORY_VARIABLE": [
      "horsepower",
+     "mpg",
      "weight"
     ],
     "OUTCOME": [
@@ -844,7 +848,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.2
+  "secs": 0.5
  },
  {
   "ds": "diamonds",
@@ -870,7 +874,8 @@
    "time": [],
    "bound": {
     "EXPLANATORY_VARIABLE": [
-     "carat"
+     "carat",
+     "price"
     ],
     "OUTCOME": [
      "price"
@@ -886,7 +891,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 6.9
+  "secs": 0.8
  },
  {
   "ds": "diamonds",
@@ -928,7 +933,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 2.5
+  "secs": 2.3
  },
  {
   "ds": "diamonds",
@@ -970,7 +975,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.6
+  "secs": 3.1
  },
  {
   "ds": "diamonds",
@@ -984,8 +989,8 @@
   "truth_detail": "answer + contract match independent ground truth",
   "status": "COMPLETED",
   "verdict": "STATISTICALLY_SIGNIFICANT",
-  "conf": 0.9999999999999224,
-  "answer": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). Common Language Effect Size (probability that a random Fair exceeds a random Ideal): 68%. Counterfactual opportunity: if Ideal matched Fair's average performance, total price would expand by +4.77M. Candidate explanatory factors scanned: carat, color, clarity, depth, table, x (+2 more). Confounder adjustment & effect reversal: z is a candidate confounder: it correlates with price (r=0.88) and differs across cut (Ideal averages 3.40 vs 4.09 for Fair). When adjusting for z, the observed difference between Ideal and Fair reverses direction (adjusted difference +2,059 vs unadjusted -1,507), indicating that the unadjusted cut difference was an artifact of composition/confounding by z. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Fair to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: Skewness: Fair values are skewed (mean 4,936 vs median 3,458, P90 11,183); median reflects typical outcome better than mean. Recommended next steps: Investigate operational or business practices driving the superior price of Fair over Ideal. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
+  "conf": 0.999999999999,
+  "answer": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). Common Language Effect Size (probability that a random Fair exceeds a random Ideal): 68%. Counterfactual opportunity: if Ideal matched Fair's average performance, total price would expand by +4.77M. Candidate explanatory factors scanned: carat, color, clarity, depth, table, x (+2 more). Confounder adjustment & effect reversal: carat is a candidate confounder: it correlates with price (r=0.92) and differs across cut (Ideal averages 0.7 vs 1.12 for Fair). When adjusting for carat, the observed difference between Ideal and Fair reverses direction (adjusted difference +1,874 vs unadjusted -1,507), indicating that the unadjusted cut difference was an artifact of composition/confounding by carat. Evidence boundary & claim ceiling: Statistical adjustment indicates whether observational differences are consistent with confounding, but cannot establish mechanistic causality without controlled experimental intervention or longitudinal identification. Strategic Playbook: [Immediate Operational Triage (24-48h)]: Document current operational variant baseline for Fair to ensure repeatability. | [Diagnostic Deep-Dive (1-2 weeks)]: Examine customer segment interaction effects to verify whether the performance gap is uniform or concentrated. | [Strategic & Commercial Mitigation (30-90 days)]: Scale proven practices across lagging segments or reallocate budget toward higher-performing cohorts. Checks: Skewness: Fair values are skewed (mean 4,936 vs median 3,458, P90 11,183); median reflects typical outcome better than mean. Recommended next steps: Investigate operational or business practices driving the superior price of Fair over Ideal. [Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.]",
   "finding": "Yes -- Fair averages 4,936 price vs 3,429 for Ideal: 1,507 higher (95% CI +970.2 to +2,045, p<0.001; effect size d=0.40, small). (deterministic recomputation from the resolved contract columns) 'price' was averaged (MEAN) rather than summed, because it is not additive across rows. Data-quality note: OUTLIERS_CONCENTRATED_BY_GROUP requires the documented downstream review before a high-confidence conclusion is admitted.",
   "contract": {
    "target": "price",
@@ -1012,7 +1017,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 4.4
+  "secs": 3.6
  },
  {
   "ds": "planets",
@@ -1096,7 +1101,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 1.7
+  "secs": 1.6
  },
  {
   "ds": "planets",
@@ -1110,7 +1115,7 @@
   "truth_detail": "answer + contract match independent ground truth",
   "status": "COMPLETED",
   "verdict": "OBSERVED",
-  "conf": 1.0,
+  "conf": 0.5,
   "answer": "No statistically detectable trend in orbital_period (average per year): slope +139.3 per year (95% CI -200.1 to +478.7, p=0.43) across 23 years (1989 to 2014). Typical year-to-year noise around the trend is about 5,763 (281.2% of the mean). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Validate current run-rate against near-term operational capacity and financial forecasts. | [Diagnostic Deep-Dive (1-2 weeks)]: Analyze period-to-period residuals to distinguish secular trend from seasonal or cyclical oscillations. | [Strategic & Commercial Mitigation (30-90 days)]: Calibrate medium-term targets and resourcing according to the projected trajectory. Checks: 43 of 1,035 rows (4.2%) were excluded for missing/unparseable values in year, orbital_period. Recommended next steps: Monitor subsequent periods to confirm whether the series remains stationary. [Missingness sensitivity: SENSITIVE -- Sensitivity interval [1920, 3.225e+04] crosses the relevant decision boundary under the stated assumption (observed_range_reallocation_mean); the conclusion is not invariant to plausible missing-value assignments and must not be presented as such.]",
   "finding": "No statistically detectable trend in orbital_period (average per year): slope +139.3 per year (95% CI -200.1 to +478.7, p=0.43) across 23 years (1989 to 2014). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'orbital_period' was averaged (MEAN) rather than summed, because it is not additive across rows.",
   "contract": {
@@ -1138,7 +1143,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.1
+  "secs": 1.7
  },
  {
   "ds": "taxis",
@@ -1164,7 +1169,8 @@
    "time": [],
    "bound": {
     "EXPLANATORY_VARIABLE": [
-     "fare"
+     "fare",
+     "tip"
     ],
     "OUTCOME": [
      "tip"
@@ -1180,7 +1186,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 6.6
+  "secs": 1.0
  },
  {
   "ds": "taxis",
@@ -1222,7 +1228,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 3.0
+  "secs": 2.7
  },
  {
   "ds": "taxis",
@@ -1264,7 +1270,7 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "STATISTICALLY_SIGNIFICANT"
   },
-  "secs": 5.2
+  "secs": 4.7
  },
  {
   "ds": "flights",
@@ -1278,7 +1284,7 @@
   "truth_detail": "answer + contract match independent ground truth",
   "status": "COMPLETED",
   "verdict": "OBSERVED",
-  "conf": 0.5339639471076787,
+  "conf": 0.5,
   "answer": "passengers (total per year) is trending up: +383.1 per year (95% CI +355.4 to +410.8, p<0.001; Kendall tau=1.00), from about 1,746 to 5,142 (+194.5%) across 12 years (1949 to 1960). Typical year-to-year noise around the trend is about 168.8 (5.0% of the mean). Run-rate extrapolation: projected next year value is 5,854 (95% prediction interval 5,412 to 6,295). Persistence dynamics: lag-1 autocorrelation is 0.75 (strong trend momentum / persistence). Strategic Playbook: [Immediate Operational Triage (24-48h)]: Validate current run-rate against near-term operational capacity and financial forecasts. | [Diagnostic Deep-Dive (1-2 weeks)]: Analyze period-to-period residuals to distinguish secular trend from seasonal or cyclical oscillations. | [Strategic & Commercial Mitigation (30-90 days)]: Calibrate medium-term targets and resourcing according to the projected trajectory. Recommended next steps: Project future run-rate and evaluate whether operational capacity matches the up trend.",
   "finding": "passengers (total per year) is trending up: +383.1 per year (95% CI +355.4 to +410.8, p<0.001; Kendall tau=1.00), from about 1,746 to 5,142 (+194.5%) across 12 years (1949 to 1960). (deterministic recomputation from the resolved contract columns) Verdict OBSERVED: the question asks for a recomputed aggregate or a located change, not a tested hypothesis. 'passengers' was aggregated as SUM because it is additive at the UNKNOWN grain.",
   "contract": {
@@ -1306,7 +1312,7 @@
    "claim_type": "OBSERVATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.4
+  "secs": 1.6
  },
  {
   "ds": "flights",
@@ -1348,6 +1354,6 @@
    "claim_type": "ASSOCIATION",
    "verdict_type": "OBSERVED"
   },
-  "secs": 4.2
+  "secs": 4.1
  }
 ]

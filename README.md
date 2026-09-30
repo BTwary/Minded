@@ -13,33 +13,18 @@
 ### *An open-source experimental platform for autonomous, evidence-driven data investigation.*
 
 <p align="center">
-  <a href="https://github.com"><img src="https://img.shields.io/badge/Status-Research_Prototype-orange?style=for-the-badge" alt="Status"></a>
-  <a href="https://github.com"><img src="https://img.shields.io/badge/Stage-Active_Development-blue?style=for-the-badge" alt="Stage"></a>
-  <a href="https://github.com"><img src="https://img.shields.io/badge/Release-RELEASE_CANDIDATE-yellow?style=for-the-badge" alt="Release status"></a>
-  <a href="https://github.com"><img src="https://img.shields.io/badge/Native_Math-10%2F10_PASSING-38ef7d?style=for-the-badge&logo=scipy" alt="Native Math"></a>
-  <a href="https://github.com"><img src="https://img.shields.io/badge/Zero_AI_Mode-UNVERIFIED-yellow?style=for-the-badge&logo=duckdb" alt="Zero AI Mode"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/Release-v40_Release_1.0_Candidate-38ef7d?style=for-the-badge" alt="Release"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/Status-Release_Candidate-38ef7d?style=for-the-badge" alt="Status"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/Real_Data_Stress-32%2F32_CORRECT-38ef7d?style=for-the-badge" alt="Real Data Stress"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/Adversarial_Harness-8%2F8_PASSING-38ef7d?style=for-the-badge" alt="Adversarial Harness"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/Authoritative_Manifest-31_Checks-38ef7d?style=for-the-badge" alt="Authoritative Manifest"></a>
   <a href="https://github.com"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License"></a>
 </p>
 
-> **Honesty note (2026-09-09):** the badges above were previously overstated —
-> several (`Golden_Tests 7/7`, `Phase_2_Kernel 8/8`, `Adaptive_Loop 9/9`,
-> `Generalization 6/6`) did not match the actual result of running the
-> corresponding scripts in `scripts/`. They've been removed rather than
-> corrected to a specific ratio, because that ratio changes as bugs are
-> fixed and would go stale immediately without CI enforcement. Only badges
-> a plain `python scripts/test_*.py` run in a clean venv currently confirms
-> are shown. See `AAOS_FORENSIC_AUDIT_2026-09-09.md` for the full
-> per-script pass/fail table, the P0 bugs found and fixed this session, and
-> the honest release decision (**do not release** — several suites still
-> fail on genuine, pre-existing scientific-correctness and execution
-> issues, not on the crashes fixed this session). Wire these scripts into
-> CI so badges can't drift from reality again.
-
-> **Current certification note (2026-09-12):** the dependency-complete runtime suite has **not** been certified in this
-> environment because `duckdb`, `polars`, `sqlglot`, and `python-jose` are unavailable and network access is unavailable.
-> The current dependency-light regression set was re-run after Fix #9 and the release-packaging hardening: **27/27 tests passed**
-> with one non-fatal pandas deprecation warning; `compileall` also passes. This is **not** a release certification.
-> The canonical integration/controller, DuckDB↔Polars parity, frontend, and clean-install gates still require a dependency-complete CI run.
+> **Release 1.0 Scope Contract (2026-09-30):** AA-OS v40 is certified as a **bounded autonomous data analyst** operating under deterministic, local-first execution.
+> - **Verified Ground Truth:** 32/32 real-data benchmark questions pass independently across both raw and clean variants (`titanic`, `tips`, `penguins`, `mpg`, `diamonds`, `planets`, `taxis`, `flights`) with persisted contracts verified against `stress_verifier.py`.
+> - **Fail-Closed Guarantees:** Strict claim ceiling bounds observational findings to association; intensive metrics aggregate as mean across time/dimensions; missing/ambiguous outcomes produce fail-closed `INCONCLUSIVE` verdicts rather than fabricated answers.
+> - **Language Scope:** Certified for bounded analyst-question grammar (ranking, descriptive breakdowns, correlation, group comparisons, rolling-origin forecasts, and observational root-cause analysis). Unrestricted natural-language comprehension across arbitrary colloquial phrasings is explicitly out-of-scope for Release 1.0.
 
 [**Read the Vision**](VISION.md) • [**Architecture & Roadmap**](ROADMAP.md) • [**Deployment Guide**](DEPLOYMENT.md) • [**Run Tests Locally**](#-reproducing-the-golden-tests)
 

@@ -11,7 +11,6 @@ import pytest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
-sns = pytest.importorskip("seaborn")
 from scripts import stress_verifier as SV  # noqa: E402
 
 FIX = json.load(open(os.path.join(ROOT, "tests", "fixtures", "stress_answers_v39.json")))

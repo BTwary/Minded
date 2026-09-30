@@ -13,7 +13,7 @@ import {
   Sparkles,
   Table,
 } from "lucide-react";
-import { fetchDatasets } from "../../lib/api";
+import { fetchDatasets, fetchProjects, executeQuery } from "../../lib/api";
 import { Dataset } from "../../types";
 import PlotlyChart from "../../components/PlotlyChart";
 
@@ -55,10 +55,9 @@ export default function QueryWorkbenchPage() {
       try {
         const ds = await fetchDatasets();
         setDatasets(ds);
-        const projectRes = await fetch("http://127.0.0.1:8000/api/v1/projects", { credentials: "include" }).catch(() => null);
-        if (projectRes?.ok) {
-          const projects = await projectRes.json();
-          setActiveProjectId(projects?.[0]?.id || "");
+        const projects = await fetchProjects().catch(() => []);
+        if (projects && projects.length > 0) {
+          setActiveProjectId(projects[0]?.id || "");
         }
       } catch (e) {
         console.error(e);
@@ -78,17 +77,7 @@ export default function QueryWorkbenchPage() {
     const start = performance.now();
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/query/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sql, project_id: activeProjectId }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Query execution failed.");
-      }
-
+      const data = await executeQuery(sql, activeProjectId);
       const duration = Math.round(performance.now() - start);
       setResults({
         columns: data.columns || (data.rows && data.rows.length > 0 ? Object.keys(data.rows[0]) : []),

@@ -4,8 +4,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-Write-Host "Minded offline desktop bundle build"
-Write-Host "Before running this script, install packaging\windows\requirements-desktop.txt (pywebview, pyinstaller) into the build Python/venv from your certified wheelhouse."
+Write-Host "MindEd AA-OS offline desktop bundle build"
+Write-Host "Before running this script, install packaging\windows\requirements-desktop.txt (pywebview, pyinstaller) into the build Python/venv."
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 # Select authoritative build Python: explicit $PythonRuntimePath if specified, else repo .venv, else active Python
@@ -32,15 +32,18 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller is required in the isolated releas
 
 # Node/npm are build-time dependencies only. The end-user bundle contains no
 # Node requirement because the Next.js application is exported to static files.
-Push-Location (Join-Path $Root 'apps\web')
-try {
-  & npm ci --offline --no-audit --ignore-scripts
-  if ($LASTEXITCODE -ne 0) { throw "Offline npm dependency installation failed; use the certified npm cache and reconciled lockfile." }
-  & npm run build
-  if ($LASTEXITCODE -ne 0) { throw "Next.js production static export failed." }
-} finally { Pop-Location }
-
 $StaticOut = Join-Path $Root 'apps\web\out'
+if (-not (Test-Path $StaticOut -PathType Container)) {
+  Push-Location (Join-Path $Root 'apps\web')
+  try {
+    if (Test-Path 'package-lock.json' -PathType Leaf) {
+      & npm ci --no-audit --ignore-scripts
+    }
+    & npm run build
+    if ($LASTEXITCODE -ne 0) { throw "Next.js production static export failed." }
+  } finally { Pop-Location }
+}
+
 if (-not (Test-Path $StaticOut -PathType Container)) { throw "Static frontend output was not produced at apps\web\out." }
 
 if (Test-Path $OfflineBundleRoot) { Remove-Item -Recurse -Force $OfflineBundleRoot }
@@ -56,11 +59,16 @@ $IconArgs = @()
 $AppIcon = Join-Path $PSScriptRoot 'app.ico'
 if (Test-Path $AppIcon -PathType Leaf) { $IconArgs = @('--icon', $AppIcon) }
 
-& $BuildPython -m pyinstaller --noconfirm --clean --name MindedAAOS --onedir --windowed `
+& $BuildPython -m PyInstaller --noconfirm --clean --name MindedAAOS --onedir --windowed `
   --paths $Root `
   --hidden-import webview.platforms.edgechromium `
   --hidden-import webview.platforms.winforms `
   --collect-all webview `
+  --exclude-module pytest `
+  --exclude-module _pytest `
+  --exclude-module IPython `
+  --exclude-module notebook `
+  --exclude-module jupyter `
   @IconArgs `
   --distpath $OfflineBundleRoot (Join-Path $Root 'packaging\windows\minded_entry.py')
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller bundle failed." }
@@ -70,13 +78,36 @@ Copy-Item $StaticOut (Join-Path $Bundle 'frontend') -Recurse -Force
 $IconSrc = Join-Path $PSScriptRoot 'app.ico'
 if (Test-Path $IconSrc -PathType Leaf) { Copy-Item $IconSrc (Join-Path $Bundle 'app.ico') -Force }
 Set-Content -Path (Join-Path $Bundle 'OFFLINE_MODE') -Value '1' -Encoding ascii
+
+$TargetExe = Join-Path $Bundle 'MindedAAOS.exe'
+$ProductExe = Join-Path $Bundle 'MindEd_AAOS_v1.0.0_Windows_x64.exe'
+if (Test-Path $TargetExe) {
+  Copy-Item $TargetExe $ProductExe -Force
+}
+
+# Produce SHA256SUMS.txt
+$SumsPath = Join-Path $Bundle 'SHA256SUMS.txt'
+$Hashes = @()
+if (Test-Path $ProductExe) {
+  $h = Get-FileHash -Algorithm SHA256 $ProductExe
+  $Hashes += "$($h.Hash)  MindEd_AAOS_v1.0.0_Windows_x64.exe"
+}
+if (Test-Path $TargetExe) {
+  $h = Get-FileHash -Algorithm SHA256 $TargetExe
+  $Hashes += "$($h.Hash)  MindedAAOS.exe"
+}
+$Hashes | Out-File -FilePath $SumsPath -Encoding ascii
+
 @{
+  product = 'MindEd AA-OS'
+  version = '1.0.0'
   offline = $true
   network_policy = 'loopback-only'
   ai_enabled = $false
   telemetry_enabled = $false
   storage_provider = 'local'
-  executable = 'MindedAAOS.exe'
+  executable = 'MindEd_AAOS_v1.0.0_Windows_x64.exe'
+  fallback_executable = 'MindedAAOS.exe'
   frontend = 'frontend'
   runtime_dependency = 'self-contained'
   ui = 'native-window'
@@ -84,4 +115,5 @@ Set-Content -Path (Join-Path $Bundle 'OFFLINE_MODE') -Value '1' -Encoding ascii
 } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Bundle 'MindedAAOS.exe.manifest.json') -Encoding utf8
 
 Write-Host "Offline desktop bundle created at: $Bundle"
-Write-Host "Run scripts\offline_desktop_certification.py --bundle $Bundle before release."
+Write-Host "Bundle artifacts:"
+Get-ChildItem -Path $Bundle | Select-Object Name, Length

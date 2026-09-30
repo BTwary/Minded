@@ -1,4 +1,3 @@
-@"
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -18,4 +17,6 @@ build/
 *.sqlite
 *.sqlite3
 data_store/
-"@ | Set-Content -Encoding UTF8 .gitignore
+packaging/windows/bundle/
+apps/web/out/
+*.spec

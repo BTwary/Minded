@@ -52,6 +52,7 @@ class ForecastingEngine:
         confidence_level: float = 0.95,
         seasonal_periods: Optional[int] = None,
         min_backtest_folds: int = 3,
+        aggregation: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Select and fit a forecast model using rolling-origin validation.
 
@@ -65,9 +66,21 @@ class ForecastingEngine:
         if not 0.5 <= confidence_level < 1.0:
             raise ValueError("confidence_level must be in [0.5, 1.0)")
 
-        ts_df = self._prepare_series(df, date_column, metric_column)
+        try:
+            ts_df = self._prepare_series(df, date_column, metric_column, aggregation=aggregation)
+        except ValueError as exc:
+            return {
+                "error": str(exc),
+                "confidence_level": "Insufficient evidence",
+                "failure_reason": "DUPLICATE_TIMESTAMPS_REJECTED",
+            }
+
         if ts_df.empty:
-            return {"error": "No valid time-series observations after date/value cleaning."}
+            return {
+                "error": "No valid time-series observations after date/value cleaning.",
+                "confidence_level": "Insufficient evidence",
+                "failure_reason": "INVALID_OR_MISSING_TEMPORAL_COORDINATES",
+            }
 
         y = ts_df[metric_column].to_numpy(dtype=float)
         dates = pd.to_datetime(ts_df[date_column]).reset_index(drop=True)
@@ -93,9 +106,14 @@ class ForecastingEngine:
             all_coords = canonical_time_coordinates(all_dates)
             t_coords = all_coords[:n]
             future_t_coords = all_coords[n:]
-        except Exception:
-            t_coords = np.arange(n, dtype=float)
-            future_t_coords = np.arange(n, n + horizon_periods, dtype=float)
+            if len(t_coords) != n or len(future_t_coords) != horizon_periods or (t_coords[-1] - t_coords[0]) <= 0:
+                raise ValueError("Temporal coordinates failed span validation.")
+        except Exception as exc:
+            return {
+                "error": f"Failed to resolve valid canonical temporal coordinates for forecasting: {exc}",
+                "confidence_level": "Insufficient evidence",
+                "failure_reason": "INVALID_OR_MISSING_TEMPORAL_COORDINATES",
+            }
 
         folds = self._rolling_origins(n, horizon_periods, min_backtest_folds)
         score_map: Dict[str, _ModelScore] = {}
@@ -186,6 +204,7 @@ class ForecastingEngine:
             for s in valid_scores
         ]
 
+        agg_resolved = self._resolve_aggregation(metric_column, aggregation)
         trace = {
             "trace_type": "forecast_model_selection",
             "formula": "model = argmin(out_of_sample_MAE over rolling-origin folds at requested horizon)",
@@ -198,11 +217,13 @@ class ForecastingEngine:
             "interval_method": interval_method,
             "point_forecast": [round(float(v), 6) for v in point_forecast],
             "directional_probability_first_horizon": round(directional_probability, 6),
+            "timestamp_aggregation": agg_resolved,
         }
 
         return {
             "metric_column": metric_column,
             "date_column": date_column,
+            "timestamp_aggregation": agg_resolved,
             "horizon_periods": horizon_periods,
             "historical_sample_size": n,
             "time_frequency": self._infer_frequency(dates),
@@ -235,19 +256,66 @@ class ForecastingEngine:
             ],
         }
 
-    @staticmethod
-    def _prepare_series(df: pd.DataFrame, date_column: str, metric_column: str) -> pd.DataFrame:
+    INTENSIVE_FORECAST_KEYWORDS: Tuple[str, ...] = (
+        "price", "fare", "tip", "rate", "pct", "percent", "percentage",
+        "ratio", "aov", "average", "avg", "mean", "median", "conversion",
+        "retention", "churn_rate", "latency", "duration", "temperature",
+        "temp", "score", "rating", "margin", "profit_margin", "discount",
+        "efficiency", "mpg", "mass", "weight", "age", "bmi",
+    )
+
+    @classmethod
+    def _resolve_aggregation(cls, metric_column: str, aggregation: Optional[str] = None) -> str:
+        if aggregation:
+            agg_norm = str(aggregation).strip().lower()
+            if agg_norm in ("mean", "average", "avg"):
+                return "mean"
+            elif agg_norm in ("sum", "total", "additive"):
+                return "sum"
+            elif agg_norm in ("median",):
+                return "median"
+            elif agg_norm in ("reject", "fail", "error", "strictly_unique"):
+                return "reject"
+            raise ValueError(f"Unsupported forecasting aggregation: '{aggregation}'. Supported: 'sum', 'mean', 'median', 'reject'.")
+
+        m_low = str(metric_column).strip().lower()
+        if any(k in m_low for k in cls.INTENSIVE_FORECAST_KEYWORDS):
+            return "mean"
+        return "sum"
+
+    @classmethod
+    def _prepare_series(
+        cls,
+        df: pd.DataFrame,
+        date_column: str,
+        metric_column: str,
+        aggregation: Optional[str] = None,
+    ) -> pd.DataFrame:
         if date_column not in df.columns or metric_column not in df.columns:
             raise KeyError(f"Missing required columns: {date_column}, {metric_column}")
         work = df[[date_column, metric_column]].copy()
         work[date_column] = pd.to_datetime(work[date_column], errors="coerce")
         work[metric_column] = pd.to_numeric(work[metric_column], errors="coerce")
         work = work.dropna().sort_values(date_column)
-        # Preserve metric semantics at this layer: this forecasting primitive
-        # receives an already semantically-resolved metric column.  For raw
-        # repeated timestamps, aggregation is additive by default only because
-        # timestamp-level observations represent additive events.
-        return work.groupby(date_column, as_index=False)[metric_column].sum()
+
+        has_duplicates = bool(work[date_column].duplicated().any())
+        agg_method = cls._resolve_aggregation(metric_column, aggregation)
+
+        if has_duplicates and agg_method == "reject":
+            raise ValueError(
+                f"Duplicate timestamps detected for date column '{date_column}' with aggregation='reject'."
+            )
+
+        if not has_duplicates:
+            return work.reset_index(drop=True)
+
+        if agg_method == "mean":
+            return work.groupby(date_column, as_index=False)[metric_column].mean()
+        elif agg_method == "median":
+            return work.groupby(date_column, as_index=False)[metric_column].median()
+        else:
+            return work.groupby(date_column, as_index=False)[metric_column].sum()
+
 
     @staticmethod
     def _infer_frequency(dates: pd.Series) -> str:
@@ -354,20 +422,20 @@ class ForecastingEngine:
         if n < 2:
             raise ValueError("At least two observations are required")
 
-        # Temporal delta calculation: respect canonical temporal spacing when available
-        if t is not None and len(t) == n and (t[-1] - t[0]) > 0:
-            elapsed_time = float(t[-1] - t[0])
-            median_step = float(np.median(np.diff(t))) if n >= 2 else (elapsed_time / max(1, n - 1))
-            if median_step <= 0:
-                median_step = 1.0
-            if future_t is not None and len(future_t) == horizon:
-                future_deltas = np.asarray(future_t, dtype=float) - float(t[-1])
-            else:
-                future_deltas = np.arange(1, horizon + 1, dtype=float) * median_step
-        else:
-            elapsed_time = float(max(1, n - 1))
+        # Temporal delta calculation: strictly require canonical temporal coordinates with positive span
+        if t is None or len(t) != n or (t[-1] - t[0]) <= 0:
+            raise ValueError(
+                f"Canonical temporal coordinates 't' of length {n} with positive elapsed time "
+                f"are strictly required for forecasting."
+            )
+        elapsed_time = float(t[-1] - t[0])
+        median_step = float(np.median(np.diff(t))) if n >= 2 else (elapsed_time / max(1, n - 1))
+        if median_step <= 0:
             median_step = 1.0
-            future_deltas = np.arange(1, horizon + 1, dtype=float)
+        if future_t is not None and len(future_t) == horizon:
+            future_deltas = np.asarray(future_t, dtype=float) - float(t[-1])
+        else:
+            future_deltas = np.arange(1, horizon + 1, dtype=float) * median_step
 
         if model_name == "naive":
             fc = np.repeat(y[-1], horizon)

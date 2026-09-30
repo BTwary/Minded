@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from apps.api.src.core.config import settings
 from apps.api.src.ai.providers.base import BaseAIProvider
@@ -114,7 +115,7 @@ class InvestigationRuntime:
 
         start_time = time.time()
 
-        engine = create_engine("sqlite:///:memory:")
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         if settings.ENVIRONMENT.lower() != "production" and os.getenv("AAOS_AUTO_CREATE_DB_SCHEMA", "true").lower() in {"1", "true", "yes"}:
             Base.metadata.create_all(engine)
         SessionFactory = sessionmaker(bind=engine)
@@ -136,7 +137,7 @@ class InvestigationRuntime:
             session.commit()
 
         ds_provider = InMemoryDatasetProvider(dict(datasets))
-        controller = self._controller_hint or InvestigationController(
+        controller = InvestigationController(
             session_factory=SessionFactory,
             dataset_provider=ds_provider,
             ai_provider=self.provider,

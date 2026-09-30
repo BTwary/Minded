@@ -67,6 +67,13 @@ def interpret_with_schema(question: str, columns: list[str], ai_provider: Any = 
     clauses = tuple(c.strip() for c in re.split(r"\b(?:and|while|whereas|or else)\b|[;]", q, flags=re.I) if c.strip())
     proposal: dict[str, Any] | None = None
     limitations: list[str] = []
+    if ai_provider is None:
+        try:
+            from packages.analytics_core.src.providers.manager import InfrastructureManager
+            ai_provider = getattr(InfrastructureManager, "_ai_provider", None)
+        except Exception:
+            pass
+
     # Pure deterministic path if no AI provider explicitly injected, or if provider is None / "none".
     # The deterministic interpreter is authoritative and always available.
     if ai_provider is not None and getattr(ai_provider, "provider_type", None) not in ("none", None):

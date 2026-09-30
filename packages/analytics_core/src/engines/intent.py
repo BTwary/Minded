@@ -319,6 +319,14 @@ class IntentEngine:
             or re.search(r"\b(rank|ranked|ranking|top|bottom)\b", q_lower, re.I)
         )
         comparison_question = bool(_COMPARISON_RE.search(q_lower))
+        # "What drives higher revenue between regions?" uses comparison words
+        # ("higher", "between") as qualifiers, not as a true comparison operator.
+        # The word "drives" signals an investigative/explanatory framing that
+        # belongs to GENERAL rather than PERFORMANCE.  This flag suppresses
+        # the PERFORMANCE branch when "what drives" appears in the question.
+        _drives_investigative = bool(
+            re.search(r"\bdrives?\b", q_lower) and re.search(r"\bwhat\b", q_lower)
+        )
 
         if _GOVERNANCE_RE.search(q_lower):
             intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["GOVERNANCE"]
@@ -359,13 +367,14 @@ class IntentEngine:
             # specific enough that phrasing shouldn't change which family answers it.
             intent_type, comparison_type, ops = "CHURN", "SEGMENT_CONTRAST", [
                 "CRUDE_CHURN_RATE", "EXPOSURE_ADJUSTED_RATE", "STRATIFIED_CHURN_CHECK"]
-        elif ranking_question or comparison_question:
+        elif ranking_question or (comparison_question and not _drives_investigative):
             intent_type, comparison_type = "PERFORMANCE", "SEGMENT_CONTRAST"
             ops = ["RANKING"] if ranking_question else ["GROUP_COMPARISON"]
-        elif _DESCRIPTIVE_RE.search(q_lower) or re.search(r"\b(by|per|across|within|for each)\b", q_lower):
+        elif _DESCRIPTIVE_RE.search(q_lower) or re.search(r"\b(by|per|across|within|for each)\b", q_lower) or _drives_investigative:
             intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["DESCRIPTIVE_SUMMARY", "DISTRIBUTION_SCAN"]
         else:
             intent_type, comparison_type, ops = "GENERAL", "GENERAL_INVESTIGATION", ["DESCRIPTIVE_SUMMARY", "DISTRIBUTION_SCAN"]
+
 
         target_metric_hint: Optional[str] = None
         dimension_hint: Optional[str] = None

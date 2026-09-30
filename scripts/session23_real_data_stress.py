@@ -2,7 +2,7 @@
 Each question carries an independently computed pandas ground truth (`truth`) and a
 `must` list of substrings/numbers a correct answer should contain."""
 import json, os, signal, sys, tempfile, time, traceback
-import numpy as np, pandas as pd, seaborn as sns
+import numpy as np, pandas as pd
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool

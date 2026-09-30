@@ -108,6 +108,78 @@ def detect_rate_question_with_no_column_reference(question: str, columns: Iterab
     return not _question_references_any_column(question, columns)
 
 
+# Vocabulary of known aggregate/statistic verbs that prefix a metric noun.
+_AGGREGATE_VERB_RE = re.compile(r"\b(average|mean|median|sum)\b", re.I)
+
+# Known business metric words (including common aliases) that the alias system
+# can resolve even when the column is named differently (e.g., "sales" → revenue).
+# When any of these words appears in the aggregate question, the system has a
+# plausible binding path and should NOT be blocked here — the family-level
+# resolution will either succeed or return its own specific failure.
+_KNOWN_METRIC_WORDS: frozenset = frozenset([
+    # revenue / sales family
+    "revenue", "sales", "income", "turnover", "proceeds", "takings", "gmv",
+    "net", "gross",
+    # quantity / volume
+    "quantity", "qty", "units", "volume", "items",
+    # cost / spend
+    "cost", "costs", "expense", "expenses", "spend", "expenditure",
+    # profit / margin
+    "profit", "profits", "margin", "earnings",
+    # discount / price
+    "discount", "markdown", "rebate", "price", "pricing",
+    # order / transaction
+    "value", "order", "orders", "transaction", "transactions", "amount",
+    # engagement
+    "conversion", "visits", "sessions", "clicks", "impressions", "views",
+    # count
+    "count", "number",
+    # physical / demographic measures
+    "weight", "height", "age", "score", "rating", "mass", "bmi", "index",
+    # time
+    "time", "duration", "days", "hours",
+    # compensation
+    "salary", "wage", "pay",
+    # fuel / logistics
+    "fuel", "efficiency", "mileage",
+])
+
+
+def detect_aggregate_metric_not_found(question: str, columns: Iterable[str]) -> bool:
+    """Return True when the question asks for an aggregate (average / mean /
+    median / sum) of a specific metric that does not correspond to any column
+    in ``columns`` *and* does not match any known business-metric alias word.
+
+    This is a fail-closed guard for questions like "What is the average shoe
+    size of our customers?" on a dataset that has no shoe-related column: the
+    controller must return INCONCLUSIVE rather than silently substituting an
+    unrelated column and reporting a confident OBSERVED answer.
+
+    Deliberately conservative (low false-positive):
+    - Only fires for aggregate-verb questions (not every descriptive question).
+    - Passes through if the question directly references any available column
+      (checked by _question_references_any_column).
+    - Passes through if any known alias word for a standard business metric
+      appears in the question (the alias resolver will handle it).
+    - Churn-flavored questions are excluded (owned by a separate path).
+    """
+    if not _AGGREGATE_VERB_RE.search(question or ""):
+        return False
+    ql = (question or "").lower()
+    if any(sub in ql for sub in _CHURN_OWNED_SUBSTRINGS):
+        return False
+    # If the question directly names any available column, binding is possible.
+    if _question_references_any_column(question, columns):
+        return False
+    # If any known alias metric word appears, the alias resolver can handle it.
+    q_words = set(re.findall(r"\b[a-z]+\b", ql))
+    if any(alias in q_words for alias in _KNOWN_METRIC_WORDS):
+        return False
+    # No column reference and no known alias → the metric is absent from the
+    # dataset; return True so the controller can close INCONCLUSIVE.
+    return True
+
+
 def detect_unresolved_requested_variables(question: str, columns: Iterable[str]) -> List[str]:
     """Return the distinct identifier-style tokens named in `question` that
     do not correspond to any column in `columns` (case/separator-insensitive).

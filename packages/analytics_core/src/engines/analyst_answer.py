@@ -1426,12 +1426,58 @@ def _root_cause(
             return True
         return False
 
+    def _is_surrogate(col: str, ref_col: str, d_frame: pd.DataFrame) -> bool:
+        if col == ref_col:
+            return True
+        c_low = str(col).lower().strip()
+        r_low = str(ref_col).lower().strip()
+        if c_low == r_low:
+            return True
+
+        SURROGATE_PAIRS = [
+            {"class", "pclass", "passenger_class", "ticket_class"},
+            {"survived", "alive", "survival", "survived_flag"},
+            {"embarked", "embark_town", "port"},
+        ]
+        for pair in SURROGATE_PAIRS:
+            if c_low in pair and r_low in pair:
+                return True
+
+        c_clean = c_low.replace("_", "").replace("-", "")
+        r_clean = r_low.replace("_", "").replace("-", "")
+        if c_clean == r_clean:
+            return True
+
+        try:
+            sub = d_frame[[col, ref_col]].dropna()
+            if len(sub) >= 10:
+                if _is_numeric_like(sub[col]) and _is_numeric_like(sub[ref_col]):
+                    s_c = pd.to_numeric(sub[col], errors="coerce").dropna()
+                    s_r = pd.to_numeric(sub[ref_col], errors="coerce").dropna()
+                    valid_idx = s_c.index.intersection(s_r.index)
+                    if len(valid_idx) >= 10:
+                        r_val, _ = sps.pearsonr(s_c.loc[valid_idx], s_r.loc[valid_idx])
+                        if abs(r_val) > 0.99999:
+                            return True
+                n_c = sub[col].nunique()
+                n_r = sub[ref_col].nunique()
+                if 1 < n_c <= 20 and 1 < n_r <= 20 and n_c == n_r:
+                    map_fwd = (sub.groupby(ref_col, observed=True)[col].nunique() <= 1).all()
+                    map_bwd = (sub.groupby(col, observed=True)[ref_col].nunique() <= 1).all()
+                    if map_fwd and map_bwd:
+                        return True
+        except Exception:
+            pass
+        return False
+
     candidate_cols = [
         c for c in df.columns
         if c not in (target, group)
         and (expl is None or c not in expl)
         and df[c].nunique(dropna=True) > 1
         and not _is_id_col(c, df[c])
+        and not _is_surrogate(c, target, df)
+        and not _is_surrogate(c, group, df)
     ]
 
     confounder_notes = []
@@ -1476,46 +1522,97 @@ def _root_cause(
         else:
             g_A, g_B = matched, g_lo
 
-    # 2. Screen Candidates: Factor <-> Outcome AND Factor <-> Group
+    # 2. Screen Candidates: Factor <-> Outcome AND Factor <-> Group (supporting both numeric & categorical)
     qualified_candidates = []
     for c in candidate_cols:
-        if not _is_numeric_like(df[c]):
+        valid = df[[c, target, group]].dropna()
+        if len(valid) < 10 or valid[c].nunique() < 2:
             continue
-        s_c = pd.to_numeric(df[c], errors="coerce")
-        s_t = pd.to_numeric(df[target], errors="coerce")
-        valid = pd.DataFrame({"z": s_c, "y": s_t, "g": df[group]}).dropna()
-        if len(valid) < 10 or valid["z"].nunique() < 2:
+        is_num = _is_numeric_like(valid[c])
+        if not is_num and (valid[c].nunique() > 20 or valid[c].nunique() < 2):
+            continue
+        s_y = pd.to_numeric(valid[target], errors="coerce")
+        valid_y = valid.assign(_y=s_y).dropna(subset=["_y"])
+        if len(valid_y) < 10:
+            continue
+        if is_num:
+            s_c = pd.to_numeric(valid_y[c], errors="coerce")
+            clean_df = valid_y.assign(_c=s_c).dropna(subset=["_c"])
+            if len(clean_df) < 10 or clean_df["_c"].nunique() < 2:
+                continue
+            try:
+                r_val, p_r = sps.pearsonr(clean_df["_c"], clean_df["_y"])
+            except Exception:
+                continue
+            if math.isnan(r_val):
+                continue
+            assoc_val = abs(r_val)
+            p_assoc = float(p_r)
+        else:
+            clean_df = valid_y.copy()
+            cat_groups = [grp["_y"].values for _, grp in clean_df.groupby(c, observed=True) if len(grp) > 0]
+            if len(cat_groups) < 2:
+                continue
+            try:
+                f_stat, p_f = sps.f_oneway(*cat_groups)
+            except Exception:
+                continue
+            if math.isnan(f_stat) or math.isnan(p_f):
+                continue
+            grand_mean = clean_df["_y"].mean()
+            ss_between = sum(len(g) * (g.mean() - grand_mean)**2 for g in cat_groups)
+            ss_total = ((clean_df["_y"] - grand_mean)**2).sum()
+            eta2 = (ss_between / ss_total) if ss_total > 0 else 0.0
+            assoc_val = math.sqrt(max(0.0, min(1.0, eta2)))
+            r_val = assoc_val
+            p_assoc = float(p_f)
+
+        if assoc_val < 0.10:
             continue
 
-        try:
-            r_val, p_r = sps.pearsonr(valid["z"], valid["y"])
-        except Exception:
-            continue
-        if math.isnan(r_val):
+        focal_valid = clean_df[clean_df[group].isin([g_A, g_B])].copy()
+        if len(focal_valid) < 6 or focal_valid[group].nunique() != 2:
             continue
 
-        z_means = valid.groupby("g", observed=True)["z"].mean().to_dict()
-        if len(z_means) < 2:
-            continue
-        z_std = float(valid["z"].std())
-        if z_std <= 0:
+        if is_num:
+            z_means = focal_valid.groupby(group, observed=True)["_c"].mean().to_dict()
+            z_std = float(focal_valid["_c"].std())
+            if z_std <= 0:
+                continue
+            z_diff = abs(z_means.get(g_A, 0.0) - z_means.get(g_B, 0.0))
+            z_d = z_diff / z_std
+            group_diff_metric = z_d
+            summary_info = {"type": "numeric", "z_hi": z_means.get(g_A, 0.0), "z_lo": z_means.get(g_B, 0.0)}
+        else:
+            props_A = focal_valid[focal_valid[group] == g_A][c].value_counts(normalize=True)
+            props_B = focal_valid[focal_valid[group] == g_B][c].value_counts(normalize=True)
+            all_lvls = set(props_A.index) | set(props_B.index)
+            tvd = 0.5 * sum(abs(props_A.get(k, 0.0) - props_B.get(k, 0.0)) for k in all_lvls)
+            group_diff_metric = 2.0 * tvd
+            shifts = {k: abs(props_A.get(k, 0.0) - props_B.get(k, 0.0)) for k in all_lvls}
+            top_level = max(shifts.items(), key=lambda x: x[1])[0]
+            summary_info = {
+                "type": "categorical",
+                "top_level": str(top_level),
+                "prop_A": float(props_A.get(top_level, 0.0)),
+                "prop_B": float(props_B.get(top_level, 0.0)),
+                "tvd": float(tvd),
+            }
+
+        if group_diff_metric < 0.10:
             continue
 
-        z_diff = abs(z_means.get(g_A, 0.0) - z_means.get(g_B, 0.0))
-        z_d = z_diff / z_std
-
-        # Confounder screening: must associate with outcome (|r| >= 0.10) AND differ across groups (z_diff > 0)
-        if abs(r_val) >= 0.10 and (z_d >= 0.15 or z_diff > 0):
-            score = abs(r_val) * (1.0 + min(2.0, z_d))
-            qualified_candidates.append({
-                "col": c,
-                "r": float(r_val),
-                "p_r": float(p_r),
-                "z_means": z_means,
-                "z_d": float(z_d),
-                "score": float(score),
-                "valid_df": valid,
-            })
+        score = assoc_val * (1.0 + min(2.0, group_diff_metric))
+        qualified_candidates.append({
+            "col": c,
+            "is_num": is_num,
+            "r": float(r_val),
+            "p_r": float(p_assoc),
+            "assoc_val": float(assoc_val),
+            "score": float(score),
+            "summary_info": summary_info,
+            "focal_df": focal_valid,
+        })
 
     if not qualified_candidates:
         confounder_notes.append(
@@ -1534,40 +1631,37 @@ def _root_cause(
     cand_name = top_cand_info["col"]
     top_r = top_cand_info["r"]
     p_r = top_cand_info["p_r"]
-    z_means = top_cand_info["z_means"]
-    valid = top_cand_info["valid_df"]
+    summary = top_cand_info["summary_info"]
+    is_num = top_cand_info["is_num"]
+    focal_df = top_cand_info["focal_df"]
 
     # 3. Adjusted Exposure <-> Outcome Test
-    focal_df = valid[valid["g"].isin([g_A, g_B])].copy()
-    if len(focal_df) >= 6 and focal_df["g"].nunique() == 2:
-        y_A = focal_df[focal_df["g"] == g_A]["y"].values
-        y_B = focal_df[focal_df["g"] == g_B]["y"].values
+    if len(focal_df) >= 6 and focal_df[group].nunique() == 2:
+        y_A = focal_df[focal_df[group] == g_A]["_y"].values
+        y_B = focal_df[focal_df[group] == g_B]["_y"].values
         unadj_diff = float(np.mean(y_A) - np.mean(y_B))
 
-        D = (focal_df["g"] == g_A).astype(float).values
-        Z = focal_df["z"].values
-        Y = focal_df["y"].values
+        D = (focal_df[group] == g_A).astype(float).values
+        Y = focal_df["_y"].values
+        if is_num:
+            Z = focal_df[["_c"]].values.astype(float)
+        else:
+            Z = pd.get_dummies(focal_df[cand_name], drop_first=True, dtype=float).values
         X = np.column_stack([np.ones(len(focal_df)), D, Z])
         try:
             beta, _, _, _ = np.linalg.lstsq(X, Y, rcond=None)
             adj_diff = float(beta[1])
-            gamma_z = float(beta[2])
         except Exception:
             adj_diff = unadj_diff
-            gamma_z = 0.0
     else:
         unadj_diff = float(group_means.get(g_A, 0.0) - group_means.get(g_B, 0.0))
         adj_diff = unadj_diff
-        gamma_z = 0.0
 
     sign_flipped = bool(unadj_diff * adj_diff < 0 and abs(unadj_diff) > 1e-6 and abs(adj_diff) > 1e-6)
     if abs(unadj_diff) > 1e-9:
         attenuation_pct = float((1.0 - abs(adj_diff) / abs(unadj_diff)) * 100.0)
     else:
         attenuation_pct = 0.0
-
-    z_hi = z_means.get(g_A, 0.0)
-    z_lo = z_means.get(g_B, 0.0)
 
     res.numbers["candidate_factors_scanned"] = candidate_cols
     res.numbers["top_candidate"] = cand_name
@@ -1576,12 +1670,29 @@ def _root_cause(
     res.numbers["adjusted_diff"] = float(adj_diff)
     res.numbers["attenuation_pct"] = float(attenuation_pct)
 
+    if is_num:
+        z_hi = summary["z_hi"]
+        z_lo = summary["z_lo"]
+        cand_desc = (
+            f"{cand_name} is a candidate confounder: it correlates with {target} (r={top_r:.2f}) "
+            f"and differs across {group} ({g_A} averages {_num(z_hi)} vs {_num(z_lo)} for {g_B})."
+        )
+        eval_desc = f"{cand_name} was evaluated as a candidate factor (r={top_r:.2f})"
+    else:
+        prop_A = summary["prop_A"]
+        prop_B = summary["prop_B"]
+        lvl = summary["top_level"]
+        cand_desc = (
+            f"{cand_name} is a candidate confounder: it is associated with {target} (eta={top_r:.2f}) "
+            f"and differs across {group} ({g_A} is {_pct(prop_A)} {lvl} vs {_pct(prop_B)} for {g_B})."
+        )
+        eval_desc = f"{cand_name} was evaluated as a candidate factor (eta={top_r:.2f})"
+
     if sign_flipped:
         classification = "CONFOUNDER_EFFECT_REVERSAL"
         res.numbers["confounding_classification"] = classification
         confounder_notes.append(
-            f"Confounder adjustment & effect reversal: {cand_name} is a candidate confounder: it correlates with {target} (r={top_r:.2f}) "
-            f"and differs across {group} ({g_A} averages {_num(z_hi)} vs {_num(z_lo)} for {g_B}). "
+            f"Confounder adjustment & effect reversal: {cand_desc} "
             f"When adjusting for {cand_name}, the observed difference between {g_A} and {g_B} reverses direction "
             f"(adjusted difference {_signed(adj_diff)} vs unadjusted {_signed(unadj_diff)}), "
             f"indicating that the unadjusted {group} difference was an artifact of composition/confounding by {cand_name}."
@@ -1590,8 +1701,7 @@ def _root_cause(
         classification = "CANDIDATE_CONFOUNDER_SUBSTANTIAL_ATTENUATION"
         res.numbers["confounding_classification"] = classification
         confounder_notes.append(
-            f"Confounder adjustment & attenuation: {cand_name} is a candidate confounder: it correlates with {target} (r={top_r:.2f}) "
-            f"and differs across {group} ({g_A} averages {_num(z_hi)} vs {_num(z_lo)} for {g_B}). "
+            f"Confounder adjustment & attenuation: {cand_desc} "
             f"After adjusting for {cand_name}, the observed difference between {g_A} and {g_B} attenuates by {attenuation_pct:.1f}% "
             f"(from {_signed(unadj_diff)} to {_signed(adj_diff)}). The observed data are consistent with confounding by {cand_name} "
             f"rather than an effect of {group} in isolation."
@@ -1600,8 +1710,8 @@ def _root_cause(
         classification = "CANDIDATE_CONFOUNDER_PARTIAL_ATTENUATION"
         res.numbers["confounding_classification"] = classification
         confounder_notes.append(
-            f"Confounder adjustment & partial attenuation: {cand_name} is a candidate covariate: it correlates with {target} (r={top_r:.2f}) "
-            f"and differs across {group}. Adjusting for {cand_name} yields a modest {attenuation_pct:.1f}% attenuation "
+            f"Confounder adjustment & partial attenuation: {cand_desc} "
+            f"Adjusting for {cand_name} yields a modest {attenuation_pct:.1f}% attenuation "
             f"(from {_signed(unadj_diff)} to {_signed(adj_diff)}), but substantial group differences persist independently of {cand_name}."
         )
     else:
@@ -1609,7 +1719,7 @@ def _root_cause(
         res.numbers["confounding_classification"] = classification
         persistence_pct = max(0.0, 100.0 - attenuation_pct)
         confounder_notes.append(
-            f"Confounder adjustment & persistent difference: {cand_name} was evaluated as a candidate factor (r={top_r:.2f}), "
+            f"Confounder adjustment & persistent difference: {eval_desc}, "
             f"but adjusting for {cand_name} does not attenuate the observed difference "
             f"(adjusted difference {_signed(adj_diff)} vs unadjusted {_signed(unadj_diff)}, {persistence_pct:.1f}% persistence). "
             f"The observed difference persists independently of {cand_name}."

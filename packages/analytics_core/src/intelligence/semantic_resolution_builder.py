@@ -141,6 +141,16 @@ def build_canonical_semantic_resolution(
     outcome = _resolve_outcome_field(semantic, task)
     if question_roles and getattr(question_roles, "canonical_roles_authoritative", False):
         dim_col = question_roles.grouping_columns[0] if (question_roles.grouping_columns and len(question_roles.grouping_columns) > 0) else None
+        if dim_col is None:
+            sem_dim = getattr(semantic, "group_dimension_col", None)
+            if sem_dim and sem_dim in (question_roles.explanatory_columns or ()):
+                dim_col = sem_dim
+            else:
+                for expl in (question_roles.explanatory_columns or ()):
+                    if (getattr(semantic, "available_categorical_cols", None) and
+                        expl in semantic.available_categorical_cols):
+                        dim_col = expl
+                        break
         dimension = ResolvedSemanticField(
             role=SemanticRole.GROUPING_DIMENSION,
             value=dim_col,

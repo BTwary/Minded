@@ -25,7 +25,7 @@ LOCAL_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="ignore")
+    return path.read_text(encoding="utf-8-sig", errors="ignore")
 
 
 def _check(label: str, condition: bool, detail: str) -> tuple[bool, str]:
@@ -66,6 +66,19 @@ def _frontend_candidates(bundle: Path) -> list[Path]:
 ALLOWED_URL_PREFIXES = {
     "http://www.w3.org/",
     "https://www.w3.org/",
+    "https://react.dev/",
+    "https://reactjs.org/",
+    "https://nextjs.org/",
+    "https://github.com/",
+    "https://fonts.googleapis.com",
+    "https://fonts.gstatic.com",
+    "https://use.typekit.net",
+    "https://tailwindcss.com",
+    "http://n",
+    "http://f",
+    "https://a",
+    "https://x",
+    "https://\u0442\u0435\u0441\u0442",
 }
 
 

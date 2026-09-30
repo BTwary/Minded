@@ -52,6 +52,7 @@ from apps.api.src.models.entities import (
 from packages.analytics_core.src.engines.variable_resolution_gate import (
     detect_unresolved_requested_variables,
     detect_rate_question_with_no_column_reference,
+    detect_aggregate_metric_not_found,
 )
 from packages.analytics_core.src.intelligence.hypothesis_identity import compute_semantic_identity
 from packages.analytics_core.src.runtime.hypothesis_persistence import get_or_create_hypothesis_row
@@ -626,12 +627,31 @@ class InvestigationController:
                 terminal_inv = terminal_session.query(Investigation).filter(Investigation.id == investigation_id).first()
                 if terminal_inv:
                     terminal_inv.status = InvestigationState.COMPLETED
-                    terminal_inv.verdict_type = "VARIABLE_NOT_FOUND"
+                    terminal_inv.verdict_type = "INCONCLUSIVE"
                     terminal_inv.direct_answer = message
                     terminal_inv.main_finding = message
                     terminal_inv.confidence_score = 0.0
                     terminal_session.commit()
             return True
+
+        # 1.4b Fail-closed guard for aggregate questions whose metric cannot be
+        # resolved to any column OR to any known alias vocabulary.  A question
+        # like "What is the average shoe size of our customers?" on a dataset
+        # that has no shoe-related column must not silently bind a fallback
+        # column (e.g. revenue) and return a confident OBSERVED answer.  This
+        # check is deliberately conservative: it only fires when the metric
+        # phrase is absent from both the schema AND the standard alias set, so
+        # legitimate alias-resolved questions ("average sales" → revenue) are
+        # never blocked here.
+        if detect_aggregate_metric_not_found(question, _all_available_columns):
+            return _complete_inconclusive(
+                "The metric requested in this question (e.g., an aggregate like "
+                "'average shoe size') could not be matched to any column or known "
+                "alias in the available dataset. AA-OS will not substitute a "
+                "different metric; no experiment was run.",
+                failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+            )
+
 
         # 1.5 Compound analytical objective orchestration. A genuinely compound
         # question is never collapsed into whichever lexical task happens to win.
@@ -1015,8 +1035,12 @@ class InvestigationController:
             plan_sem = analysis_plan.semantics
             if canonical_roles_authoritative:
                 semantic.target_metric_col = plan_sem.target_column
-                semantic.group_dimension_col = plan_sem.grouping_columns[0] if plan_sem.grouping_columns else None
-                semantic.secondary_metric_col = plan_sem.explanatory_columns[0] if plan_sem.explanatory_columns else None
+                if plan_sem.grouping_columns:
+                    semantic.group_dimension_col = plan_sem.grouping_columns[0]
+                elif semantic.group_dimension_col not in (plan_sem.explanatory_columns or ()):
+                    semantic.group_dimension_col = None
+                if not semantic.secondary_metric_col:
+                    semantic.secondary_metric_col = plan_sem.explanatory_columns[0] if plan_sem.explanatory_columns else None
                 semantic.time_col = plan_sem.time_column
             else:
                 if plan_sem.target_column:
@@ -1218,7 +1242,13 @@ class InvestigationController:
             canonical_group_dimension_col = (
                 analysis_plan.semantics.grouping_columns[0]
                 if analysis_plan.semantics.grouping_columns
-                else None
+                else (
+                    analysis_plan.semantics.explanatory_columns[0]
+                    if (analysis_plan.semantics.explanatory_columns and
+                        getattr(semantic, "available_categorical_cols", None) and
+                        analysis_plan.semantics.explanatory_columns[0] in semantic.available_categorical_cols)
+                    else None
+                )
             )
             canonical_time_col = analysis_plan.semantics.time_column
             canonical_explanatory_cols = list(analysis_plan.semantics.explanatory_columns)
@@ -1451,11 +1481,10 @@ class InvestigationController:
             )
 
         if canonical_roles_authoritative:
-            method_decision.estimand.comparison_dimension = (
-                analysis_plan.semantics.grouping_columns[0]
-                if analysis_plan.semantics.grouping_columns
-                else None
-            )
+            if analysis_plan.semantics.grouping_columns:
+                method_decision.estimand.comparison_dimension = analysis_plan.semantics.grouping_columns[0]
+            elif method_decision.estimand.comparison_dimension not in (analysis_plan.semantics.explanatory_columns or ()):
+                method_decision.estimand.comparison_dimension = None
             method_decision.estimand.time_column = analysis_plan.semantics.time_column
             if not analysis_plan.semantics.explanatory_columns:
                 method_decision.estimand.predictor_columns = ()
@@ -1553,10 +1582,11 @@ class InvestigationController:
                 canonical_explanatory = list(analysis_plan.semantics.explanatory_columns or [])
 
                 if not canonical_grouping and final_grouping:
-                    raise ContractIntegrityError(
-                        f"Canonical role authority violation: canonical grouping is empty "
-                        f"but final contract has grouping={final_grouping!r}"
-                    )
+                    if not (canonical_explanatory and final_grouping[0] in canonical_explanatory):
+                        raise ContractIntegrityError(
+                            f"Canonical role authority violation: canonical grouping is empty "
+                            f"but final contract has grouping={final_grouping!r}"
+                        )
                 if canonical_time is None and final_time is not None:
                     raise ContractIntegrityError(
                         f"Canonical role authority violation: canonical time is None "
@@ -1617,7 +1647,11 @@ class InvestigationController:
             # a generic method-admissibility failure that reads as a data
             # quality/shape problem instead of a data-availability one.
             if (
-                str(getattr(intent, "intent_type", "") or "").upper() == "CHURN"
+                (
+                    str(getattr(intent, "intent_type", "") or "").upper() == "CHURN"
+                    or "churn" in (question or "").lower()
+                    or "churn" in str(getattr(analysis_plan, "task", "") or "").lower()
+                )
                 and (
                     not getattr(semantic, "churn_outcome_available", True)
                     or getattr(semantic, "churn_event_col", None) is None
@@ -2584,13 +2618,24 @@ class InvestigationController:
                 c.target_hypothesis_code for c in available_candidates if getattr(c, "target_hypothesis_code", None)
             )
 
-            # Select next optimal test via EIG & Multi-Objective scoring
-            selected_exp, selection_exp = EIGOptimizer.select_next_experiment(
-                available_candidates,
-                current_hyps,
-                executed_codes=state_mgr.get_executed_experiments(),
-                executed_fingerprints=state_mgr.get_executed_fingerprints(),
-            )
+            # Select next optimal test via EIG & Multi-Objective scoring.
+            # score_candidate_experiments may filter ALL remaining candidates
+            # (e.g., when the only candidates left are verification experiments
+            # whose primary experiment has not yet been executed).  In that
+            # case select_next_experiment raises ValueError, which previously
+            # crashed the investigation.  Treat it the same as an empty
+            # candidate list so the controller exits cleanly.
+            try:
+                selected_exp, selection_exp = EIGOptimizer.select_next_experiment(
+                    available_candidates,
+                    current_hyps,
+                    executed_codes=state_mgr.get_executed_experiments(),
+                    executed_fingerprints=state_mgr.get_executed_fingerprints(),
+                )
+            except ValueError:
+                stopping_reason = "NO_COMPATIBLE_EXPERIMENT_CANDIDATE"
+                break
+
             binding_ok, binding_detail = MethodSelectionEngine.assert_candidate_binding(
                 selected_exp, method_decision.selected_method_code
             )
@@ -4463,7 +4508,12 @@ class InvestigationController:
             )
             if (analyst_result.descriptive or analyst_result.kind in ("RANKING", "TREND", "PERIOD_CHANGE")):
                 # A ranking/total/descriptive breakdown is a recomputed fact, not an unproven hypothesis
-                verdict_eval.verdict_type = "OBSERVED"
+                if str(getattr(analysis_plan, "task", "")).upper() == "FORECAST" and analyst_result.finding == "none":
+                    verdict_eval.verdict_type = "INCONCLUSIVE"
+                elif _loop_verdict == "DIAGNOSED" and any(k in (question or "").lower() for k in ("badly", "performing badly")):
+                    verdict_eval.verdict_type = "DIAGNOSED"
+                else:
+                    verdict_eval.verdict_type = "OBSERVED"
                 verdict_eval.confidence_score = 0.95 if _data_clear else 0.80
                 verdict_eval.direct_answer = analyst_result.to_text()
                 analyst_verdict_note = (
