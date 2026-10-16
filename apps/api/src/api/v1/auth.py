@@ -1,10 +1,11 @@
 """Authentication API Endpoints with Real JWT Validation."""
 from datetime import datetime
+import sqlite3
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from apps.api.src.core.database import get_db
 from apps.api.src.core.config import settings
 from apps.api.src.core.security import (
@@ -50,29 +51,48 @@ class UserProfileSchema(BaseModel):
     created_at: Optional[datetime] = None
 
 
+def _is_duplicate_email_error(error: IntegrityError) -> bool:
+    """Recognize the email uniqueness violation on SQLite and PostgreSQL.
+
+    Other unique, foreign-key, and not-null violations are persistence failures,
+    not proof that the requested email already belongs to an account.
+    """
+    original = error.orig
+    if isinstance(original, sqlite3.IntegrityError):
+        return str(original) == "UNIQUE constraint failed: users.email"
+    return (
+        (getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)) == "23505"
+        and getattr(getattr(original, "diag", None), "constraint_name", None) == "ix_users_email"
+    )
+
+
 @router.post("/register", response_model=TokenSchema)
 def register_user(payload: UserRegisterSchema, db: Session = Depends(get_db)):
     """Register a new user."""
-    existing = db.query(User).filter(User.email == payload.email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="User with this email already exists.")
-
-    user = User(
-        email=payload.email,
-        hashed_password=get_password_hash(payload.password),
-        full_name=payload.full_name,
-        role="analyst",
-    )
-    db.add(user)
     try:
+        existing = db.query(User).filter(User.email == payload.email).first()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User with this email already exists.")
+
+        user = User(
+            email=payload.email,
+            hashed_password=get_password_hash(payload.password),
+            full_name=payload.full_name,
+            role="analyst",
+        )
+        db.add(user)
         db.commit()
         db.refresh(user)
-    except IntegrityError:
+    except IntegrityError as error:
         db.rollback()
-        user = db.query(User).filter(User.id == "default-user").first()
-        if user is None:
-            raise
+        if _is_duplicate_email_error(error):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User with this email already exists.") from None
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to register user.") from None
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to register user.") from None
 
+    # Only the new, successfully persisted user may receive a registration token.
     token = create_access_token(subject=user.id)
     return TokenSchema(
         access_token=token,
