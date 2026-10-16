@@ -1,0 +1,522 @@
+--- a/packages/analytics_core/src/runtime/state_reconstruction.py
++++ b/packages/analytics_core/src/runtime/state_reconstruction.py
+@@ -25,10 +25,14 @@
+ ) -> Optional[str]:
+     """Return supporting/contradicting/neutral using canonical status vocabulary."""
+     status_upper = (validation_status or "").strip().upper()
+-    if status_upper == "VERIFIED" or (effect_size or 0) != 0:
++    # Validation status is authoritative. A non-zero effect is only a magnitude;
++    # it does not establish that the measurement passed verification or that its
++    # direction supports the hypothesis. In particular, FAILED must never be
++    # inverted into supporting evidence by the presence of an effect size.
++    if status_upper in {"FAILED", "FAIL", "INVALID", "REJECTED"}:
++        return "contradicting"
++    if status_upper in {"VERIFIED", "PASSED", "PASS"}:
+         return "supporting"
+-    if status_upper == "FAILED":
+-        return "contradicting"
+     return None
+ 
+ 
+--- a/packages/analytics_core/src/engines/stopping.py
++++ b/packages/analytics_core/src/engines/stopping.py
+@@ -28,7 +28,7 @@
+         leading_posterior: Optional[float] = None,
+         entropy_delta: float = 0.0,
+         experiments_completed: int = 0,
+-        all_verifications_passed: bool = True,
++        all_verifications_passed: Optional[bool] = None,
+         counter_hypothesis_evaluated: bool = True,
+         has_unresolved_adversarial_issue: bool = False,
+         min_experiments: int = 1,
+@@ -44,8 +44,13 @@
+         entropy_history: Optional[List[float]] = None,
+         **kwargs,
+     ) -> StoppingDecision:
++        # Missing verification status is not a successful verification. Callers
++        # must supply an explicit result; legacy alias `all_verified` remains
++        # supported but cannot turn an omitted value into success.
+         if all_verified is not None:
+-            all_verifications_passed = all_verified
++            all_verifications_passed = bool(all_verified)
++        else:
++            all_verifications_passed = all_verifications_passed is True
+         if adversarial_survived is not None:
+             has_unresolved_adversarial_issue = not adversarial_survived
+         if iteration_count is not None:
+--- a/packages/analytics_core/src/runtime/controller.py
++++ b/packages/analytics_core/src/runtime/controller.py
+@@ -2632,8 +2632,14 @@
+         if _time_col in primary_df.columns:
+             try:
+                 _time_values = pd.to_datetime(primary_df[_time_col], errors="coerce", utc=True)
++                # The forecasting engine sorts valid observations by time before
++                # fitting. Input row order is not a semantic requirement; require a
++                # parseable, non-degenerate time axis instead of rejecting an otherwise
++                # valid dataset merely because its CSV rows are shuffled.
+                 _typed_facts["time_index"]["monotonic"] = bool(
+-                    len(_time_values) >= 2 and _time_values.notna().all() and _time_values.is_monotonic_increasing
++                    len(_time_values) >= 2
++                    and _time_values.notna().all()
++                    and _time_values.nunique(dropna=True) >= 2
+                 )
+             except Exception:
+                 _typed_facts["time_index"]["monotonic"] = False
+@@ -4570,6 +4576,10 @@
+                 current_posteriors=current_probs,
+                 unresolved_adversarial_issues=unresolved_adversarial_issues,
+                 counter_hypothesis_evaluated=counter_hypothesis_evaluated,
++                # The stopping engine must receive the real accumulated verification
++                # state. Omitting this argument used to inherit a success default,
++                # allowing early stopping after failed or blocked verification.
++                all_verifications_passed=all_verifications_passed,
+                 missingness_classification=(latest_missingness_result.classification if latest_missingness_result else None),
+             )
+             authoritative_stop_decision = stop_decision
+@@ -5190,7 +5200,7 @@
+         verdict_eval = VerdictEngine.evaluate_verdict(
+             leading_hypothesis_code=leading_hyp.hypothesis_code,
+             leading_hypothesis_posterior=top_prob,
+-            all_verifications_passed=has_verified_evidence,
++            all_verifications_passed=(all_verifications_passed and has_verified_evidence),
+             adversarial_attack_survived=attack_res.attack_status in ["SURVIVED", "INCONCLUSIVE", "ROBUST"],
+             variance_explained_pct=variance_explained_pct,
+             causal_identifiable=causal_gate_res.is_identifiable,
+@@ -5269,7 +5279,7 @@
+         epistemic_vector = EpistemicCalibrationEngine.calibrate_epistemic_state(
+             posterior_probability=top_prob,
+             evidence_count=len(state_mgr.get_executed_experiments()),
+-            all_verifications_passed=has_verified_evidence,
++            all_verifications_passed=(all_verifications_passed and has_verified_evidence),
+             multiverse_robustness=(multiverse_report.robustness_score if getattr(multiverse_report, "applicable", True) else None),
+             adversarial_survived=attack_res.attack_status in ["SURVIVED", "INCONCLUSIVE", "ROBUST"],
+             sample_size=len(primary_df),
+--- a/packages/analytics_core/src/intelligence/canonical_question_contract.py
++++ b/packages/analytics_core/src/intelligence/canonical_question_contract.py
+@@ -584,44 +584,123 @@
+ 
+ 
+ def extract_filter_conditions(question: str, available_cols: Sequence[str]) -> Tuple[Dict[str, Any], ...]:
+-    """Extract simple equality and existential filters from the question text."""
++    """Extract a conservative, schema-grounded subset of population predicates.
++
++    Explicit comparisons support arbitrary dataset columns. Common year/date and
++    dimension-value forms are supported when the relevant column is unique. This
++    function intentionally does not guess among multiple candidate columns; the
++    contract compiler marks unresolved filter intent as incomplete instead.
++    """
+     ql = " ".join((question or "").strip().split())
+     conditions: List[Dict[str, Any]] = []
+-
+-    # Equality filters like 'product_id P0066' or 'product_id = P0066'
+-    for col_name in ("product_id", "product", "sku"):
+-        if not any(col.lower() == col_name.lower() or normalize_token(col).endswith(col_name) for col in available_cols):
++    used: set[tuple[str, str, str]] = set()
++
++    def add(col: str, op: str, value: Any = None) -> None:
++        key = (str(col).casefold(), str(op).upper(), repr(value))
++        if key not in used:
++            conditions.append({"column": col, "operator": str(op).upper(), **({} if value is None and str(op).upper() in {"IS NULL", "IS NOT NULL"} else {"value": value})})
++            used.add(key)
++
++    # Explicit comparisons: `discount_rate > 0.1`, `region = 'North'`,
++    # `status is not cancelled`. Match against the actual schema, not a token list.
++    schema_cols = sorted((str(c) for c in available_cols), key=len, reverse=True)
++    col_alt = "|".join(re.escape(c) for c in schema_cols)
++    if col_alt:
++        explicit = re.compile(
++            rf"(?<![\w])(?P<column>{col_alt})(?![\w])\s*(?P<op>>=|<=|!=|<>|=|>|<|\bis\s+not\b|\bis\b|\bequals?\b)\s*(?P<value>\"[^\"]*\"|'[^']*'|[^,;?]+?)(?=\s+(?:and|but)\s+|[,;?]|$)",
++            re.I,
++        )
++        for match in explicit.finditer(ql):
++            col = next((c for c in available_cols if str(c).casefold() == match.group("column").casefold()), match.group("column"))
++            op = match.group("op").casefold()
++            raw = match.group("value").strip().strip("\"'").strip()
++            if op in {"is", "is not"} and raw.casefold() in {"null", "none", "missing", "blank"}:
++                add(col, "IS NULL" if op == "is" else "IS NOT NULL")
++                continue
++            op = {"equals": "=", "equal": "=", "is": "=" , "is not": "!=" , "<>": "!="}.get(op, op)
++            if not raw:
++                continue
++            if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", raw):
++                value: Any = float(raw) if "." in raw else int(raw)
++            elif raw.casefold() in {"true", "false"}:
++                value = raw.casefold() == "true"
++            else:
++                value = raw
++            add(str(col), op, value)
++
++    # Schema-grounded calendar year and explicit ISO date range. Use half-open
++    # ranges to avoid excluding timestamps later on the final day.
++    date_cols = [str(c) for c in available_cols if re.search(r"date|time|timestamp|created|placed|ordered|transaction", str(c), re.I)]
++    year_match = re.search(r"\b(?:in|during|for|from)\s+(20\d{2})\b|\b(?:placed|ordered|created|signed\s+up)\s+in\s+(20\d{2})\b", ql, re.I)
++    if year_match and len(date_cols) == 1:
++        year = int(next(g for g in year_match.groups() if g))
++        date_col = date_cols[0]
++        add(date_col, ">=", f"{year:04d}-01-01")
++        add(date_col, "<", f"{year + 1:04d}-01-01")
++
++    date_range = re.search(r"\b(?:between|from)\s+(\d{4}-\d{2}-\d{2})\s+(?:and|to|through)\s+(\d{4}-\d{2}-\d{2})\b", ql, re.I)
++    if date_range and len(date_cols) == 1:
++        start, end = date_range.groups()
++        try:
++            start_dt, end_dt = pd.Timestamp(start), pd.Timestamp(end)
++            if start_dt <= end_dt:
++                add(date_cols[0], ">=", start)
++                add(date_cols[0], "<", (end_dt + pd.Timedelta(days=1)).date().isoformat())
++        except (TypeError, ValueError):
++            pass
++
++    # Common natural-language dimension filters: `in the North region`,
++    # `region North`, `for status completed`. Only resolve a single named dimension.
++    dimension_names = ("region", "state", "country", "segment", "category", "status", "channel", "tier", "product", "sku")
++    for dim in dimension_names:
++        candidates = [str(c) for c in available_cols if re.sub(r"[^a-z0-9]", "", str(c).casefold()).endswith(dim)]
++        if len(candidates) != 1:
+             continue
+-        pattern = rf"\b{re.escape(col_name)}\b\s*(?:=|:|is)?\s*['\"]?([A-Za-z0-9_\-]+)['\"]?"
+-        m = re.search(pattern, ql, flags=re.I)
+-        if m:
+-            value = m.group(1)
+-            if value and value.lower() not in {"null", "none"}:
+-                conditions.append({"column": next(c for c in available_cols if normalize_token(c) == normalize_token(col_name) or normalize_token(c).endswith(normalize_token(col_name))), "value": value, "operator": "="})
++        col = candidates[0]
++        patterns = (
++            rf"\b{re.escape(dim)}\s+(?:is\s+)?(?:equal\s+to\s+)?['\"]?([A-Za-z][A-Za-z0-9 _-]*?)['\"]?(?=\s+(?:and|but|during|in|where|with|without|excluding|excluding|greater|less|above|below)\b|[,;?.!]|$)",
++            rf"\bin\s+(?:the\s+)?([A-Za-z][A-Za-z0-9_-]*?)\s+{re.escape(dim)}\b",
++        )
++        for pattern in patterns:
++            match = re.search(pattern, ql, re.I)
++            if match:
++                value = match.group(1).strip().strip("'\"")
++                # Avoid swallowing ordinary verbs or the rest of a sentence as a value.
++                if value and value.casefold() not in {"the", "a", "an", "each", "every", "all", "by", "for"}:
++                    add(col, "=", value)
++                    break
++
++    # Common order/subscription lifecycle values often appear without an explicit
++    # `status = ...` clause (for example, "completed orders"). Resolve only when
++    # there is exactly one status-like field; never bind the word to an arbitrary
++    # categorical column.
++    status_cols = [str(c) for c in available_cols if any(token in normalize_token(str(c)) for token in ("status", "state"))]
++    if re.search(r"\borders?\b", ql):
++        order_status_cols = [c for c in status_cols if "order" in normalize_token(c) and "delivery" not in normalize_token(c)]
++        if order_status_cols:
++            status_cols = order_status_cols
++    elif re.search(r"\bsubscriptions?\b", ql):
++        subscription_status_cols = [c for c in status_cols if "subscription" in normalize_token(c)]
++        if subscription_status_cols:
++            status_cols = subscription_status_cols
++    if len(status_cols) == 1:
++        for lifecycle in ("completed", "cancelled", "canceled", "paid", "refunded", "pending", "shipped", "delivered", "active", "inactive"):
++            if re.search(rf"\b{lifecycle}\b", ql, re.I) and not any(x[0] == status_cols[0].casefold() for x in used):
++                add(status_cols[0], "=", lifecycle)
+                 break
+ 
+-    # 'for product_id P0066' is a common natural-language variant; also accept explicit 'for <col> <value>'
+-    if not conditions:
+-        for col in available_cols:
+-            cn = normalize_token(col)
+-            if "product" in cn and not cn.endswith("_date"):
+-                m = re.search(rf"\bfor\s+{re.escape(cn)}\s+([A-Za-z0-9_\-]+)", ql, flags=re.I)
+-                if m:
+-                    conditions.append({"column": col, "value": m.group(1), "operator": "="})
+-                    break
+-
+-    if any(token in ql.lower() for token in ("signed up", "signup", "has signed up")) and any("signup_date" in normalize_token(c) for c in available_cols):
+-        signup_col = next(c for c in available_cols if "signup_date" in normalize_token(c))
+-        conditions.append({"column": signup_col, "operator": "IS NOT NULL"})
+-
+-    # Explicit exclusions are executable only when a status-like field can be
+-    # identified.  Do not turn an unmatched instruction into a comment.
+-    exclusion = re.search(r"\b(?:exclude|excluding|without|ignore)\s+(?:the\s+)?([a-z0-9_ -]+?)(?:\s+(?:subscriptions?|records?|rows?))?(?:[?.!,]|$)", ql, re.I)
+-    if exclusion:
++    # Legacy signup predicate remains supported, but only when the column is unique.
++    signup_cols = [str(c) for c in available_cols if "signup_date" in normalize_token(str(c)) or "sign_up_date" in normalize_token(str(c))]
++    if any(token in ql.lower() for token in ("signed up", "signup", "has signed up")) and len(signup_cols) == 1:
++        add(signup_cols[0], "IS NOT NULL")
++
++    # Generic exclusion is safe only when a unique status-like column exists.
++    exclusion = re.search(r"\b(?:exclude|excluding|without|ignore)\s+(?:the\s+)?([a-z0-9_ -]+?)(?:\s+(?:subscriptions?|orders?|records?|rows?))?(?:[?.!,]|$)", ql, re.I)
++    if exclusion and not any(c[1] == "!=" for c in used):
+         value = re.sub(r"\s+(?:subscriptions?|orders?|records?|rows?)$", "", exclusion.group(1).strip(), flags=re.I).casefold()
+-        status_cols = [c for c in available_cols if any(token in normalize_token(c) for token in ("status", "state", "subscription status"))]
++        status_cols = [str(c) for c in available_cols if any(token in normalize_token(str(c)) for token in ("status", "state", "subscription status"))]
+         if len(status_cols) == 1 and value:
+-            conditions.append({"column": status_cols[0], "value": value, "operator": "!="})
++            add(status_cols[0], "!=", value)
+ 
+     return tuple(conditions)
+ 
+@@ -1309,12 +1388,30 @@
+             if sem_grp and sem_grp in cols and sem_grp != target:
+                 grouping = [sem_grp]
+         if not grouping:
+-            for dim_phrase in ["passenger class", "class", "cut", "origin", "day", "clarity", "species", "traffic_source", "traffic source", "channel", "source", "segment", "customer segment", "region"]:
+-                if dim_phrase in ql:
++            # Discover dimensions from the actual dataset schema rather than a list
++            # of demonstration-dataset fields (class/species/cut/etc.). Normalize
++            # snake_case and spaced names, prefer longer phrases, and only bind a
++            # candidate that resolves back to a real physical column.
++            schema_phrases = sorted(
++                {normalize_token(c) for c in cols if normalize_token(c)},
++                key=lambda phrase: (-len(phrase), phrase),
++            )
++            q_norm = normalize_token(ql)
++            for dim_phrase in schema_phrases:
++                if re.search(rf"(?<![a-z0-9]){re.escape(dim_phrase)}(?![a-z0-9])", q_norm):
+                     c = resolve_phrase_to_column(dim_phrase, cols)
+                     if c and c != target:
+                         grouping = [c]
+                         break
++            # A final alias pass supports business synonyms, but only aliases
++            # that resolve uniquely against this dataset are eligible.
++            if not grouping:
++                for dim_phrase in sorted(APPROVED_SEMANTIC_ALIASES, key=lambda phrase: (-len(phrase), phrase)):
++                    if re.search(rf"(?<![a-z0-9]){re.escape(dim_phrase)}(?![a-z0-9])", q_norm):
++                        c = resolve_phrase_to_column(dim_phrase, cols)
++                        if c and c != target:
++                            grouping = [c]
++                            break
+ 
+     # 9. Descriptive Breakdown: "What is the survival rate by passenger class?" / "What is the average tip by day?" / "churn rate by plan_tier"
+     desc_by_match = re.search(r"^(?:(?:what\s+(?:is|are)\s+(?:the\s+)?)|calculate\s+|show\s+|find\s+|compute\s+)?(.+?)\s+by\s+(.+?)(?:\?|$)", ql)
+@@ -1472,9 +1569,11 @@
+ 
+     # Clean up unresolved roles
+     unresolved: List[str] = []
+-    if re.search(r"\b(?:exclude|excluding|without|ignore)\b", ql) and not any(
+-        str(c.get("operator", "")).upper() == "!=" for c in filter_conditions
+-    ):
++    filter_intent = re.search(
++        r"\b(?:where|only|excluding|exclude|without|except|ignore|during|between|from|greater than|less than|above|below|over|under|at least|at most)\b|\bin\s+20\d{2}\b|\b(?:placed|ordered|created)\s+in\s+20\d{2}\b",
++        ql, re.I,
++    )
++    if filter_intent and not filter_conditions:
+         unresolved.append("filter_instruction")
+     if task_family == "COUNT" and evidence.get("count", {}).get("row_count") and re.search(r"\b(?:by|per|across|within|for\s+each|in\s+each)\b", ql) and not grouping:
+         unresolved.append("grouping")
+--- a/packages/analytics_core/src/engines/semantic.py
++++ b/packages/analytics_core/src/engines/semantic.py
+@@ -491,20 +491,6 @@
+             target_col = None
+         elif scored_metrics and scored_metrics[0][0] > 0 and (len(scored_metrics) == 1 or scored_metrics[0][0] > scored_metrics[1][0]):
+             target_col = scored_metrics[0][1]
+-        elif [m for m in world_model.metrics if m.table_name == primary_table]:
+-            # BUGFIX (DEFECT-005): this previously read world_model.metrics[0]
+-            # unconditionally -- a *global*, table-unscoped list. When no
+-            # column in the primary table scored above 0 (e.g. a table whose
+-            # columns just don't relate to the question), it would silently
+-            # hand back a metric column belonging to a DIFFERENT table
+-            # entirely (observed: primary_table="inventory" but
+-            # target_col="quantity", a sales-table-only column), which then
+-            # fails IR validation with "column does not exist in table" and
+-            # the investigation dies before hypothesis generation ever runs.
+-            # Scoping this fallback to metrics whose table_name matches the
+-            # already-chosen primary_table keeps target_col guaranteed valid
+-            # for that table.
+-            target_col = next(m for m in world_model.metrics if m.table_name == primary_table).column_name
+         else:
+             # BUGFIX (DEFECT-005): this previously fell back to the literal
+             # string "value" -- not a real column in ANY table -- whenever
+--- a/packages/analytics_core/src/profiling/data_quality_gate.py
++++ b/packages/analytics_core/src/profiling/data_quality_gate.py
+@@ -286,7 +286,11 @@
+             try:
+                 tmp = df[[time_col, metric_col]].dropna()
+                 bucket_sizes = tmp.groupby(time_col)[metric_col].size()
+-                min_bucket_n = 3
++                # Three observations produce a highly unstable median; with only
++                # 3–4 orders per period, a single ordinary large order can trigger a
++                # false 20x scale-change blocker. Require at least five observations
++                # per bucket before this heuristic may hard-block analysis.
++                min_bucket_n = 5
+                 well_populated_buckets = bucket_sizes[bucket_sizes >= min_bucket_n].index
+                 # Bucket by the raw value of time_col (works for strings like
+                 # "2026-01" as well as actual dates truncated by the caller).
+--- a/packages/analytics_core/src/ingestion/robust_loader.py
++++ b/packages/analytics_core/src/ingestion/robust_loader.py
+@@ -310,6 +310,19 @@
+             skip_blank_lines=True,
+         )
+ 
++    @staticmethod
++    def _validate_csv_quoting(text: str, delimiter: str) -> None:
++        """Reject unterminated quoted fields instead of silently merging records."""
++        try:
++            reader = csv.reader(StringIO(text), delimiter=delimiter, strict=True)
++            for _row in reader:
++                pass
++        except csv.Error as exc:
++            raise ValueError(
++                "Malformed delimited file: invalid or unterminated quoted field; "
++                "correct the source file before analysis."
++            ) from exc
++
+     def _read_csv_raw(self, text: str, delimiter: str) -> pd.DataFrame:
+         """Same parse, but every cell kept as the literal string in the file."""
+         return pd.read_csv(
+@@ -390,6 +403,9 @@
+         sample = text[: self.sample_bytes_for_sniffing]
+         delimiter = _sniff_delimiter(sample)
+         report.delimiter_detected = delimiter
++        # Validate quote structure before permissive parser/repair paths can absorb
++        # multiple physical rows into one field and return a plausible but corrupted table.
++        self._validate_csv_quoting(text, delimiter)
+ 
+         try:
+             df = self._read_csv_strict(text, delimiter)
+--- /dev/null
++++ b/tests/independent_release/test_independent_audit_remediation_2026_10_15.py
+@@ -0,0 +1,151 @@
++"""Regression tests for defects independently reproduced in the 2026-10-15 audit."""
++
++import pandas as pd
++import pytest
++
++from packages.analytics_core.src.engines.stopping import StoppingEngine
++from packages.analytics_core.src.intelligence.canonical_question_contract import extract_filter_conditions
++from packages.analytics_core.src.profiling.data_quality_gate import DataQualityGate
++from packages.analytics_core.src.runtime.state_reconstruction import classify_evidence_for_hypothesis
++from packages.analytics_core.src.ingestion.robust_loader import RobustFileLoader
++
++
++def test_failed_verification_cannot_become_supporting_due_to_nonzero_effect():
++    assert classify_evidence_for_hypothesis("FAILED", 0.42) == "contradicting"
++    assert classify_evidence_for_hypothesis("FAILED", 0.0) == "contradicting"
++
++
++def test_unknown_verification_status_does_not_infer_support_from_effect_magnitude():
++    assert classify_evidence_for_hypothesis(None, 0.42) is None
++    assert classify_evidence_for_hypothesis("PENDING", -0.8) is None
++
++
++def test_verified_evidence_is_classified_supporting():
++    assert classify_evidence_for_hypothesis("VERIFIED", 0.0) == "supporting"
++
++
++def test_stopping_fails_closed_when_verification_argument_is_omitted():
++    decision = StoppingEngine.evaluate_stopping(
++        leading_posterior=0.99,
++        entropy_delta=-1.0,
++        experiments_completed=5,
++        counter_hypothesis_evaluated=True,
++    )
++    assert decision.should_stop is False
++    assert decision.criteria_breakdown["verification_passed"] is False
++
++
++def test_stopping_cannot_claim_resolution_when_verification_failed():
++    decision = StoppingEngine.evaluate_stopping(
++        leading_posterior=0.99,
++        entropy_delta=-1.0,
++        experiments_completed=5,
++        all_verifications_passed=False,
++        counter_hypothesis_evaluated=True,
++    )
++    assert decision.should_stop is False
++
++
++def test_explicit_numeric_and_categorical_filters_resolve_arbitrary_columns():
++    filters = extract_filter_conditions(
++        "Show revenue where discount_rate > 0.1 and region = 'North'",
++        ["revenue", "discount_rate", "region", "order_date"],
++    )
++    assert { (f["column"], f["operator"], f["value"]) for f in filters } == {
++        ("discount_rate", ">", 0.1), ("region", "=", "North")
++    }
++
++
++def test_calendar_year_filter_becomes_half_open_date_range():
++    filters = extract_filter_conditions("Show orders placed in 2025", ["order_date", "revenue"])
++    assert filters == (
++        {"column": "order_date", "operator": ">=", "value": "2025-01-01"},
++        {"column": "order_date", "operator": "<", "value": "2026-01-01"},
++    )
++
++
++def test_iso_date_range_includes_the_full_final_day():
++    filters = extract_filter_conditions(
++        "Show orders between 2025-01-01 and 2025-03-31", ["order_date", "revenue"]
++    )
++    assert filters[0]["value"] == "2025-01-01"
++    assert filters[1]["value"] == "2025-04-01"
++
++
++def test_natural_language_region_and_completed_status_filters_resolve():
++    region = extract_filter_conditions("Show sales in the North region", ["region", "sales"])
++    status = extract_filter_conditions("Show completed orders", ["order_status", "revenue"])
++    assert {"column": "region", "operator": "=", "value": "North"} in region
++    assert {"column": "order_status", "operator": "=", "value": "completed"} in status
++
++
++def test_malformed_unterminated_csv_quote_fails_closed():
++    content = b"order_id,region,revenue\n1,North,10\n2,South,20\n3,\"North,30\n4,West,40\n"
++    with pytest.raises(ValueError, match="unterminated quoted field"):
++        RobustFileLoader().load(file_bytes=content, filename="malformed.csv")
++
++
++def test_sparse_period_medians_do_not_create_scale_change_blocker():
++    # Each date has only 3 rows; the apparent median ratio is 21x, but this is too
++    # sparse to hard-block the whole dataset on the temporal-magnitude heuristic.
++    frame = pd.DataFrame({
++        "date": ["2025-01-01"] * 3 + ["2025-01-02"] * 3,
++        "revenue": [1.0, 1.0, 1.0, 21.0, 21.0, 21.0],
++        "order_id": list(range(1, 7)),
++    })
++    result = DataQualityGate.evaluate_fitness(frame, time_col="date", metric_col="revenue")
++    assert not any("median jumps" in issue for issue in result.critical_issues)
++
++
++def test_controller_stopping_call_passes_accumulated_verification_state():
++    from pathlib import Path
++    source = Path(__file__).parents[2] / "packages/analytics_core/src/runtime/controller.py"
++    text = source.read_text(encoding="utf-8")
++    start = text.index("stop_decision = StoppingEngine.evaluate_stopping(")
++    block = text[start:text.index("\n            )", start) + 14]
++    assert "all_verifications_passed=all_verifications_passed" in block
++
++
++def test_semantic_engine_has_no_unmatched_first_metric_fallback():
++    from pathlib import Path
++    source = Path(__file__).parents[2] / "packages/analytics_core/src/engines/semantic.py"
++    text = source.read_text(encoding="utf-8")
++    assert "target_col = next(m for m in world_model.metrics if m.table_name == primary_table).column_name" not in text
++
++
++def test_schema_derived_dimensions_support_unfamiliar_enterprise_columns():
++    from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
++    frame = pd.DataFrame({"sales_territory": ["East", "West"], "customer_cohort": ["New", "Returning"], "net_margin": [2.0, 3.0]})
++    territory = compile_canonical_question_contract("What is average net margin by sales territory?", frame)
++    cohort = compile_canonical_question_contract("What is average net margin by customer cohort?", frame)
++    assert territory.target_column == "net_margin"
++    assert territory.grouping_columns == ("sales_territory",)
++    assert cohort.target_column == "net_margin"
++    assert cohort.grouping_columns == ("customer_cohort",)
++
++
++def test_forecasting_series_is_sorted_by_time_not_input_row_order():
++    from packages.analytics_core.src.forecasting.engine import ForecastingEngine
++    frame = pd.DataFrame({"date": ["2025-03-01", "2025-01-01", "2025-02-01"], "revenue": [30.0, 10.0, 20.0]})
++    prepared = ForecastingEngine._prepare_series(frame, "date", "revenue")
++    assert list(pd.to_datetime(prepared["date"])) == list(pd.to_datetime(["2025-01-01", "2025-02-01", "2025-03-01"]))
++    assert list(prepared["revenue"]) == [10.0, 20.0, 30.0]
++
++
++def test_parsed_filters_apply_to_the_intended_population():
++    from packages.analytics_core.src.intelligence.intent_state import filter_condition_mask
++    frame = pd.DataFrame({
++        "region": ["North", "North", "South"],
++        "discount_rate": [0.2, 0.05, 0.3],
++        "revenue": [100.0, 200.0, 300.0],
++    })
++    filters = extract_filter_conditions(
++        "Show revenue where discount_rate > 0.1 and region = 'North'", list(frame.columns)
++    )
++    population = frame.copy()
++    for condition in filters:
++        population = population.loc[filter_condition_mask(
++            population[condition["column"]], condition["operator"], condition.get("value")
++        )]
++    assert len(population) == 1
++    assert population["revenue"].sum() == 100.0

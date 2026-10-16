@@ -417,6 +417,26 @@ def analyze_churn_identifiability(df: pd.DataFrame, group_col: str,
                 "significant": bool(p < 0.05),
             }
 
+    # Three or more groups: chi-square test of independence across all groups. Without this branch a
+    # k>2 comparison was reported as "insufficient eligible sample size" even when every group was
+    # large. Skipped (left as None, i.e. honestly inconclusive) when any group is below the minimum
+    # size, when events or non-events are absent overall, or when an expected cell count is below 5
+    # (chi-square is unreliable there).
+    if len(groups) >= 3:
+        c = crude.set_index(group_col)
+        if len(c) >= 3 and (c["eligible_n"] >= min_group_n).all():
+            ev = c["events"].astype(float).to_numpy()
+            non_ev = (c["eligible_n"] - c["events"]).astype(float).to_numpy()
+            if ev.sum() > 0 and non_ev.sum() > 0:
+                table = np.column_stack([ev, non_ev])
+                chi2, p, _, expected = stats.chi2_contingency(table, correction=False)
+                if float(expected.min()) >= 5.0:
+                    aggregate_association = {
+                        "groups": sorted(str(g) for g in c.index), "k": int(len(c)),
+                        "chi2": float(chi2), "p_value": float(p),
+                        "significant": bool(p < 0.05),
+                    }
+
     # confounder stratification
     stratified_checks = []
     confounders_detected = []

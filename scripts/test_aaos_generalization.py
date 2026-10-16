@@ -93,10 +93,18 @@ class TestAAOSGeneralization(unittest.TestCase):
         best_exp, _ = EIGOptimizer.select_next_experiment(candidates, hyps)
         self.assertIn("territory", best_exp.query_sql)
 
-        # 4. DuckDB Execution & Independent Dual-Engine Verification
-        exec_res = DuckDBExecutionProvider().execute_query(df=df, table_name="ecommerce_orders", query_sql=best_exp.query_sql)
-        top_terr = exec_res.result_df.iloc[0]["territory"]
-        self.assertEqual(top_terr, "EMEA-North")
+        # 4. DuckDB Execution & Independent Dual-Engine Verification.
+        # The optimizer may rank any informative design first (it currently prefers a variance design),
+        # so the test does not depend on which one wins: every candidate that is run must declare its own
+        # aggregation and primary result column, and the concentration (SUM-by-territory) design that was
+        # invented must be present, execute, and verify against ground truth computed from the data.
+        truth_totals = df.groupby("territory")["net_sales"].sum()
+        self.assertEqual(truth_totals.idxmax(), "EMEA-North")
+        sum_candidates = [c for c in candidates if str(c.aggregation_type).upper() == "SUM" and "territory" in c.query_sql]
+        self.assertTrue(sum_candidates, "a SUM-by-territory concentration experiment must be invented")
+        conc_exp = sum_candidates[0]
+        exec_res = DuckDBExecutionProvider().execute_query(df=df, table_name="ecommerce_orders", query_sql=conc_exp.query_sql, aggregation_type=conc_exp.aggregation_type, primary_result_column=conc_exp.primary_result_column)
+        self.assertEqual(exec_res.result_df.iloc[0]["territory"], "EMEA-North")
 
         verif = VerificationEngine.verify_secondary(
             primary_df=df,
@@ -107,11 +115,19 @@ class TestAAOSGeneralization(unittest.TestCase):
         )
         self.assertEqual(verif.status, "VERIFIED")
 
+        # The top-ranked design must also execute with its own declared columns and verify itself.
+        best_res = DuckDBExecutionProvider().execute_query(df=df, table_name="ecommerce_orders", query_sql=best_exp.query_sql, aggregation_type=best_exp.aggregation_type, primary_result_column=best_exp.primary_result_column)
+        self.assertIsNotNone(best_res.primary_value)
+
         # 5. Evidence & Bayesian Grounding
         eta_sq = BeliefEngine.compute_variance_explained(df, "territory", "net_sales")
         self.assertGreater(eta_sq, 90.0)
 
-        eval_res = PredictionEvaluator.evaluate(p1, exec_res.result_df)
+        # The evaluator refuses to guess a metric among several numeric columns, so hand it the dimension
+        # and the experiment's declared primary result column.
+        primary_col = exec_res.primary_result_column
+        self.assertTrue(primary_col)
+        eval_res = PredictionEvaluator.evaluate(p1, exec_res.result_df[["territory", primary_col]])
         self.assertEqual(eval_res.status, "SUPPORTED")
 
         posteriors, delta_h = BeliefEngine.compute_bayesian_posteriors(
@@ -152,10 +168,17 @@ class TestAAOSGeneralization(unittest.TestCase):
         candidates = ExperimentSynthesizer.synthesize_candidate_experiments(hyps, semantic)
         best_exp, _ = EIGOptimizer.select_next_experiment(candidates, hyps)
 
-        exec_res = DuckDBExecutionProvider().execute_query(df=df, table_name="saas_metrics", query_sql=best_exp.query_sql)
+        exec_res = DuckDBExecutionProvider().execute_query(df=df, table_name="saas_metrics", query_sql=best_exp.query_sql, aggregation_type=best_exp.aggregation_type, primary_result_column=best_exp.primary_result_column)
         self.assertIsNotNone(exec_res.result_df)
-        starter_row = exec_res.result_df[exec_res.result_df["billing_tier"] == "Starter"].iloc[0]
-        self.assertGreater(float(starter_row["total_metric"]), 30.0)
+        # The chosen design is a stratified churn-rate query (events / eligible_n per tier x tickets).
+        # Pool the strata per tier and compare with ground truth computed directly from the data.
+        pooled = exec_res.result_df.groupby("billing_tier")[["events", "eligible_n"]].sum()
+        rates = (pooled["events"] / pooled["eligible_n"]).sort_index()
+        truth = df.groupby("billing_tier")["churn_flag"].mean().sort_index()
+        self.assertTrue(np.allclose(rates.to_numpy(), truth.to_numpy()))
+        self.assertEqual(rates.idxmax(), "Starter")
+        self.assertGreater(float(rates["Starter"]), 0.45)
+        self.assertLess(float(rates.drop("Starter").max()), 0.15)
 
     def test_domain_c_marketing_conversion_by_channel(self):
         """Domain C: Marketing acquisition channels and conversion rates with Multiverse checking."""
@@ -259,7 +282,7 @@ class TestAAOSGeneralization(unittest.TestCase):
         best_exp_t0, _ = EIGOptimizer.select_next_experiment(candidates_t0, hyps)
 
         # Run first experiment
-        exec_t0 = DuckDBExecutionProvider().execute_query(df=df, table_name="general_ledger", query_sql=best_exp_t0.query_sql)
+        exec_t0 = DuckDBExecutionProvider().execute_query(df=df, table_name="general_ledger", query_sql=best_exp_t0.query_sql, aggregation_type=best_exp_t0.aggregation_type, primary_result_column=best_exp_t0.primary_result_column)
         
         # Adaptive Replanning: Inspect evidence and invent new targeted emergent hypothesis
         replan = ExperimentSynthesizer.dynamically_replan_candidates(

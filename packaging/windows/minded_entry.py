@@ -16,6 +16,15 @@ import threading
 import time
 from pathlib import Path
 
+# Isolated analytical workers are launched by re-running this executable with
+# --aaos-isolated-worker <request.json> <response.json>. Handle that before anything
+# else (no GUI, no single-instance mutex, no offline guard needed for a pure compute worker).
+if len(sys.argv) >= 4 and sys.argv[1] == "--aaos-isolated-worker":
+    from packages.analytics_core.src.execution._isolated_worker import main as _worker_main
+
+    _worker_main(sys.argv[2], sys.argv[3])
+    sys.exit(0)
+
 # In a --windowed GUI process on Windows, sys.stdout and sys.stderr are None.
 # Provide null streams that safely implement isatty() and write() to prevent
 # formatters or libraries (e.g. uvicorn.logging.DefaultFormatter) from failing.
@@ -44,6 +53,11 @@ os.environ["AI_PROVIDER"] = "none"
 os.environ["TELEMETRY_ENABLED"] = "false"
 os.environ["FEEDBACK_UPLOAD_ENABLED"] = "false"
 os.environ["STORAGE_PROVIDER"] = "local"
+# Local desktop mode needs the loopback demo-token login and the in-process investigation
+# worker, both of which are gated on ENVIRONMENT=development. A stray ENVIRONMENT value
+# on the host (e.g. "production") must not silently disable them.
+os.environ["ENVIRONMENT"] = "development"
+os.environ["AAOS_LOCAL_AUTOWORKER"] = "true"
 
 HOST = "127.0.0.1"
 WINDOW_TITLE = "MindEd AA-OS"
@@ -210,6 +224,27 @@ if _frontend.is_dir():
     os.environ["AAOS_FRONTEND_ROOT"] = str(_frontend)
 
 
+_LOADING_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>MindEd AA-OS</title>
+<style>html,body{height:100%;margin:0;background:#1a0f05;color:#f5b042;font-family:Segoe UI,system-ui,sans-serif}
+.w{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px}
+.s{width:42px;height:42px;border:4px solid #4a3416;border-top-color:#f5b042;border-radius:50%;animation:r 1s linear infinite}
+@keyframes r{to{transform:rotate(360deg)}}small{color:#b98a4a}</style></head>
+<body><div class="w"><div class="s"></div><div style="font-size:20px;font-weight:600">MindEd AA-OS</div>
+<small>Starting the local analytical engine&hellip; first launch can take a few seconds.</small></div></body></html>"""
+
+_FATAL_ENGINE_MSG = (
+    "MindEd could not start its local analytical engine.\n\n"
+    "Your data has not been sent to an external service.\n\n"
+    "Restart MindEd and try again."
+)
+_FATAL_WINDOW_MSG = (
+    "MindEd could not open its application window.\n\n"
+    "This application requires the Microsoft Edge WebView2 Runtime. "
+    "Windows 10 (22H2+) and Windows 11 include it by default. On older systems, "
+    "install the 'WebView2 Runtime' from Microsoft and reopen MindEd AA-OS."
+)
+
+
 def main() -> None:
     _log("MindEd AA-OS starting...")
     # 1. Single instance guard
@@ -217,66 +252,19 @@ def main() -> None:
         _log("Another instance is already running; brought to foreground and exiting.")
         sys.exit(0)
 
-    # 2. Local loopback backend startup
-    try:
-        from apps.api.src.main import app
-        import uvicorn
-    except Exception as exc:
-        _show_fatal_error(
-            "MindEd could not start its local analytical engine.\n\n"
-            "Your data has not been sent to an external service.\n\n"
-            "Restart MindEd and try again.",
-            exc=exc,
-        )
-        sys.exit(1)
-
-    port = _free_loopback_port()
-    _log(f"Loopback port allocated: {port}")
-    config = uvicorn.Config(app, host=HOST, port=port, reload=False, log_config=None)
-    server = uvicorn.Server(config)
-
-    server_exception: list[Exception] = []
-
-    def _run_server() -> None:
-        try:
-            server.run()
-        except Exception as e:
-            server_exception.append(e)
-            _log(f"Server thread exception: {e}")
-
-    server_thread = threading.Thread(target=_run_server, name="aaos-local-api", daemon=True)
-    server_thread.start()
-
-    if not _wait_until_ready(HOST, port, server_thread=server_thread):
-        server.should_exit = True
-        exc = server_exception[0] if server_exception else None
-        _show_fatal_error(
-            "MindEd could not start its local analytical engine.\n\n"
-            "Your data has not been sent to an external service.\n\n"
-            "Restart MindEd and try again.",
-            exc=exc,
-        )
-        sys.exit(1)
-
-    _log("Backend ready. Starting native desktop window...")
-
-    # 3. Native desktop window via pywebview (no browser fallback)
+    # 2. Open the native window IMMEDIATELY with a lightweight loading page. The heavy part of start-up
+    #    (importing the scientific stack and starting the local API) happens afterwards in a background
+    #    thread, so the user sees the app at once instead of staring at nothing.
     try:
         import webview
     except Exception as exc:
-        server.should_exit = True
-        _show_fatal_error(
-            "MindEd could not open its application window.\n\n"
-            "This application requires the Microsoft Edge WebView2 Runtime. "
-            "Windows 10 (22H2+) and Windows 11 include it by default. On older systems, "
-            "install the 'WebView2 Runtime' from Microsoft and reopen MindEd AA-OS.",
-            exc=exc,
-        )
+        _show_fatal_error(_FATAL_WINDOW_MSG, exc=exc)
         sys.exit(1)
 
+    state: dict = {"server": None, "thread": None}
     window = webview.create_window(
         WINDOW_TITLE,
-        url=f"http://{HOST}:{port}/",
+        html=_LOADING_HTML,
         width=1440,
         height=900,
         min_size=(1024, 700),
@@ -284,27 +272,63 @@ def main() -> None:
         confirm_close=False,
     )
 
+    def _boot() -> None:
+        """Runs once the GUI loop is up: start the local engine, then navigate the window to it."""
+        try:
+            from apps.api.src.main import app
+            import uvicorn
+
+            port = _free_loopback_port()
+            _log(f"Loopback port allocated: {port}")
+            config = uvicorn.Config(app, host=HOST, port=port, reload=False, log_config=None)
+            server = uvicorn.Server(config)
+            state["server"] = server
+            server_exception: list = []
+
+            def _run_server() -> None:
+                try:
+                    server.run()
+                except Exception as e:  # noqa: BLE001
+                    server_exception.append(e)
+                    _log(f"Server thread exception: {e}")
+
+            thread = threading.Thread(target=_run_server, name="aaos-local-api", daemon=True)
+            state["thread"] = thread
+            thread.start()
+
+            if not _wait_until_ready(HOST, port, server_thread=thread):
+                server.should_exit = True
+                raise RuntimeError(f"local engine did not become ready: {server_exception[:1]}")
+
+            _log("Backend ready. Loading application UI into the native window...")
+            window.load_url(f"http://{HOST}:{port}/")
+        except Exception as exc:  # noqa: BLE001
+            _show_fatal_error(_FATAL_ENGINE_MSG, exc=exc)
+            try:
+                window.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+
     def _on_closed() -> None:
         _log("Native window closed by user; shutting down local backend...")
-        server.should_exit = True
+        if state["server"] is not None:
+            state["server"].should_exit = True
 
     window.events.closed += _on_closed
 
+    # 3. Native desktop window via pywebview (no browser fallback)
     try:
-        webview.start(icon=_icon_path(), private_mode=False)
+        webview.start(_boot, icon=_icon_path(), private_mode=False)
     except Exception as exc:  # pragma: no cover - native GUI failure path
-        server.should_exit = True
-        _show_fatal_error(
-            "MindEd could not open its application window.\n\n"
-            "This application requires the Microsoft Edge WebView2 Runtime. "
-            "Windows 10 (22H2+) and Windows 11 include it by default. On older systems, "
-            "install the 'WebView2 Runtime' from Microsoft and reopen MindEd AA-OS.",
-            exc=exc,
-        )
+        if state["server"] is not None:
+            state["server"].should_exit = True
+        _show_fatal_error(_FATAL_WINDOW_MSG, exc=exc)
         sys.exit(1)
 
-    server.should_exit = True
-    server_thread.join(timeout=5)
+    if state["server"] is not None:
+        state["server"].should_exit = True
+    if state["thread"] is not None:
+        state["thread"].join(timeout=5)
     _log("MindEd AA-OS exited cleanly.")
 
 

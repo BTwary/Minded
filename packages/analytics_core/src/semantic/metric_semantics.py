@@ -42,6 +42,7 @@ import re
 import pandas as pd
 
 from packages.schemas.src.analysis import AggregationType
+from packages.analytics_core.src.relational.expressions import quote_sql_identifier
 
 # Column-name tokens that mark a metric as non-additive (a ratio/rate/percentage
 # that must never be summed across rows or groups).
@@ -148,6 +149,10 @@ class MetricDefinition:
             return f"'{self.name}' was aggregated as COUNT(DISTINCT) because it identifies discrete entities, not a summable quantity."
         if agg == AggregationType.COUNT:
             return f"'{self.name}' was aggregated as COUNT because it represents an occurrence count, not a summable magnitude."
+        if agg == AggregationType.MIN:
+            return f"'{self.name}' was aggregated as MIN to observe the minimum value across records."
+        if agg == AggregationType.MAX:
+            return f"'{self.name}' was aggregated as MAX to observe the maximum value across records."
         if agg in (AggregationType.RATE, AggregationType.RATIO, AggregationType.PROPORTION):
             if self.numerator_column and self.denominator_column:
                 return (
@@ -542,32 +547,56 @@ class MetricSemanticsResolver:
         )
 
     @staticmethod
-    def sql_aggregation_expression(metric_def: MetricDefinition, alias: str = "total_metric") -> str:
-        """Build the correct SQL aggregation expression for this metric's semantics."""
+    def sql_aggregation_expression(
+        metric_def: MetricDefinition,
+        alias: str = "total_metric",
+    ) -> str:
+        """Build a SQL aggregation expression with safely quoted identifiers."""
         agg = metric_def.aggregation_type
-        col = metric_def.column
+        col = quote_sql_identifier(metric_def.column, field="metric column")
+        alias_sql = quote_sql_identifier(alias, field="SQL alias")
+
         if agg == AggregationType.SUM:
-            return f"SUM({col}) AS {alias}"
-        if agg == AggregationType.MEAN:
-            return f"AVG({col}) AS {alias}"
-        if agg == AggregationType.COUNT:
-            return f"COUNT({col}) AS {alias}"
-        if agg == AggregationType.COUNT_DISTINCT:
-            return f"COUNT(DISTINCT {col}) AS {alias}"
-        if agg in (AggregationType.RATE, AggregationType.RATIO, AggregationType.PROPORTION):
+            expr = f"SUM({col})"
+        elif agg == AggregationType.MEAN:
+            expr = f"AVG({col})"
+        elif agg == AggregationType.COUNT:
+            expr = "COUNT(*)"
+        elif agg == AggregationType.COUNT_DISTINCT:
+            expr = f"COUNT(DISTINCT {col})"
+        elif agg == AggregationType.MIN:
+            expr = f"MIN({col})"
+        elif agg == AggregationType.MAX:
+            expr = f"MAX({col})"
+        elif agg in (
+            AggregationType.RATE,
+            AggregationType.RATIO,
+            AggregationType.PROPORTION,
+        ):
             if metric_def.numerator_column and metric_def.denominator_column:
-                return (
-                    f"SUM({metric_def.numerator_column}) / NULLIF(SUM({metric_def.denominator_column}), 0) AS {alias}"
+                numerator = quote_sql_identifier(
+                    metric_def.numerator_column, field="numerator column"
                 )
+                denominator = quote_sql_identifier(
+                    metric_def.denominator_column, field="denominator column"
+                )
+                expr = f"SUM({numerator}) / NULLIF(SUM({denominator}), 0)"
+            elif metric_def.weight_column:
+                weight = quote_sql_identifier(
+                    metric_def.weight_column, field="weight column"
+                )
+                expr = f"SUM({col} * {weight}) / NULLIF(SUM({weight}), 0)"
+            else:
+                expr = f"AVG({col})"
+        elif agg == AggregationType.WEIGHTED_MEAN:
             if metric_def.weight_column:
-                return (
-                    f"SUM({col} * {metric_def.weight_column}) / NULLIF(SUM({metric_def.weight_column}), 0) AS {alias}"
+                weight = quote_sql_identifier(
+                    metric_def.weight_column, field="weight column"
                 )
-            return f"AVG({col}) AS {alias}"
-        if agg == AggregationType.WEIGHTED_MEAN:
-            if metric_def.weight_column:
-                return (
-                    f"SUM({col} * {metric_def.weight_column}) / NULLIF(SUM({metric_def.weight_column}), 0) AS {alias}"
-                )
-            return f"AVG({col}) AS {alias}"
-        return f"SUM({col}) AS {alias}"
+                expr = f"SUM({col} * {weight}) / NULLIF(SUM({weight}), 0)"
+            else:
+                expr = f"AVG({col})"
+        else:
+            expr = f"SUM({col})"
+
+        return f"{expr} AS {alias_sql}"

@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Vignette -->
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="60%">
+      <stop offset="0%" stop-color="#0b0e17" />
+      <stop offset="70%" stop-color="#05070c" />
+      <stop offset="100%" stop-color="#020306" />
+    </radialGradient>
+
+    <!-- Cyan to Magenta Primary Ribbon Gradient -->
+    <linearGradient id="neonM" x1="15%" y1="70%" x2="85%" y2="70%">
+      <stop offset="0%" stop-color="#00D2FF" />
+      <stop offset="25%" stop-color="#00B4D8" />
+      <stop offset="50%" stop-color="#3A86FF" />
+      <stop offset="75%" stop-color="#8338EC" />
+      <stop offset="100%" stop-color="#D946EF" />
+    </linearGradient>
+
+    <!-- Outer Left Arch: Deep Cyan to Vivid Azure -->
+    <linearGradient id="cyanArch" x1="20%" y1="80%" x2="45%" y2="20%">
+      <stop offset="0%" stop-color="#00E5FF" />
+      <stop offset="50%" stop-color="#00B4FF" />
+      <stop offset="100%" stop-color="#0077FF" />
+    </linearGradient>
+
+    <!-- Outer Right Arch: Electric Indigo to Fuchsia -->
+    <linearGradient id="magentaArch" x1="55%" y1="20%" x2="80%" y2="80%">
+      <stop offset="0%" stop-color="#6366F1" />
+      <stop offset="50%" stop-color="#A855F7" />
+      <stop offset="100%" stop-color="#EC4899" />
+    </linearGradient>
+
+    <!-- Front Crossing Stroke: Cyan into Violet -->
+    <linearGradient id="crossLeft" x1="30%" y1="25%" x2="70%" y2="75%">
+      <stop offset="0%" stop-color="#00F0FF" />
+      <stop offset="45%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#C084FC" />
+    </linearGradient>
+
+    <!-- Ambient Neon Blur Filter -->
+    <filter id="neonGlow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="16" result="blur1" />
+      <feGaussianBlur stdDeviation="32" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- Soft Ambient Halo -->
+    <filter id="ambientHalo" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="28" />
+    </filter>
+  </defs>
+
+  <!-- Background Base -->
+  <rect width="512" height="512" rx="104" fill="url(#bgGlow)" />
+
+  <!-- Ambient Glow Behind Ribbon -->
+  <g filter="url(#ambientHalo)" opacity="0.45">
+    <path
+      d="M 96 340 C 130 180 160 140 200 150 C 235 160 300 290 330 350"
+      fill="none"
+      stroke="#00E5FF"
+      stroke-width="48"
+      stroke-linecap="round"
+    />
+    <path
+      d="M 416 340 C 382 180 352 140 312 150 C 277 160 212 290 182 350"
+      fill="none"
+      stroke="#D946EF"
+      stroke-width="48"
+      stroke-linecap="round"
+    />
+  </g>
+
+  <!-- The Sculpted Ribbon M (High Fidelity Tubular Neon) -->
+  <g filter="url(#neonGlow)">
+    <!-- Inner Cross Arm Behind (Right-to-Left lower sweep) -->
+    <path
+      d="M 188 210 Q 235 300 256 312 Q 285 290 336 210"
+      fill="none"
+      stroke="#00C8FF"
+      stroke-width="26"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      opacity="0.9"
+    />
+
+    <!-- Left Arch & Descending Crossing Strand -->
+    <path
+      d="M 86 344 C 118 190 152 142 196 150 C 236 158 296 280 336 348"
+      fill="none"
+      stroke="url(#crossLeft)"
+      stroke-width="32"
+      stroke-linecap="round"
+    />
+
+    <!-- Right Arch & Descending Crossing Strand -->
+    <path
+      d="M 426 344 C 394 190 360 142 316 150 C 276 158 216 280 176 348"
+      fill="none"
+      stroke="url(#magentaArch)"
+      stroke-width="32"
+      stroke-linecap="round"
+    />
+
+    <!-- Inner Floating Accent Loop / Cross Ties -->
+    <path
+      d="M 184 212 Q 220 300 256 304 Q 292 300 328 212"
+      fill="none"
+      stroke="#00F0FF"
+      stroke-width="20"
+      stroke-linecap="round"
+    />
+
+    <!-- Terminal Sphere Pedestals -->
+    <circle cx="178" cy="350" r="22" fill="#00E5FF" />
+    <circle cx="178" cy="350" r="14" fill="#E0F7FF" opacity="0.9" />
+
+    <circle cx="334" cy="350" r="22" fill="#E056FD" />
+    <circle cx="334" cy="350" r="14" fill="#FCE7FE" opacity="0.9" />
+  </g>
+
+  <!-- Specular Core Highlights -->
+  <g opacity="0.85">
+    <path
+      d="M 98 320 C 124 200 154 156 190 156"
+      fill="none"
+      stroke="#FFFFFF"
+      stroke-width="7"
+      stroke-linecap="round"
+      opacity="0.6"
+    />
+    <path
+      d="M 414 320 C 388 200 358 156 322 156"
+      fill="none"
+      stroke="#FFFFFF"
+      stroke-width="7"
+      stroke-linecap="round"
+      opacity="0.6"
+    />
+  </g>
+</svg>

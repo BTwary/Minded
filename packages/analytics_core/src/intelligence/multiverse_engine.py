@@ -48,7 +48,13 @@ class MultiverseEngine:
         df: pd.DataFrame,
         dimension_col: str,
         target_metric_col: str,
+        aggregations: Optional[List[str]] = None,
     ) -> MultiverseRobustnessReport:
+        """``aggregations`` pins the estimand. When the question asks for a TOTAL, only SUM
+        variants answer the same question: MEAN/MEDIAN of per-row values answer a different
+        one (e.g. West leads on total revenue via volume while East leads per order), so
+        crossing aggregations flagged a spurious "fragile" finding. Callers that know the
+        requested aggregation pass it here; the default keeps the full legacy grid."""
         if dimension_col not in df.columns or target_metric_col not in df.columns or df.empty:
             return MultiverseRobustnessReport(
                 total_specifications=0,
@@ -116,7 +122,9 @@ class MultiverseEngine:
             return best_group, float(best_dev)
 
         # Baseline: Raw data, SUM aggregation
-        baseline_values = df.groupby(dimension_col)[target_metric_col].sum()
+        pinned = [a.upper() for a in (aggregations or []) if str(a).upper() in ("SUM", "MEAN", "MEDIAN")]
+        baseline_agg = pinned[0] if pinned else "SUM"
+        baseline_values = df.groupby(dimension_col)[target_metric_col].agg(baseline_agg.lower())
         baseline_group, baseline_dev = _extreme_group_effect(baseline_values)
 
         if baseline_group is None:
@@ -136,7 +144,7 @@ class MultiverseEngine:
 
         # Grid of defensible analytical specifications
         trimmings = [("NONE", 0.0), ("1PCT_TRIM", 0.01), ("5PCT_TRIM", 0.05)]
-        aggregations = ["SUM", "MEAN", "MEDIAN"]
+        grid_aggregations = pinned or ["SUM", "MEAN", "MEDIAN"]
 
         for trim_name, trim_q in trimmings:
             if trim_q > 0.0:
@@ -149,7 +157,7 @@ class MultiverseEngine:
             if sub_df.empty:
                 continue
 
-            for agg in aggregations:
+            for agg in grid_aggregations:
                 spec_name = f"Spec_{trim_name}_{agg}"
                 if agg == "SUM":
                     grouped = sub_df.groupby(dimension_col)[target_metric_col].sum()
@@ -158,7 +166,15 @@ class MultiverseEngine:
                 else:
                     grouped = sub_df.groupby(dimension_col)[target_metric_col].median()
 
-                spec_group, spec_dev = _extreme_group_effect(grouped)
+                # Track the SAME side the baseline finding sits on. A finding "West is the
+                # top group" is robust if West stays on top; it must not be declared
+                # fragile just because a different group (e.g. the lowest) becomes the
+                # largest absolute deviation once outliers are trimmed.
+                if grouped.shape[0] < 2:
+                    spec_group, spec_dev = None, 0.0
+                else:
+                    spec_group = grouped.idxmax() if base_dir_positive else grouped.idxmin()
+                    spec_dev = float(grouped[spec_group] - grouped.drop(spec_group).mean())
                 is_concordant = (
                     spec_group is not None
                     and spec_group == baseline_group

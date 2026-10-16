@@ -132,6 +132,7 @@ class DatasetVersion(Base):
     # Content-addressed identity of the canonical logical dataset snapshot.
     # Unlike legacy fingerprints based on IDs/shape, this hashes schema + all cells.
     content_hash = Column(String(64), nullable=True, index=True)
+    profile_json = Column(JSON, nullable=True)
     transformation_applied = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=utc_now)
 
@@ -943,6 +944,8 @@ class AlertRule(Base):
     auto_investigate = Column(Boolean, default=True)
     is_active = Column(Boolean, default=True)
     last_evaluated_at = Column(DateTime, nullable=True)
+    last_evaluation_status = Column(String(50), nullable=True)
+    last_evaluation_trigger = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=utc_now)
 
 
@@ -951,6 +954,14 @@ class AlertEvent(Base):
     id = Column(String(36), primary_key=True, default=gen_uuid)
     project_id = Column(String(36), nullable=False, index=True)
     rule_id = Column(String(36), ForeignKey("alert_rules.id"), nullable=False)
+    event_identity = Column(String(64), nullable=True, unique=True, index=True)
+    dataset_id = Column(String(36), nullable=True, index=True)
+    dataset_version = Column(Integer, nullable=True)
+    dataset_version_id = Column(String(36), nullable=True)
+    dataset_fingerprint = Column(String(64), nullable=True)
+    metric_name = Column(String(255), nullable=True)
+    baseline_period = Column(String(100), nullable=True)
+    comparison_period = Column(String(100), nullable=True)
     title = Column(String(255), nullable=False)
     severity = Column(String(50), default="high")
     description = Column(Text, nullable=False)
@@ -961,6 +972,9 @@ class AlertEvent(Base):
     investigation_analysis_id = Column(String(64), nullable=True)
     evidence_summary = Column(Text, nullable=True)
     is_resolved = Column(Boolean, default=False)
+    lifecycle_status = Column(String(50), nullable=True)
+    acknowledged_at = Column(DateTime, nullable=True)
+    snoozed_until = Column(DateTime, nullable=True)
     triggered_at = Column(DateTime, default=utc_now)
 
 

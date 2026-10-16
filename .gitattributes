@@ -1,0 +1,3 @@
+# Certification datasets are SHA-256 pinned; never let git/editors rewrite line endings.
+data/certification/*.csv -text
+data/certification/checksums.sha256 -text

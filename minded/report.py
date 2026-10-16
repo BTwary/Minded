@@ -51,6 +51,26 @@ def render_markdown(
             lines.append(f"- {s}")
         lines.append("")
 
+    gate = data.get("claim_gate") or {}
+    if isinstance(gate, dict) and gate.get("outcome"):
+        outcome = _enum_val(gate.get("outcome"))
+        lines.extend(["## Claim status", ""])
+        lines.append(f"- Gate outcome: {outcome}")
+        if gate.get("reason"):
+            lines.append(f"- Why: {gate['reason']}")
+        if gate.get("allowed_claim"):
+            lines.append(f"- What can be claimed: {gate['allowed_claim']}")
+        if outcome != "ANSWER" and gate.get("blocked_claim"):
+            lines.append(f"- What cannot be claimed: {gate['blocked_claim']}")
+        _dq = (gate.get("computed_evidence") or {}).get("data_quality_downstream_decision") or {}
+        for fid in _dq.get("resolved_findings") or []:
+            lines.append(f"- Data-quality review cleared: {fid}")
+        for label, key in (("Assumptions", "assumptions"), ("Blocking conditions", "blocking_conditions"),
+                           ("Missing evidence", "missing_evidence"), ("To resolve", "recovery_actions")):
+            for item in gate.get(key) or []:
+                lines.append(f"- {label}: {item}")
+        lines.append("")
+
     hyps = data.get("hypotheses") or []
     if hyps:
         lines.extend(["## Hypotheses", ""])
@@ -77,6 +97,14 @@ def render_markdown(
         for e in evidence[:20]:
             stmt = e.get("statement") if isinstance(e, dict) else getattr(e, "statement", "")
             lines.append(f"- {stmt}")
+        lines.append("")
+
+    explanation = data.get("explanation") or {}
+    limitations = explanation.get("limitations") if isinstance(explanation, dict) else None
+    if limitations:
+        lines.extend(["## Limitations", ""])
+        for item in limitations:
+            lines.append(f"- {item}")
         lines.append("")
 
     bullets = data.get("executive_bullets") or []

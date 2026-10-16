@@ -1,0 +1,1098 @@
+﻿
+  packages\analytics_core\src\engines\analyst_answer.py:320:_TOTAL_RE = re.compile(r"\b(total|sum|overall|combined|revenue|sales|in total)\b", re.I)
+  packages\analytics_core\src\engines\analyst_answer.py:321:_COUNT_RE = re.compile(r"\b(how many|count|number of)\b", re.I)
+  packages\analytics_core\src\engines\analyst_answer.py:322:_BREAKDOWN_RE = re.compile(
+> packages\analytics_core\src\engines\analyst_answer.py:323:    r"\b(breakdown|break down|break-down|distribution|share|shares|split|composition|pareto|where does .* come from|how is .* 
+distributed|proportion of)\b",
+  packages\analytics_core\src\engines\analyst_answer.py:324:    re.I,
+  packages\analytics_core\src\engines\analyst_answer.py:325:)
+  packages\analytics_core\src\engines\analyst_answer.py:326:
+  packages\analytics_core\src\engines\analyst_answer.py:327:# DEFECT-037 (from external research spec review): every prior recency-phrase defect
+  packages\analytics_core\src\engines\analyst_answer.py:328:# (031/033/034/035/036) shared one root shape -- the question clearly named *some* time
+  packages\analytics_core\src\engines\analyst_answer.py:329:# window, `parse_period` didn't recognise the specific phrasing, and the question then
+  packages\analytics_core\src\engines\analyst_answer.py:330:# silently fell through to a plain RANKING/aggregate answer that never mentions the time
+  packages\analytics_core\src\engines\analyst_answer.py:331:# window at all, indistinguishable from an unrelated question. Each fix so far has closed
+  packages\analytics_core\src\engines\analyst_answer.py:332:# one more phrasing, but the phrase space is unbounded (typos, regional wording, phrasings
+  packages\analytics_core\src\engines\analyst_answer.py:642:        if any(tok in t_low for tok in ("rate", "price", "ratio", "pct", "percent", "margin", "score", "rating", "duration", "latency", 
+"age", "discount", "aov", "mpg", "efficiency", "orbital", "mass", "weight", "horsepower", "carat", "bill_length", "flipper_length")):
+  packages\analytics_core\src\engines\analyst_answer.py:643:            return "mean"
+  packages\analytics_core\src\engines\analyst_answer.py:644:    d = (default_agg or "").lower()
+> packages\analytics_core\src\engines\analyst_answer.py:645:    if d in ("mean", "avg", "average", "rate", "ratio", "proportion"):
+  packages\analytics_core\src\engines\analyst_answer.py:646:        return "mean"
+  packages\analytics_core\src\engines\analyst_answer.py:647:    if d in ("sum", "total"):
+  packages\analytics_core\src\engines\analyst_answer.py:648:        return "sum"
+  packages\analytics_core\src\engines\analyst_answer.py:649:    if d == "count":
+  packages\analytics_core\src\engines\analyst_answer.py:650:        return "count"
+  packages\analytics_core\src\engines\analyst_answer.py:651:    if re.search(r"\b(grown|grown\s+over\s+time|increased\s+over\s+time)\b", ql):
+  packages\analytics_core\src\engines\analyst_answer.py:652:        return "sum"
+  packages\analytics_core\src\engines\analyst_answer.py:653:    return "sum"
+  packages\analytics_core\src\engines\analyst_answer.py:654:
+  packages\analytics_core\src\engines\analyst_answer.py:1790:    return max(0.0, min(1.0, power))
+  packages\analytics_core\src\engines\analyst_answer.py:1791:
+  packages\analytics_core\src\engines\analyst_answer.py:1792:
+> packages\analytics_core\src\engines\analyst_answer.py:1793:def _power_two_proportions(n1: int, n2: int, h_mde: float = 0.35, alpha: float = ALPHA) -> float:
+> packages\analytics_core\src\engines\analyst_answer.py:1794:    """Calculate statistical power for two proportions comparison (Cohen's h effect size)."""
+  packages\analytics_core\src\engines\analyst_answer.py:1795:    if n1 <= 1 or n2 <= 1:
+  packages\analytics_core\src\engines\analyst_answer.py:1796:        return 0.0
+  packages\analytics_core\src\engines\analyst_answer.py:1797:    n_harm = (2.0 * n1 * n2) / (n1 + n2)
+  packages\analytics_core\src\engines\analyst_answer.py:1798:    delta = h_mde * math.sqrt(n_harm / 2.0)
+  packages\analytics_core\src\engines\analyst_answer.py:1799:    z_crit = 1.96 if alpha == 0.05 else float(sps.norm.ppf(1.0 - alpha / 2.0))
+  packages\analytics_core\src\engines\analyst_answer.py:1800:    power = float(1.0 - sps.norm.cdf(z_crit - delta) + sps.norm.cdf(-z_crit - delta))
+  packages\analytics_core\src\engines\analyst_answer.py:1801:    return max(0.0, min(1.0, power))
+  packages\analytics_core\src\engines\analyst_answer.py:1802:
+  packages\analytics_core\src\engines\analyst_answer.py:1803:
+  packages\analytics_core\src\engines\analyst_answer.py:1960:    if len(levels) == 2 or len(_mentioned_levels(q, levels)) >= 2:
+  packages\analytics_core\src\engines\analyst_answer.py:1961:        w = _welch(a, b)
+  packages\analytics_core\src\engines\analyst_answer.py:1962:        try:
+> packages\analytics_core\src\engines\analyst_answer.py:1963:            mw_p = float(sps.mannwhitneyu(a, b, alternative="two-sided").pvalue)
+  packages\analytics_core\src\engines\analyst_answer.py:1964:        except Exception:
+  packages\analytics_core\src\engines\analyst_answer.py:1965:            mw_p = float("nan")
+  packages\analytics_core\src\engines\analyst_answer.py:1966:        sig = w["lo"] > 0 or w["hi"] < 0
+  packages\analytics_core\src\engines\analyst_answer.py:1967:        higher_q, lower_q = bool(_HIGHER_RE.search(q)), bool(_LOWER_RE.search(q))
+  packages\analytics_core\src\engines\analyst_answer.py:1968:        direction = "higher" if w["diff"] > 0 else "lower"
+  packages\analytics_core\src\engines\analyst_answer.py:1969:        if sig:
+  packages\analytics_core\src\engines\analyst_answer.py:1970:            finding = "positive" if w["diff"] > 0 else "negative"
+  packages\analytics_core\src\engines\analyst_answer.py:1971:            opener = ""
+  packages\analytics_core\src\engines\analyst_answer.py:1972:            if higher_q and not lower_q:
+  packages\analytics_core\src\engines\analyst_answer.py:1984:        calc_power = _power_two_means(len(a), len(b), d_mde=0.5)
+  packages\analytics_core\src\engines\analyst_answer.py:1985:        is_powered = calc_power >= 0.80 and min(len(a), len(b)) >= 10
+  packages\analytics_core\src\engines\analyst_answer.py:1986:        numbers.update({"subject": str(subj), "reference": str(ref), "diff": w["diff"], "ci_low": w["lo"], "ci_high": w["hi"],
+> packages\analytics_core\src\engines\analyst_answer.py:1987:                        "p_value": w["p"], "cohens_d": w["d"], "mannwhitney_p": mw_p,
+  packages\analytics_core\src\engines\analyst_answer.py:1988:                        "power": round(float(calc_power), 3), "adequate_power": is_powered,
+  packages\analytics_core\src\engines\analyst_answer.py:1989:                        "equivalence_bound": float(max(abs(w["lo"]), abs(w["hi"])))})
+  packages\analytics_core\src\engines\analyst_answer.py:1990:        if not sig:
+  packages\analytics_core\src\engines\analyst_answer.py:1991:            details.append(f"The interval bounds what the data can rule out: a true difference larger than about {_num(max(abs(w['lo']), 
+abs(w['hi'])))} is unlikely.")
+  packages\analytics_core\src\engines\analyst_answer.py:1992:            if is_powered:
+  packages\analytics_core\src\engines\analyst_answer.py:1993:                details.append(f"Statistical power is sufficient ({_pct(calc_power, 0)} power at MDE d=0.5; n={len(a):,} vs {len(b):,}) to 
+conclude that any true difference is bounded within the 95% confidence interval.")
+  packages\analytics_core\src\engines\analyst_answer.py:1994:
+  packages\analytics_core\src\engines\analyst_answer.py:1995:        # Distribution skewness check
+  packages\analytics_core\src\engines\analyst_answer.py:1996:        if len(a) >= 20 and float(np.median(a)) > 0:
+  packages\analytics_core\src\engines\analyst_answer.py:2040:        # Principal Data Analyst Intelligence Enrichments:
+  packages\analytics_core\src\engines\analyst_answer.py:2041:        if len(a) > 0 and len(b) > 0:
+  packages\analytics_core\src\engines\analyst_answer.py:2042:            try:
+> packages\analytics_core\src\engines\analyst_answer.py:2043:                u_val = float(sps.mannwhitneyu(a, b, alternative="greater").statistic) if not math.isnan(mw_p) else 0.0
+  packages\analytics_core\src\engines\analyst_answer.py:2044:                cles = u_val / (len(a) * len(b)) if len(a) * len(b) > 0 else 0.5
+  packages\analytics_core\src\engines\analyst_answer.py:2045:                numbers["common_language_effect_size"] = round(cles, 3)
+  packages\analytics_core\src\engines\analyst_answer.py:2046:                if abs(cles - 0.5) >= 0.08:
+  packages\analytics_core\src\engines\analyst_answer.py:2047:                    details.append(f"Common Language Effect Size (probability that a random {subj} exceeds a random {ref}): {_pct(cles, 
+0)}.")
+  packages\analytics_core\src\engines\analyst_answer.py:2048:            except Exception:
+  packages\analytics_core\src\engines\analyst_answer.py:2049:                pass
+  packages\analytics_core\src\engines\analyst_answer.py:2050:
+  packages\analytics_core\src\engines\analyst_answer.py:2051:        prof_a = _distribution_profile(pd.Series(a))
+  packages\analytics_core\src\engines\analyst_answer.py:2052:        prof_b = _distribution_profile(pd.Series(b))
+  packages\analytics_core\src\engines\analyst_answer.py:2201:            headline = (f"{opener}no statistically detectable difference in {target} rate between {subj} ({_pct(r1)}, n={n1:,}) and {ref} 
+({_pct(r2)}, n={n2:,}): "
+  packages\analytics_core\src\engines\analyst_answer.py:2202:                        f"{_signed(diff * 100)} pp (95% CI {_signed(lo * 100)} to {_signed(hi * 100)} pp, {test} {_p(p)}).")
+  packages\analytics_core\src\engines\analyst_answer.py:2203:            details = [f"The interval bounds what the data can rule out: a true gap larger than about {_num(max(abs(lo), abs(hi)) * 100)} 
+percentage points is unlikely at this sample size."]
+> packages\analytics_core\src\engines\analyst_answer.py:2204:        calc_power = _power_two_proportions(n1, n2, h_mde=0.35)
+  packages\analytics_core\src\engines\analyst_answer.py:2205:        is_powered = calc_power >= 0.80 and min(n1, n2) >= 15
+  packages\analytics_core\src\engines\analyst_answer.py:2206:        numbers.update({"subject": str(subj), "reference": str(ref), "rate_diff": diff, "ci_low": lo, "ci_high": hi, "p_value": p, "test": 
+test,
+  packages\analytics_core\src\engines\analyst_answer.py:2207:                        "relative_uplift_pct": float(rel * 100) if rel == rel else None,
+  packages\analytics_core\src\engines\analyst_answer.py:2208:                        "power": round(float(calc_power), 3), "adequate_power": is_powered,
+  packages\analytics_core\src\engines\analyst_answer.py:2209:                        "equivalence_bound_pp": float(max(abs(lo), abs(hi)) * 100)})
+  packages\analytics_core\src\engines\analyst_answer.py:2210:        if not sig and is_powered:
+  packages\analytics_core\src\engines\analyst_answer.py:2211:            details.append(f"Statistical power is sufficient (n={n1:,} vs {n2:,}) to conclude that any true rate difference is bounded 
+within {_num(max(abs(lo), abs(hi)) * 100)} percentage points.")
+  packages\analytics_core\src\engines\analyst_answer.py:2212:        if x1 + x2 < 10:
+  packages\analytics_core\src\engines\analyst_answer.py:2213:            caveats.append(f"Only {x1 + x2} total events -- the estimate is unstable.")
+  packages\analytics_core\src\engines\analyst_answer.py:2391:            best_pred, (best_r, best_p, best_n) = sorted_preds[0]
+  packages\analytics_core\src\engines\analyst_answer.py:2392:            runner_pred, (run_r, run_p, run_n) = sorted_preds[1]
+  packages\analytics_core\src\engines\analyst_answer.py:2393:            headline = f"{best_pred} is more strongly related to {target} (|r|={abs(best_r):.2f}, R2={best_r**2:.2f}) than {runner_pred} 
+(|r|={abs(run_r):.2f}, R2={run_r**2:.2f})."
+> packages\analytics_core\src\engines\analyst_answer.py:2394:            details = [f"Both variables have a statistically significant relationship with {target} ({best_pred}: r={best_r:.2f}, 
+{runner_pred}: r={run_r:.2f}), but {best_pred} explains a higher proportion of variance ({best_r**2:.1%} vs {run_r**2:.1%})."]
+  packages\analytics_core\src\engines\analyst_answer.py:2395:            numbers = {
+  packages\analytics_core\src\engines\analyst_answer.py:2396:                "correlations": {k: v[0] for k, v in results_by_pred.items()},
+  packages\analytics_core\src\engines\analyst_answer.py:2397:                "strongest_predictor": best_pred,
+  packages\analytics_core\src\engines\analyst_answer.py:2398:                "pearson_r": best_r,
+  packages\analytics_core\src\engines\analyst_answer.py:2399:                "pearson_p": best_p,
+  packages\analytics_core\src\engines\analyst_answer.py:2400:                "adequate_power": True,
+  packages\analytics_core\src\engines\analyst_answer.py:2401:                "robust": True,
+  packages\analytics_core\src\engines\analyst_answer.py:2402:            }
+  packages\analytics_core\src\engines\analyst_answer.py:2403:            return AnalystResult("ASSOCIATION", headline, details, [], numbers, finding="positive" if best_r > 0 else "negative", 
+descriptive=True)
+  packages\analytics_core\src\engines\analyst_answer.py:3196:# measure word AND a group cue, and ANY comparative/causal/ranking/temporal/predictive cue
+  packages\analytics_core\src\engines\analyst_answer.py:3197:# disqualifies it, leaving those questions with the specialist loop exactly as before.
+  packages\analytics_core\src\engines\analyst_answer.py:3198:_BREAKDOWN_MEASURE_RE = re.compile(
+> packages\analytics_core\src\engines\analyst_answer.py:3199:    r"\b(rate|average|avg|mean|median|total|count|number|share|percentage|proportion|distribution)\b", re.I)
+  packages\analytics_core\src\engines\analyst_answer.py:3200:_BREAKDOWN_GROUP_RE = re.compile(
+  packages\analytics_core\src\engines\analyst_answer.py:3201:    r"\b(by|per|for each|across|broken down by|split by|grouped by|segmented by)\b", re.I)
+  packages\analytics_core\src\engines\analyst_answer.py:3202:_BREAKDOWN_DISQUALIFY_RE = re.compile(
+  packages\analytics_core\src\engines\analyst_answer.py:3203:    r"\b(why|because|cause[sd]?|causing|driv\w*|reasons?|explain\w*|confound\w*|correlat\w*|"
+  packages\analytics_core\src\engines\analyst_answer.py:3204:    r"relationship|associat\w*|effect|impact\w*|higher|lower|highest|lowest|higher|increas\w*|"
+  packages\analytics_core\src\engines\analyst_answer.py:3205:    r"decreas\w*|trend\w*|chang\w*|predict\w*|likel\w*|compar\w*|differ\w*|vs|versus|"
+  packages\analytics_core\src\engines\analyst_answer.py:3206:    r"which|who|top|bottom|best|worst|most|least|risk\w*|spik\w*|drop\w*|fell|fall\w*|rose|"
+  packages\analytics_core\src\engines\analyst_answer.py:3207:    r"grow\w*|declin\w*|since|last|this|previous|forecast\w*)\b", re.I)
+  packages\analytics_core\src\engines\analyst_answer.py:3208:
+  packages\analytics_core\src\engines\analyst_answer.py:3418:            numbers["share_of_total"] = {
+  packages\analytics_core\src\engines\analyst_answer.py:3419:                "denominator": total,
+  packages\analytics_core\src\engines\analyst_answer.py:3420:                "available": total not in (None, 0),
+> packages\analytics_core\src\engines\analyst_answer.py:3421:                "reason": None if total not in (None, 0) else "The grouped total is zero; proportions are undefined.",
+  packages\analytics_core\src\engines\analyst_answer.py:3422:            }
+  packages\analytics_core\src\engines\analyst_answer.py:3423:        total_for_pareto = sum(calculated.values())
+  packages\analytics_core\src\engines\analyst_answer.py:3424:        details = [f"Executed {operation} grouped by {group}."]
+  packages\analytics_core\src\engines\analyst_answer.py:3425:        val_series = pd.Series(list(calculated.values()))
+  packages\analytics_core\src\engines\analyst_answer.py:3426:        non_zero_vals = val_series[val_series > 0]
+  packages\analytics_core\src\engines\analyst_answer.py:3427:        is_degenerate = (
+  packages\analytics_core\src\engines\analyst_answer.py:3428:            len(non_zero_vals) == 0
+  packages\analytics_core\src\engines\analyst_answer.py:3429:            or non_zero_vals.nunique() <= 1
+  packages\analytics_core\src\engines\analyst_answer.py:3430:            or all(v in (0.0, 1.0) for v in val_series)
+  packages\analytics_core\src\engines\belief.py:49:    """Auditable evidence weight for one hypothesis.
+  packages\analytics_core\src\engines\belief.py:50:
+  packages\analytics_core\src\engines\belief.py:51:    `bayes_factor` is BF(hypothesis : reference_model). For several mutually
+> packages\analytics_core\src\engines\belief.py:52:    exclusive hypotheses, these factors are used as relative marginal likelihoods
+  packages\analytics_core\src\engines\belief.py:53:    against the same reference model; the supplied priors then produce posterior odds.
+  packages\analytics_core\src\engines\belief.py:54:    """
+  packages\analytics_core\src\engines\belief.py:55:
+  packages\analytics_core\src\engines\belief.py:56:    bayes_factor: float
+  packages\analytics_core\src\engines\belief.py:57:    method: str
+  packages\analytics_core\src\engines\belief.py:58:    sample_size: int
+  packages\analytics_core\src\engines\belief.py:59:    assumptions: Tuple[str, ...] = ()
+  packages\analytics_core\src\engines\belief.py:60:    diagnostic: Optional[str] = None
+  packages\analytics_core\src\engines\belief.py:61:
+  packages\analytics_core\src\engines\belief.py:75:    @staticmethod
+  packages\analytics_core\src\engines\belief.py:76:    def compute_bayesian_posteriors(
+  packages\analytics_core\src\engines\belief.py:77:        priors: List[float],
+> packages\analytics_core\src\engines\belief.py:78:        likelihoods: List[float],
+  packages\analytics_core\src\engines\belief.py:79:    ) -> Tuple[List[float], float]:
+  packages\analytics_core\src\engines\belief.py:80:        """Compute exact posterior probabilities.
+  packages\analytics_core\src\engines\belief.py:81:
+> packages\analytics_core\src\engines\belief.py:82:        The second argument may be likelihoods or Bayes-factor weights as long as
+  packages\analytics_core\src\engines\belief.py:83:        all weights are non-negative and refer to comparable evidence models.
+  packages\analytics_core\src\engines\belief.py:84:        """
+> packages\analytics_core\src\engines\belief.py:85:        if len(priors) != len(likelihoods) or not priors:
+> packages\analytics_core\src\engines\belief.py:86:            raise ValueError("priors and likelihoods must have the same non-zero length")
+  packages\analytics_core\src\engines\belief.py:87:        prior_values = np.asarray(priors, dtype=float)
+> packages\analytics_core\src\engines\belief.py:88:        evidence_values = np.asarray(likelihoods, dtype=float)
+  packages\analytics_core\src\engines\belief.py:89:        if np.any(~np.isfinite(prior_values)) or np.any(~np.isfinite(evidence_values)):
+> packages\analytics_core\src\engines\belief.py:90:            raise ValueError("priors and likelihoods must be finite")
+  packages\analytics_core\src\engines\belief.py:91:        if np.any(prior_values < 0.0) or np.any(evidence_values < 0.0):
+> packages\analytics_core\src\engines\belief.py:92:            raise ValueError("priors and likelihoods must be non-negative")
+  packages\analytics_core\src\engines\belief.py:93:        prior_total = float(prior_values.sum())
+  packages\analytics_core\src\engines\belief.py:94:        if prior_total <= 0.0:
+  packages\analytics_core\src\engines\belief.py:95:            raise ValueError("priors must contain positive mass")
+  packages\analytics_core\src\engines\belief.py:96:        prior_values /= prior_total
+  packages\analytics_core\src\engines\belief.py:97:
+  packages\analytics_core\src\engines\belief.py:98:        prior_ent = compute_shannon_entropy(prior_values.tolist())
+  packages\analytics_core\src\engines\belief.py:99:        unnormalized = prior_values * evidence_values
+  packages\analytics_core\src\engines\belief.py:100:        total = float(unnormalized.sum())
+  packages\analytics_core\src\engines\belief.py:101:        if total <= 1e-15 or not np.isfinite(total):
+  packages\analytics_core\src\engines\belief.py:119:        """Approximate BF10 for unequal-mean vs equal-mean Gaussian models via BIC.
+  packages\analytics_core\src\engines\belief.py:120:
+  packages\analytics_core\src\engines\belief.py:121:        This is a model-evidence approximation, not a p-value transformation. The
+> packages\analytics_core\src\engines\belief.py:122:        common variance model is used for the likelihood; BIC supplies the complexity
+  packages\analytics_core\src\engines\belief.py:123:        penalty for the extra group mean.
+  packages\analytics_core\src\engines\belief.py:124:        """
+  packages\analytics_core\src\engines\belief.py:125:        a = np.asarray(sample_a, dtype=float)
+  packages\analytics_core\src\engines\belief.py:126:        b = np.asarray(sample_b, dtype=float)
+  packages\analytics_core\src\engines\belief.py:127:        a = a[np.isfinite(a)]
+  packages\analytics_core\src\engines\belief.py:128:        b = b[np.isfinite(b)]
+  packages\analytics_core\src\engines\belief.py:129:        n = int(len(a) + len(b))
+  packages\analytics_core\src\engines\belief.py:130:        required_n = max(1, int(min_group_n))
+  packages\analytics_core\src\engines\belief.py:131:        if len(a) < required_n or len(b) < required_n:
+  packages\analytics_core\src\engines\belief.py:612:            return None
+  packages\analytics_core\src\engines\belief.py:613:
+  packages\analytics_core\src\engines\belief.py:614:    # Backward-compatible alias retained for older callers/tests. This method is now
+> packages\analytics_core\src\engines\belief.py:615:    # explicitly deprecated: eta-squared alone does not determine a likelihood model.
+  packages\analytics_core\src\engines\belief.py:616:    @staticmethod
+> packages\analytics_core\src\engines\belief.py:617:    def compute_evidence_likelihoods(
+  packages\analytics_core\src\engines\belief.py:618:        primary_metric: float,
+  packages\analytics_core\src\engines\belief.py:619:        benchmark_metric: float,
+  packages\analytics_core\src\engines\belief.py:620:        delta_pct: float = 0.0,
+  packages\analytics_core\src\engines\belief.py:621:        effect_size_eta_sq: Optional[float] = None,
+  packages\analytics_core\src\engines\belief.py:622:        spread_ratio: Optional[float] = None,
+  packages\analytics_core\src\engines\belief.py:623:        sample_size: Optional[int] = None,
+  packages\analytics_core\src\engines\belief.py:624:    ) -> Tuple[float, float]:
+  packages\analytics_core\src\engines\belief.py:625:        """Compatibility API; use model-based Bayes factors for live investigations.
+  packages\analytics_core\src\engines\belief.py:626:
+  packages\analytics_core\src\engines\belief.py:627:        When sample size is supplied, a BIC-based Gaussian model comparison is used
+  packages\analytics_core\src\engines\belief.py:628:        for a two-model effect/no-effect representation. Without sample size the method
+> packages\analytics_core\src\engines\belief.py:629:        refuses to manufacture a statistical likelihood and returns neutral evidence.
+  packages\analytics_core\src\engines\belief.py:630:        """
+  packages\analytics_core\src\engines\belief.py:631:        if sample_size is None or sample_size < 5:
+  packages\analytics_core\src\engines\belief.py:632:            return 1.0, 1.0
+  packages\analytics_core\src\engines\belief.py:633:        if effect_size_eta_sq is None or not np.isfinite(effect_size_eta_sq):
+  packages\analytics_core\src\engines\belief.py:634:            # Missing effect size is missing evidence, not evidence for no effect.
+  packages\analytics_core\src\engines\belief.py:635:            return 1.0, 1.0
+  packages\analytics_core\src\engines\belief.py:636:        n = int(sample_size)
+  packages\analytics_core\src\engines\belief.py:637:        effect = float(effect_size_eta_sq) / 100.0
+  packages\analytics_core\src\engines\belief.py:638:        effect = float(np.clip(effect, 0.0, 0.999999))
+  packages\analytics_core\src\engines\belief.py:644:        return float(bf), 1.0
+  packages\analytics_core\src\engines\belief.py:645:
+  packages\analytics_core\src\engines\belief.py:646:    compute_empirical_variance_explained = compute_variance_explained
+> packages\analytics_core\src\engines\belief.py:647:    compute_empirical_likelihoods = compute_evidence_likelihoods
+  packages\analytics_core\src\governance\verification_gate.py:10:HYPOTHESIS_VERDICTS = frozenset({
+  packages\analytics_core\src\governance\verification_gate.py:11:    "DIAGNOSED",
+  packages\analytics_core\src\governance\verification_gate.py:12:    "STATISTICALLY_SIGNIFICANT",
+> packages\analytics_core\src\governance\verification_gate.py:13:    "NO_DETECTABLE_EFFECT",
+  packages\analytics_core\src\governance\verification_gate.py:14:})
+  packages\analytics_core\src\governance\verification_gate.py:15:
+  packages\analytics_core\src\governance\verification_gate.py:16:
+> packages\analytics_core\src\governance\verification_gate.py:17:def has_current_verified_supporting_evidence(
+> packages\analytics_core\src\governance\verification_gate.py:18:    supporting_evidence_ids: Iterable[str] | None,
+  packages\analytics_core\src\governance\verification_gate.py:19:    *,
+  packages\analytics_core\src\governance\verification_gate.py:20:    evidence_validation_status_by_id: Mapping[str, object] | None,
+  packages\analytics_core\src\governance\verification_gate.py:21:    latest_verification_status_by_id: Mapping[str, object] | None,
+  packages\analytics_core\src\governance\verification_gate.py:22:) -> bool:
+  packages\analytics_core\src\governance\verification_gate.py:23:    """Return True only if at least one *supporting* item has current proof.
+  packages\analytics_core\src\governance\verification_gate.py:24:
+  packages\analytics_core\src\governance\verification_gate.py:25:    Contradictory evidence must never satisfy this condition. Both the evidence
+  packages\analytics_core\src\governance\verification_gate.py:26:    row's validation state and its latest independent verification record must
+  packages\analytics_core\src\governance\verification_gate.py:27:    be VERIFIED. A stale earlier VERIFIED record cannot override a newer FAIL.
+  packages\analytics_core\src\governance\verification_gate.py:28:    """
+> packages\analytics_core\src\governance\verification_gate.py:29:    evidence_ids = {str(value) for value in (supporting_evidence_ids or []) if value is not None}
+  packages\analytics_core\src\governance\verification_gate.py:30:    evidence_statuses = evidence_validation_status_by_id or {}
+  packages\analytics_core\src\governance\verification_gate.py:31:    verification_statuses = latest_verification_status_by_id or {}
+  packages\analytics_core\src\governance\verification_gate.py:32:    return any(
+  packages\analytics_core\src\governance\verification_gate.py:33:        str(evidence_statuses.get(evidence_id, "")).strip().upper() == "VERIFIED"
+  packages\analytics_core\src\governance\verification_gate.py:34:        and str(verification_statuses.get(evidence_id, "")).strip().upper() == "VERIFIED"
+  packages\analytics_core\src\governance\verification_gate.py:35:        for evidence_id in evidence_ids
+  packages\analytics_core\src\governance\verification_gate.py:36:    )
+  packages\analytics_core\src\governance\verification_gate.py:37:
+  packages\analytics_core\src\governance\verification_gate.py:38:
+> packages\analytics_core\src\governance\verification_gate.py:39:def verification_gate_reason(
+  packages\analytics_core\src\governance\verification_gate.py:40:    verdict_type: str,
+  packages\analytics_core\src\governance\verification_gate.py:41:    *,
+  packages\analytics_core\src\governance\verification_gate.py:42:    all_verifications_passed: bool,
+  packages\analytics_core\src\governance\verification_gate.py:43:    has_verified_evidence: bool,
+  packages\analytics_core\src\governance\verification_gate.py:44:) -> str | None:
+  packages\analytics_core\src\governance\verification_gate.py:45:    """Return a refusal reason unless a hypothesis verdict has verified support.
+  packages\analytics_core\src\governance\verification_gate.py:46:
+  packages\analytics_core\src\governance\verification_gate.py:47:    Use identity checks, not truthiness: values such as the string ``"false"``
+  packages\analytics_core\src\governance\verification_gate.py:48:    and integers are not valid proof that a verification gate passed.
+  packages\analytics_core\src\intelligence\evidence_patterns.py:53:    """Detects a single categorical value dominating observed variance (> 40% share).
+  packages\analytics_core\src\intelligence\evidence_patterns.py:54:
+  packages\analytics_core\src\intelligence\evidence_patterns.py:55:    Phase 11 Part 12: "share of total" is only a valid statement for an
+> packages\analytics_core\src\intelligence\evidence_patterns.py:56:    ADDITIVE metric (SUM). For a non-additive metric (rate/ratio/proportion/
+  packages\analytics_core\src\intelligence\evidence_patterns.py:57:    mean/weighted-mean), summing the column and reporting one row's fraction
+> packages\analytics_core\src\intelligence\evidence_patterns.py:58:    of that sum is meaningless (e.g. summing four segments' conversion rates
+  packages\analytics_core\src\intelligence\evidence_patterns.py:59:    has no business interpretation). When `is_additive=False`, this detector
+  packages\analytics_core\src\intelligence\evidence_patterns.py:60:    instead looks for a materially divergent value against the rest.
+  packages\analytics_core\src\intelligence\evidence_patterns.py:61:    """
+  packages\analytics_core\src\intelligence\evidence_patterns.py:62:    name = "concentration"
+  packages\analytics_core\src\intelligence\evidence_patterns.py:63:    CONCENTRATION_THRESHOLD = 0.40
+  packages\analytics_core\src\intelligence\evidence_patterns.py:64:    # For non-additive metrics: a value at least this many times the median
+  packages\analytics_core\src\intelligence\evidence_patterns.py:65:    # of the rest is considered a material divergence worth surfacing.
+  packages\analytics_core\src\intelligence\evidence_patterns.py:66:    DIVERGENCE_RATIO_THRESHOLD = 1.5
+  packages\analytics_core\src\intelligence\evidence_patterns.py:67:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:10:from packages.analytics_core.src.engines.semantic import SemanticResolution
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:11:from packages.analytics_core.src.intelligence.evidence_patterns import ACTIVE_DETECTORS, CandidateExplanation
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:12:from packages.analytics_core.src.semantic.metric_semantics import MetricDefinition, MetricSemanticsResolver
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:13:from packages.analytics_core.src.intelligence.likelihood_model import concentration_share_likelihoods, 
+anova_eta_squared_likelihoods
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:14:from packages.schemas.src.analysis import AggregationType
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:15:from packages.schemas.src.semantic_role import ExperimentRole
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:16:from packages.analytics_core.src.relational.plan_serialization import plan_to_dict
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:17:from packages.analytics_core.src.relational.expressions import quote_sql_identifier
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:18:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:19:# Named thresholds shared between hypothesis narrative text and the EIG
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:20:# likelihood model below, so the number a hypothesis claims and the number
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:21:# the experiment actually tests against can never silently drift apart.
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:22:CONCENTRATION_SHARE_THRESHOLD = 0.45
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:23:CONCENTRATION_EFFECT_IF_TRUE = 0.60
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:24:ISOLATION_SHARE_THRESHOLD = 0.50
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:25:ANOVA_ETA_SQUARED_THRESHOLD = 0.15
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:26:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:27:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:28:@dataclass
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:29:class UncertaintyState:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:59:    query_sql: str
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:60:    description: str
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:61:    aggregation_type: str  # SUM, AVG, VARIANCE, ANOVA, CORRELATION
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:62:    discriminating_power: float = 0.0  # legacy ranking hint only; never converted into scientific likelihoods
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:63:    likelihood_if_true: Optional[float] = None
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:64:    likelihood_if_false: Optional[float] = None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:65:    estimated_cost: float = 1.0        # 1.0 = standard
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:66:    reliability_weight: float = 0.95   # 0.0 .. 1.0
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:67:    decision_relevance: float = 1.0    # 0.0 .. 1.0
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:68:    target_dimension: Optional[str] = None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:69:    target_metric: Optional[str] = None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:70:    target_prediction_id: Optional[str] = None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:71:    prediction_ids: List[str] = field(default_factory=list)
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:72:    hypothesis_ids: List[str] = field(default_factory=list)
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:73:    target_uncertainty: Optional[str] = None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:186:            "description": self.description,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:187:            "aggregation_type": self.aggregation_type,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:188:            "discriminating_power": self.discriminating_power,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:189:            "likelihood_if_true": self.likelihood_if_true,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:190:            "likelihood_if_false": self.likelihood_if_false,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:191:            "estimated_cost": self.estimated_cost,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:192:            "reliability_weight": self.reliability_weight,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:193:            "decision_relevance": self.decision_relevance,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:194:            "target_dimension": self.target_dimension,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:195:            "target_metric": self.target_metric,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:196:            "target_prediction_id": self.target_prediction_id,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:197:            "prediction_ids": list(self.prediction_ids),
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:198:            "hypothesis_ids": list(self.hypothesis_ids),
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:199:            "target_uncertainty": self.target_uncertainty,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:402:        sample_stats (optional): {"row_count": int, "category_cardinalities": {dim: k}}
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:403:        computed by the caller from the actual primary_df. When supplied, it lets
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:404:        the concentration/isolation candidates below compute a real, data-dependent
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:405:        EIG likelihood instead of leaving it unavailable. Omitting it is always
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:406:        safe -- those candidates just fall back to EIG=0.0, exactly as before.
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:407:        """
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:408:        relational_candidates = ExperimentSynthesizer._synthesize_relational_experiments(hypotheses, semantic, 
+predictions_by_hyp, predictions_map)
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:409:        if relational_candidates:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:410:            return relational_candidates
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:411:        if decision is not None:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:412:            from packages.analytics_core.src.engines.method_selection import MethodFamily
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:413:            family = getattr(decision, "method_family", None)
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:414:            # C3.1: dispatch routing must key off the MethodFamily the
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:599:                iso_n_categories = None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:600:                if sample_stats:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:601:                    iso_n_categories = (sample_stats.get("category_cardinalities") or {}).get(h_dim)
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:602:                iso_likelihoods = None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:603:                if metric_def.is_additive and sample_stats:
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:604:                    iso_likelihoods = concentration_share_likelihoods(
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:605:                        n_rows=sample_stats.get("row_count") or 0,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:606:                        n_categories=iso_n_categories,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:607:                        share_threshold=ISOLATION_SHARE_THRESHOLD,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:608:                        effect_size_if_true=CONCENTRATION_EFFECT_IF_TRUE,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:609:                    )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:610:                target_val_escaped = str(target_val).replace("'", "''")
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:611:                candidates.append(
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:612:                    CandidateExperiment(
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:613:                        code=f"EXP-ISOLATE-{h.hypothesis_code}",
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:636:                        metrics=[metric],
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:637:                        dimensions=[h_dim],
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:638:                        expected_outcomes=[f"Total {metric} in segment '{target_val}' accounts for dominant share (> 
+{ISOLATION_SHARE_THRESHOLD:.0%})"],
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:639:                        likelihood_if_true=iso_likelihoods.likelihood_if_true if iso_likelihoods else None,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:640:                        likelihood_if_false=iso_likelihoods.likelihood_if_false if iso_likelihoods else None,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:641:                        provenance=({"eig_likelihood_basis": iso_likelihoods.basis} if iso_likelihoods else {}),
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:642:                    )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:643:                )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:644:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:645:            if not h.is_counter_hypothesis:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:646:                # 1. Primary Concentration & Volume Disparity Test
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:647:                #
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:648:                # Phase 11: "concentration" (share-of-total) is only a
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:649:                # scientifically meaningful framing for an ADDITIVE metric --
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:650:                # summing a rate/ratio/average across categories and reporting
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:653:                # discriminating value, but it must rank groups by the
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:654:                # correctly-aggregated value (mean/rate/ratio), not a SUM share.
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:655:                conc_code = "EXP-CONC" if idx == 0 else f"EXP-CONC-{h.hypothesis_code}"
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:656:                conc_likelihoods = None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:657:                if metric_def.is_additive:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:658:                    conc_sql = (
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:659:                        f"SELECT {h_dim}, {metric_agg_expr}, COUNT(*) AS n_rows FROM data_table GROUP BY {h_dim} ORDER BY 
+total_metric DESC"
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:660:                        if h_dim else
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:661:                        f"SELECT {metric_agg_expr}, COUNT(*) AS n_rows FROM data_table"
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:662:                    )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:663:                    conc_desc = (
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:664:                        f"Dimensional volume breakdown of {metric} ({metric_def.semantic_type}) across {h_dim} to evaluate 
+concentration for {h.hypothesis_code}."
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:665:                        if h_dim else f"Aggregate total and row count for {metric}."
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:667:                    conc_outcomes = [f"Top segment accounts for >= {CONCENTRATION_SHARE_THRESHOLD:.0%} of total variance"]
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:668:                    if sample_stats and h_dim:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:669:                        conc_n_categories = (sample_stats.get("category_cardinalities") or {}).get(h_dim)
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:670:                        conc_likelihoods = concentration_share_likelihoods(
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:671:                            n_rows=sample_stats.get("row_count") or 0,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:672:                            n_categories=conc_n_categories,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:673:                            share_threshold=CONCENTRATION_SHARE_THRESHOLD,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:674:                            effect_size_if_true=CONCENTRATION_EFFECT_IF_TRUE,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:675:                        )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:676:                else:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:677:                    # Non-additive metrics must be aggregated and ranked under
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:678:                    # a "mean_metric" alias (matching the declared
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:679:                    # primary_result_column below), NOT the shared
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:726:                        metrics=[metric],
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:727:                        dimensions=[h_dim] if h_dim else [],
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:728:                        expected_outcomes=conc_outcomes,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:729:                        likelihood_if_true=conc_likelihoods.likelihood_if_true if conc_likelihoods else None,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:730:                        likelihood_if_false=conc_likelihoods.likelihood_if_false if conc_likelihoods else None,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:731:                        provenance=({"eig_likelihood_basis": conc_likelihoods.basis} if conc_likelihoods else {}),
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:732:                    )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:733:                )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:734:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:735:                # 2. ANOVA Variance Decomposition Test
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:736:                anova_code = "EXP-ANOVA" if idx == 0 else f"EXP-ANOVA-{h.hypothesis_code}"
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:737:                anova_sql = (
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:738:                    f"SELECT {h_dim}, {metric} FROM data_table WHERE {metric} IS NOT NULL"
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:739:                    if h_dim else
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:740:                    f"SELECT {metric} FROM data_table WHERE {metric} IS NOT NULL"
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:741:                )
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:742:                anova_likelihoods = None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:743:                if sample_stats and h_dim:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:744:                    anova_n_groups = (sample_stats.get("category_cardinalities") or {}).get(h_dim)
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:745:                    anova_likelihoods = anova_eta_squared_likelihoods(
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:746:                        n_rows=sample_stats.get("row_count") or 0,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:747:                        n_groups=anova_n_groups,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:748:                        eta_squared_threshold=ANOVA_ETA_SQUARED_THRESHOLD,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:749:                        effect_size_if_true=ANOVA_ETA_SQUARED_THRESHOLD,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:750:                    )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:751:                candidates.append(
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:752:                    CandidateExperiment(
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:753:                        code=anova_code,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:754:                        target_hypothesis_code=h.hypothesis_code,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:775:                        metrics=[metric],
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:776:                        dimensions=[h_dim] if h_dim else [],
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:777:                        expected_outcomes=[f"Between-group sum of squares eta^2 >= {ANOVA_ETA_SQUARED_THRESHOLD:.0%}"],
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:778:                        likelihood_if_true=anova_likelihoods.likelihood_if_true if anova_likelihoods else None,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:779:                        likelihood_if_false=anova_likelihoods.likelihood_if_false if anova_likelihoods else None,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:780:                        provenance=({"eig_likelihood_basis": anova_likelihoods.basis} if anova_likelihoods else {}),
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:781:                    )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:782:                )
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:783:            else:
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:784:                # 3. Distributional Uniformity Test (Counter Hypothesis)
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:785:                unif_code = "EXP-UNIF" if idx == 1 else f"EXP-UNIF-{h.hypothesis_code}"
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:786:                unif_metric_expr = MetricSemanticsResolver.sql_aggregation_expression(metric_def, "mean_metric")
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:787:                quoted_metric = quote_sql_identifier(metric)
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:788:                quoted_dimension = quote_sql_identifier(h_dim) if h_dim else None
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:789:                unif_sql = (
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1027:                        description=f"Multivariate OLS conditional association of {metric} on {', '.join(valid_predictors)}; 
+each coefficient is interpreted holding the other included predictors constant.",
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1028:                        aggregation_type="MULTIVARIATE_REGRESSION",
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1029:                        discriminating_power=0.98,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:1030:                        likelihood_if_true=0.75,
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:1031:                        likelihood_if_false=0.25,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1032:                        estimated_cost=1.5,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1033:                        reliability_weight=0.94,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1034:                        decision_relevance=1.0,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1035:                        target_dimension=None,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1036:                        target_metric=metric,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1037:                        metrics=[metric] + valid_predictors,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1038:                        predictors=list(valid_predictors),
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1039:                        primary_result_column=metric,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1040:                        expected_outcomes=[
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1512:                    hypothesis_ids=[h1.hypothesis_code],
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1513:                    target_prediction_id=predictions_by_hyp.get(h1.hypothesis_code),
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1514:                    prediction_ids=predictions_map.get(h1.hypothesis_code, []),
+> packages\analytics_core\src\intelligence\experiment_synthesizer.py:1515:                    target_uncertainty="Evaluate right-censoring proportion and incomplete observation",
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1516:                    is_exploratory=False,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1517:                    experiment_role=ExperimentRole.SUPPORTING.value,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1518:                    tool_name="duckdb_sql",
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1519:                    query_sql=censor_sql,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1520:                    description=f"Censoring distribution breakdown ({censored}): confirmed non-churn vs right-censored.",
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1521:                    aggregation_type="COUNT",
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1522:                    discriminating_power=0.85,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1523:                    discrimination_value=0.85,
+  packages\analytics_core\src\intelligence\experiment_synthesizer.py:1524:                    estimated_cost=1.0,
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:59:    those fields are simply treated as empty rather than raising.
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:60:    """
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:61:    for list_field in (
+> packages\analytics_core\src\intelligence\hypothesis_consolidation.py:62:        "source_evidence", "supporting_evidence_ids", "contradicting_evidence_ids",
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:63:        "experiment_refs", "parent_hypotheses", "prediction_ids",
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:64:    ):
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:65:        if hasattr(survivor, list_field):
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:66:            setattr(survivor, list_field, _union(_getattr_list(survivor, list_field), _getattr_list(absorbed, list_field)))
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:67:
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:68:    if hasattr(survivor, "posterior_history"):
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:69:        survivor.posterior_history = _getattr_list(survivor, "posterior_history")
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:70:        survivor.posterior_history.append({
+  packages\analytics_core\src\intelligence\hypothesis_consolidation.py:71:            "merged_from_hypothesis_code": getattr(absorbed, "hypothesis_code", ""),
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:53:    "temporal_shift": ("temporal shift", "regime", "time-series", "pre/post", "pre-vs-post", "transition"),
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:54:    "macro_uniform": ("uniform", "macro-level", "macro drift", "systemic macro", "baseline macro"),
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:55:    "localized_effect": (
+> packages\analytics_core\src\intelligence\hypothesis_identity.py:56:        "concentrat", "localized", "high-volume partitions", "disproportionate",
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:57:        "dispersion", "heterogeneity", "partitioning across", "variance disparity",
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:58:        "anomal", "outlier", "z-score", "spike",
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:59:        "alternative dimension", "following refutation",
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:60:    ),
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:61:}
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:62:
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:63:_DIRECTION_KEYWORDS = {
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:64:    "decrease": ("decline", "decreas", "drop", "fall", "fell", "reduc", "shrink", "lower", "down"),
+  packages\analytics_core\src\intelligence\hypothesis_identity.py:65:    "increase": ("increas", "rise", "rose", "grow", "surge", "gain", "up ", "higher", "elevat", "exceed", "above"),
+  packages\analytics_core\src\intelligence\prediction_engine.py:46:    evaluator_name: str = "legacy"
+  packages\analytics_core\src\intelligence\prediction_engine.py:47:
+  packages\analytics_core\src\intelligence\prediction_engine.py:48:
+> packages\analytics_core\src\intelligence\prediction_engine.py:49:class PredictionSynthesizer:
+  packages\analytics_core\src\intelligence\prediction_engine.py:50:    """Generates structured, falsifiable predictions deduced directly from hypothesis claim/target fields."""
+  packages\analytics_core\src\intelligence\prediction_engine.py:51:
+  packages\analytics_core\src\intelligence\prediction_engine.py:52:    @staticmethod
+> packages\analytics_core\src\intelligence\prediction_engine.py:53:    def synthesize_prediction_for_hypothesis(
+  packages\analytics_core\src\intelligence\prediction_engine.py:54:        hypothesis: PredictiveHypothesis,
+  packages\analytics_core\src\intelligence\prediction_engine.py:55:        prediction_id: str,
+  packages\analytics_core\src\intelligence\prediction_engine.py:56:        hypothesis_entity_id: str,
+  packages\analytics_core\src\intelligence\prediction_engine.py:57:    ) -> StructuredPrediction:
+  packages\analytics_core\src\intelligence\prediction_engine.py:58:        dim = hypothesis.target_dimension
+  packages\analytics_core\src\intelligence\prediction_engine.py:59:        metric = hypothesis.target_metric
+  packages\analytics_core\src\intelligence\prediction_engine.py:60:        target_value = getattr(hypothesis, "target_value", None)
+  packages\analytics_core\src\intelligence\prediction_engine.py:61:
+  packages\analytics_core\src\intelligence\prediction_engine.py:62:        # Only a semantically resolved binary event metric enters churn prediction.
+  packages\analytics_core\src\intelligence\prediction_engine.py:196:        """Convenience alias for deducing a structured prediction from a hypothesis."""
+  packages\analytics_core\src\intelligence\prediction_engine.py:197:        import uuid as _uuid
+  packages\analytics_core\src\intelligence\prediction_engine.py:198:        pid = prediction_id or f"PRED-{_uuid.uuid4().hex[:8]}"
+> packages\analytics_core\src\intelligence\prediction_engine.py:199:        return cls.synthesize_prediction_for_hypothesis(
+  packages\analytics_core\src\intelligence\prediction_engine.py:200:            hypothesis=hypothesis,
+  packages\analytics_core\src\intelligence\prediction_engine.py:201:            prediction_id=pid,
+  packages\analytics_core\src\intelligence\prediction_engine.py:202:            hypothesis_entity_id=hypothesis.id or pid,
+  packages\analytics_core\src\intelligence\prediction_engine.py:203:        )
+  packages\analytics_core\src\intelligence\prediction_engine.py:204:
+  packages\analytics_core\src\intelligence\prediction_engine.py:205:    @staticmethod
+  packages\analytics_core\src\intelligence\prediction_engine.py:206:    def deduce_predictions_for_hypotheses(
+  packages\analytics_core\src\intelligence\prediction_engine.py:207:        hypotheses: List[PredictiveHypothesis],
+  packages\analytics_core\src\intelligence\prediction_engine.py:208:        investigation_id: str,
+  packages\analytics_core\src\intelligence\prediction_engine.py:211:        for idx, h in enumerate(hypotheses, start=1):
+  packages\analytics_core\src\intelligence\prediction_engine.py:212:            pred_id = f"{investigation_id}_PRED-{idx:03d}"
+  packages\analytics_core\src\intelligence\prediction_engine.py:213:            hyp_entity_id = f"{investigation_id}_{h.hypothesis_code}"
+> packages\analytics_core\src\intelligence\prediction_engine.py:214:            pred = PredictionSynthesizer.synthesize_prediction_for_hypothesis(h, pred_id, hyp_entity_id)
+  packages\analytics_core\src\intelligence\prediction_engine.py:215:            h.prediction_ids = [pred_id]
+  packages\analytics_core\src\intelligence\prediction_engine.py:216:            predictions.append(pred)
+  packages\analytics_core\src\intelligence\prediction_engine.py:217:        return predictions
+  packages\analytics_core\src\intelligence\prediction_engine.py:218:
+  packages\analytics_core\src\intelligence\prediction_engine.py:219:
+  packages\analytics_core\src\intelligence\prediction_engine.py:220:class ConcentrationEvaluator:
+  packages\analytics_core\src\intelligence\prediction_engine.py:221:    """Evaluates whether the empirical distribution shows categorical concentration."""
+  packages\analytics_core\src\intelligence\prediction_engine.py:222:
+  packages\analytics_core\src\intelligence\prediction_engine.py:223:    @staticmethod
+  packages\analytics_core\src\intelligence\prediction_engine.py:555:        return ConcentrationEvaluator.evaluate(prediction, result_df)
+  packages\analytics_core\src\intelligence\prediction_engine.py:556:
+  packages\analytics_core\src\intelligence\prediction_engine.py:557:
+> packages\analytics_core\src\intelligence\prediction_engine.py:558:class PredictionEvaluator:
+  packages\analytics_core\src\intelligence\prediction_engine.py:559:    """Dispatcher for evaluating predictions against experimental observation data."""
+  packages\analytics_core\src\intelligence\prediction_engine.py:560:
+  packages\analytics_core\src\intelligence\prediction_engine.py:561:    @staticmethod
+  packages\analytics_core\src\intelligence\prediction_engine.py:562:    def evaluate(prediction: StructuredPrediction, result_df: pd.DataFrame) -> PredictionEvaluationResult:
+  packages\analytics_core\src\intelligence\prediction_engine.py:563:        if result_df is None:
+  packages\analytics_core\src\intelligence\prediction_engine.py:564:            return PredictionEvaluationResult(
+  packages\analytics_core\src\intelligence\prediction_engine.py:565:                status="INCONCLUSIVE",
+  packages\analytics_core\src\intelligence\prediction_engine.py:566:                reason="No result dataframe available.",
+  packages\analytics_core\src\intelligence\prediction_engine.py:567:                evaluator_name="dispatcher",
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:63:    supporting_prediction_count: int = 0
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:64:    refuted_prediction_count: int = 0
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:65:    unresolved_prediction_count: int = 0
+> packages\analytics_core\src\intelligence\predictive_hypothesis.py:66:    supporting_evidence_ids: List[str] = field(default_factory=list)
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:67:    contradicting_evidence_ids: List[str] = field(default_factory=list)
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:68:    # DEFECT-005: for a CORRELATION hypothesis, the SECOND numeric variable
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:69:    # being tested for association with target_metric (target_dimension is
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:70:    # reserved for categorical GROUP BY dimensions elsewhere and must not be
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:71:    # repurposed for this). Empty for every non-correlation hypothesis.
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:72:    secondary_metric: str = ""
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:73:    # DEFECT-005: marks this hypothesis's claim_type for downstream verdict/
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:74:    # narrative formulation so the epistemic type (ASSOCIATION vs
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:75:    # PREDICTION vs OBSERVATION) is preserved end-to-end instead of being
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:202:    for the common case (every non-churn hypothesis family), while
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:203:    guarding against a pre-existing routing edge case: a dataset can have
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:204:    churn_event_col resolved (making the canonical outcome field
+> packages\analytics_core\src\intelligence\predictive_hypothesis.py:205:    churn-sourced) yet still fall through synthesize_competing_hypotheses'
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:206:    intent-based routing into a non-churn hypothesis family, if neither
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:207:    the intent nor the question text signals churn (see
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:208:    docs/AAOS_V20C2_BEHAVIORAL_EQUIVALENCE.md). In that edge case the
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:209:    canonical outcome would report the churn column, not target_metric_col
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:210:    -- so this only trusts the canonical value when its own provenance
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:211:    confirms it was actually built from target_metric_col, and falls back
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:212:    to the raw field otherwise. This keeps C2 exactly
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:213:    behavior-preserving; it is not a second permanent resolution path for
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:214:    the common case, which always takes the canonical branch.
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:222:    """Synthesizes competing, predictive hypotheses directly from the Semantic World Model and discovered evidence."""
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:223:
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:224:    @staticmethod
+> packages\analytics_core\src\intelligence\predictive_hypothesis.py:225:    def synthesize_competing_hypotheses(
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:226:        semantic: SemanticResolution,
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:227:        question: str,
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:228:        intent: Any = None,
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:229:        decision: Any = None,
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:230:        canonical_semantics: Optional[CanonicalSemanticResolution] = None,
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:231:    ) -> List[PredictiveHypothesis]:
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:232:        # BUGFIX (DEFECT-005): this method used to ALWAYS generate the same
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:233:        # fixed root-cause-style hypothesis set (dimensional concentration /
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:234:        # systemic drift / secondary confounding) regardless of what kind of
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:348:        h2 = PredictiveHypothesis(
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:349:            id=f"HYP-02",
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:350:            hypothesis_code="HYP-02",
+> packages\analytics_core\src\intelligence\predictive_hypothesis.py:351:            claim=f"Systemic macro-level shift across all partitions with uniform proportional impact." if not dim else 
+f"Systemic macro-level shift across all categories of {dim} with uniform proportional impact.",
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:352:            mechanism=f"Baseline macro drift across the entire population without localized category variance.",
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:353:            predicted_observables_if_true=[
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:354:                f"Categorical variance is statistically negligible.",
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:355:                f"Mean percentage shift is uniform across all categories.",
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:356:            ],
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:357:            predicted_observables_if_false=[
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:358:                f"Heavy concentration of delta within top categories.",
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:359:            ],
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:360:            falsification_criteria=f"At least one category accounts for > 40% of the entire net change.",
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:451:
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:452:        v20-C4.2.1c: `predictor_column`, when supplied by the caller (the
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:453:        production call site passes `decision.estimand.predictor_columns[0]`
+> packages\analytics_core\src\intelligence\predictive_hypothesis.py:454:        -- see synthesize_competing_hypotheses above), is authoritative over
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:455:        `canonical.secondary_metric_column()`. Falls back to the discovered
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:456:        secondary metric only when no predictor_column is given (legacy
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:457:        callers with no MethodSelectionDecision at all), preserving prior
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:458:        behavior for those call sites exactly.
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:459:
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:460:        v20-C4.2.2e: `predictor_columns`, when multiple predictors are supplied,
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:461:        synthesizes 1 pairwise hypothesis per predictor (HYP-01, HYP-02, ...).
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:462:        When 1 predictor is supplied, preserves the classic H1/H0 pair.
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:463:        """
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:979:                claim = (
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:980:                    f"Concentration in segment '{seg_val}' of {dim} is the primary driver of {metric} variance ({share:.1f}% 
+share)."
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:981:                    if seg_val else
+> packages\analytics_core\src\intelligence\predictive_hypothesis.py:982:                    f"Concentration across {dim} is disproportionately associated with {metric} variance."
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:983:                )
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:984:                mechanism = f"Specific localized concentration in '{seg_val}' ({dim}) driving aggregate {metric}." if seg_val 
+else f"High categorical concentration in {dim}."
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:985:                pred_true = [f"Subgroup '{seg_val}' exhibits > 50% contribution to net change." if seg_val else f"Top 
+categories account for > 60% of {metric}."]
+> packages\analytics_core\src\intelligence\predictive_hypothesis.py:986:                pred_false = [f"Variance in '{seg_val}' is proportional to baseline volume." if seg_val else f"Uniform spread 
+across {dim}."]
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:987:                falsify = f"Segment '{seg_val}' contribution drops below 35% in controlled tests." if seg_val else f"Top share 
+< 35%."
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:988:            elif pat_type in ("segment_difference", "segment_difference_pattern"):
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:989:                claim = f"Significant variance disparity exists across partitions of {dim} for {metric} (CV = {share/100:.2f})."
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:990:                mechanism = f"Categorical partitioning across {dim} reveals structural heterogeneity in {metric}."
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:991:                pred_true = [f"ANOVA eta-squared across {dim} is statistically significant (> 15%).", f"Subgroup differences in 
+{metric} persist across partitions."]
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:992:                pred_false = [f"Between-group variance across {dim} is indistinguishable from noise (eta^2 < 5%)."]
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:993:                falsify = f"Between-group sum of squares eta-squared drops below 5%."
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:994:            elif pat_type in ("temporal_change", "temporal_change_pattern"):
+  packages\analytics_core\src\intelligence\predictive_hypothesis.py:995:                claim = f"A temporal shift or regime transition in {metric} occurred at '{seg_val}' ({dim})."
+  packages\analytics_core\src\runtime\controller.py:436:    md = getattr(semantic, "metric_definition", None)
+  packages\analytics_core\src\runtime\controller.py:437:    raw_agg = getattr(md, "aggregation_type", "") or ""
+  packages\analytics_core\src\runtime\controller.py:438:    agg = str(getattr(raw_agg, "value", raw_agg)).upper()
+> packages\analytics_core\src\runtime\controller.py:439:    # Rates, ratios and proportions are means of per-row values; summing or taking the
+  packages\analytics_core\src\runtime\controller.py:440:    # median of a 0/1 flag answers a different question than the one asked.
+> packages\analytics_core\src\runtime\controller.py:441:    agg = {"RATE": "MEAN", "RATIO": "MEAN", "PROPORTION": "MEAN", "WEIGHTED_MEAN": "MEAN",
+  packages\analytics_core\src\runtime\controller.py:442:           "AVG": "MEAN", "AVERAGE": "MEAN"}.get(agg, agg)
+  packages\analytics_core\src\runtime\controller.py:443:    return [agg] if agg in ("SUM", "MEAN", "MEDIAN") else None
+  packages\analytics_core\src\runtime\controller.py:444:
+  packages\analytics_core\src\runtime\controller.py:445:class InvestigationController:
+  packages\analytics_core\src\runtime\controller.py:446:    """Canonical brain of AA-OS executing the recursive autonomous, predictive experimentation and verification loop."""
+  packages\analytics_core\src\runtime\controller.py:447:
+  packages\analytics_core\src\runtime\controller.py:448:    # Phase 11 (Metric Semantics Engine): full string->AggregationType mapping,
+  packages\analytics_core\src\runtime\controller.py:449:    # replacing the pre-Phase-11 binary "SUM if SUM else MEAN" collapse that
+> packages\analytics_core\src\runtime\controller.py:450:    # silently discarded COUNT/COUNT_DISTINCT/RATE/RATIO/PROPORTION/WEIGHTED_MEAN
+  packages\analytics_core\src\runtime\controller.py:451:    # semantics whenever an experiment's own aggregation_type wasn't literally "SUM".
+  packages\analytics_core\src\runtime\controller.py:452:    _AGG_STR_TO_TYPE = {
+  packages\analytics_core\src\runtime\controller.py:453:        "SUM": AggregationType.SUM,
+  packages\analytics_core\src\runtime\controller.py:454:        "MEAN": AggregationType.MEAN,
+  packages\analytics_core\src\runtime\controller.py:455:        "AVG": AggregationType.MEAN,
+  packages\analytics_core\src\runtime\controller.py:456:        "COUNT": AggregationType.COUNT,
+  packages\analytics_core\src\runtime\controller.py:457:        "COUNT_DISTINCT": AggregationType.COUNT_DISTINCT,
+  packages\analytics_core\src\runtime\controller.py:458:        "RATE": AggregationType.RATE,
+  packages\analytics_core\src\runtime\controller.py:459:        "RATIO": AggregationType.RATIO,
+> packages\analytics_core\src\runtime\controller.py:460:        "PROPORTION": AggregationType.PROPORTION,
+  packages\analytics_core\src\runtime\controller.py:461:        "WEIGHTED_MEAN": AggregationType.WEIGHTED_MEAN,
+  packages\analytics_core\src\runtime\controller.py:462:        "MEDIAN": AggregationType.MEDIAN,
+  packages\analytics_core\src\runtime\controller.py:463:        "MIN": AggregationType.MIN,
+  packages\analytics_core\src\runtime\controller.py:464:        "MAX": AggregationType.MAX,
+  packages\analytics_core\src\runtime\controller.py:465:    }
+  packages\analytics_core\src\runtime\controller.py:466:
+  packages\analytics_core\src\runtime\controller.py:467:    def __init__(
+  packages\analytics_core\src\runtime\controller.py:468:        self,
+  packages\analytics_core\src\runtime\controller.py:469:        session_factory=SessionLocal,
+  packages\analytics_core\src\runtime\controller.py:762:        # 1.4 Centralized pre-analysis variable-resolution gate. Runs before
+  packages\analytics_core\src\runtime\controller.py:763:        # semantic/intent resolution and before any task-family synthesizer
+  packages\analytics_core\src\runtime\controller.py:764:        # gets a chance to silently bind a fallback column, so no family
+> packages\analytics_core\src\runtime\controller.py:765:        # (correlation, rate/proportion, trend, ranking) can substitute a
+  packages\analytics_core\src\runtime\controller.py:766:        # different variable and report a confident answer to a question
+  packages\analytics_core\src\runtime\controller.py:767:        # that was never asked. See variable_resolution_gate.py for the
+  packages\analytics_core\src\runtime\controller.py:768:        # detection rule and its deliberately narrow scope; churn-flavored
+  packages\analytics_core\src\runtime\controller.py:769:        # questions are excluded here because they already have their own
+  packages\analytics_core\src\runtime\controller.py:770:        # dedicated fail-closed path further below in this method.
+  packages\analytics_core\src\runtime\controller.py:771:        _all_available_columns: set = set()
+  packages\analytics_core\src\runtime\controller.py:772:        for _ds_df in data_context.datasets_map.values():
+  packages\analytics_core\src\runtime\controller.py:773:            _all_available_columns.update(str(c) for c in getattr(_ds_df, "columns", []))
+  packages\analytics_core\src\runtime\controller.py:774:        _missing_requested_vars = detect_unresolved_requested_variables(question, _all_available_columns)
+  packages\analytics_core\src\runtime\controller.py:782:        _rate_indicator_candidates = [(ds, col) for ds, col in _rate_indicator_candidates if col]
+  packages\analytics_core\src\runtime\controller.py:783:        _has_unique_derived_rate = len(_rate_indicator_candidates) == 1
+  packages\analytics_core\src\runtime\controller.py:784:        if not _missing_requested_vars and not _has_unique_derived_rate and detect_rate_question_with_no_column_reference(question, 
+_all_available_columns):
+> packages\analytics_core\src\runtime\controller.py:785:            _missing_requested_vars = ["the requested rate/proportion outcome"]
+  packages\analytics_core\src\runtime\controller.py:786:        if _missing_requested_vars:
+  packages\analytics_core\src\runtime\controller.py:787:            named = ", ".join(_missing_requested_vars)
+  packages\analytics_core\src\runtime\controller.py:788:            message = (
+  packages\analytics_core\src\runtime\controller.py:789:                f"The requested variable(s) {named} could not be resolved to any column "
+  packages\analytics_core\src\runtime\controller.py:790:                "in the available dataset. AA-OS will not substitute a different column and "
+  packages\analytics_core\src\runtime\controller.py:791:                "run an analysis the question did not ask for; no experiment was run."
+  packages\analytics_core\src\runtime\controller.py:792:            )
+  packages\analytics_core\src\runtime\controller.py:793:            self.checkpointer.record_event(
+  packages\analytics_core\src\runtime\controller.py:794:                investigation_id=investigation_id,
+  packages\analytics_core\src\runtime\controller.py:913:                    required_ordinals = tuple(getattr(spec, "depends_on_ordinals", ()) or ())
+  packages\analytics_core\src\runtime\controller.py:914:                    prior_successful = [
+  packages\analytics_core\src\runtime\controller.py:915:                        r for r in compound_results
+> packages\analytics_core\src\runtime\controller.py:916:                        if r.get("status") == "COMPLETED" and r.get("verdict_type") in ("OBSERVED", "STATISTICALLY_SIGNIFICANT", "DIAGNOSED", 
+"NO_DETECTABLE_EFFECT")
+  packages\analytics_core\src\runtime\controller.py:917:                    ]
+  packages\analytics_core\src\runtime\controller.py:918:                    successful_ordinals = {int(r.get("ordinal")) for r in prior_successful if r.get("ordinal") is not None}
+  packages\analytics_core\src\runtime\controller.py:919:                    prerequisites_satisfied = (
+  packages\analytics_core\src\runtime\controller.py:920:                        bool(required_ordinals) and set(required_ordinals).issubset(successful_ordinals)
+  packages\analytics_core\src\runtime\controller.py:921:                        if required_ordinals else bool(prior_successful)
+  packages\analytics_core\src\runtime\controller.py:922:                    )
+  packages\analytics_core\src\runtime\controller.py:923:                    if not prerequisites_satisfied:
+  packages\analytics_core\src\runtime\controller.py:924:                        block_msg = (
+  packages\analytics_core\src\runtime\controller.py:925:                            f"Dependent analytical objective {spec.ordinal} blocked: prior objective "
+  packages\analytics_core\src\runtime\controller.py:1099:            all_completed = (
+  packages\analytics_core\src\runtime\controller.py:1100:                bool(compound_results)
+  packages\analytics_core\src\runtime\controller.py:1101:                and all(
+> packages\analytics_core\src\runtime\controller.py:1102:                    r.get("status") == "COMPLETED" and r.get("verdict_type") in ("OBSERVED", "STATISTICALLY_SIGNIFICANT", "DIAGNOSED", 
+"NO_DETECTABLE_EFFECT")
+  packages\analytics_core\src\runtime\controller.py:1103:                    for r in compound_results
+  packages\analytics_core\src\runtime\controller.py:1104:                )
+  packages\analytics_core\src\runtime\controller.py:1105:            )
+  packages\analytics_core\src\runtime\controller.py:1106:            any_blocked = any(r.get("status") == "BLOCKED_DEPENDENCY" for r in compound_results)
+  packages\analytics_core\src\runtime\controller.py:1107:
+  packages\analytics_core\src\runtime\controller.py:1108:            if all_completed and any(o.depends_on_prior_objective for o in compound_plan.objectives):
+  packages\analytics_core\src\runtime\controller.py:1109:                summary_lines = [f"Sequential compound investigation resolved across {len(compound_results)} analytical stages:"]
+  packages\analytics_core\src\runtime\controller.py:1110:                for result in compound_results:
+  packages\analytics_core\src\runtime\controller.py:1111:                    summary_lines.append(
+  packages\analytics_core\src\runtime\controller.py:2909:            candidate_hyps = list(current_hyps)
+  packages\analytics_core\src\runtime\controller.py:2910:            reconstructed = True
+  packages\analytics_core\src\runtime\controller.py:2911:        else:
+> packages\analytics_core\src\runtime\controller.py:2912:            candidate_hyps = HypothesisSynthesizer.synthesize_competing_hypotheses(semantic, question, intent=intent, decision=method_decision)
+  packages\analytics_core\src\runtime\controller.py:2913:            initial_priors = [h.prior_probability for h in candidate_hyps]
+  packages\analytics_core\src\runtime\controller.py:2914:            initial_entropy = compute_shannon_entropy(initial_priors)
+  packages\analytics_core\src\runtime\controller.py:2915:            reconstructed = False
+  packages\analytics_core\src\runtime\controller.py:2916:
+  packages\analytics_core\src\runtime\controller.py:2917:        # v20-C4.2.3: stamp each hypothesis with the deterministic analytical
+  packages\analytics_core\src\runtime\controller.py:2918:        # identity it belongs to, from its STRUCTURED target/predictor fields
+  packages\analytics_core\src\runtime\controller.py:2919:        # (never its narrative).  Hypotheses that match no pair stay unlinked.
+  packages\analytics_core\src\runtime\controller.py:2920:        for _h in candidate_hyps:
+  packages\analytics_core\src\runtime\controller.py:2921:            _h.analytical_identity = hypothesis_identity_for(final_contract, _h)
+  packages\analytics_core\src\runtime\controller.py:2972:            return f"{investigation_id[:8]}_PRED-{prediction_seq[0]:03d}"
+  packages\analytics_core\src\runtime\controller.py:2973:
+  packages\analytics_core\src\runtime\controller.py:2974:        def _synthesize_and_register_prediction(session: Session, h: PredictiveHypothesis, step_idx: int) -> StructuredPrediction:
+> packages\analytics_core\src\runtime\controller.py:2975:            pred = PredictionSynthesizer.synthesize_prediction_for_hypothesis(
+  packages\analytics_core\src\runtime\controller.py:2976:                hypothesis=h,
+  packages\analytics_core\src\runtime\controller.py:2977:                prediction_id=_next_prediction_id(),
+  packages\analytics_core\src\runtime\controller.py:2978:                hypothesis_entity_id=f"{investigation_id}_{h.hypothesis_code}",
+  packages\analytics_core\src\runtime\controller.py:2979:            )
+  packages\analytics_core\src\runtime\controller.py:2980:            pred_entity = Prediction(
+  packages\analytics_core\src\runtime\controller.py:2981:                id=pred.prediction_id,
+  packages\analytics_core\src\runtime\controller.py:2982:                hypothesis_id=pred.hypothesis_id,
+  packages\analytics_core\src\runtime\controller.py:2983:                statement=pred.statement,
+  packages\analytics_core\src\runtime\controller.py:2984:                expected_direction=pred.expected_direction or "invariant",
+  packages\analytics_core\src\runtime\controller.py:3150:        current_hyps = state_mgr.get_active_hypotheses()
+  packages\analytics_core\src\runtime\controller.py:3151:        all_verifications_passed = True
+  packages\analytics_core\src\runtime\controller.py:3152:        primary_df = data_context.datasets_map[semantic.primary_dataset_name]
+> packages\analytics_core\src\runtime\controller.py:3153:        # Real sample statistics for the EIG likelihood model (see
+> packages\analytics_core\src\runtime\controller.py:3154:        # likelihood_model.py): computed once from the actual loaded data so
+  packages\analytics_core\src\runtime\controller.py:3155:        # concentration/isolation candidates get a genuine, data-dependent
+  packages\analytics_core\src\runtime\controller.py:3156:        # expected-information-gain instead of an unavailable/zero value.
+  packages\analytics_core\src\runtime\controller.py:3157:        # Cardinality failures (e.g. an unhashable column) degrade to
+  packages\analytics_core\src\runtime\controller.py:3158:        # "unknown" for that dimension rather than crashing the investigation.
+  packages\analytics_core\src\runtime\controller.py:3159:        _category_cardinalities: Dict[str, int] = {}
+  packages\analytics_core\src\runtime\controller.py:3160:        for _dim in set(filter(None, [canonical_group_dimension_col, *(semantic.available_categorical_cols or [])])):
+  packages\analytics_core\src\runtime\controller.py:3161:            try:
+  packages\analytics_core\src\runtime\controller.py:3162:                if _dim in primary_df.columns:
+  packages\analytics_core\src\runtime\controller.py:3163:                    _category_cardinalities[_dim] = int(primary_df[_dim].nunique())
+  packages\analytics_core\src\runtime\controller.py:3769:
+  packages\analytics_core\src\runtime\controller.py:3770:            # Persist the EIG actually computed by the optimizer, never the legacy
+  packages\analytics_core\src\runtime\controller.py:3771:            # discriminating-power heuristic. Recompute from the same current
+> packages\analytics_core\src\runtime\controller.py:3772:            # posterior and explicit predictive likelihoods used for selection.
+  packages\analytics_core\src\runtime\controller.py:3773:            ordered_hypotheses = sorted(
+  packages\analytics_core\src\runtime\controller.py:3774:                current_hyps,
+  packages\analytics_core\src\runtime\controller.py:3775:                key=lambda h: (
+  packages\analytics_core\src\runtime\controller.py:3776:                    str(getattr(h, "canonical_identity", "") or ""),
+  packages\analytics_core\src\runtime\controller.py:3777:                    str(getattr(h, "hypothesis_code", "") or ""),
+  packages\analytics_core\src\runtime\controller.py:3778:                ),
+  packages\analytics_core\src\runtime\controller.py:3779:            )
+  packages\analytics_core\src\runtime\controller.py:3780:            hyp_index_map = {h.hypothesis_code: i for i, h in enumerate(ordered_hypotheses)}
+  packages\analytics_core\src\runtime\controller.py:3781:            selected_target_idx = hyp_index_map.get(selected_exp.target_hypothesis_code)
+  packages\analytics_core\src\runtime\controller.py:3782:            selected_eig = 0.0
+> packages\analytics_core\src\runtime\controller.py:3783:            if selected_target_idx is not None and selected_exp.likelihood_if_true is not None and selected_exp.likelihood_if_false is not 
+None:
+  packages\analytics_core\src\runtime\controller.py:3784:                selected_eig = EIGOptimizer.compute_expected_entropy_reduction(
+  packages\analytics_core\src\runtime\controller.py:3785:                    current_probs=[h.posterior_probability for h in ordered_hypotheses],
+  packages\analytics_core\src\runtime\controller.py:3786:                    target_hyp_index=selected_target_idx,
+  packages\analytics_core\src\runtime\controller.py:3787:                    discriminating_power=0.0,
+> packages\analytics_core\src\runtime\controller.py:3788:                    likelihood_if_true=selected_exp.likelihood_if_true,
+> packages\analytics_core\src\runtime\controller.py:3789:                    likelihood_if_false=selected_exp.likelihood_if_false,
+  packages\analytics_core\src\runtime\controller.py:3790:                )
+  packages\analytics_core\src\runtime\controller.py:3791:
+  packages\analytics_core\src\runtime\controller.py:3792:            def run_selected_experiment(session: Session):
+  packages\analytics_core\src\runtime\controller.py:3793:                _target_hyp = next(
+  packages\analytics_core\src\runtime\controller.py:3794:                    (h for h in ordered_hypotheses if h.hypothesis_code == selected_exp.target_hypothesis_code), None
+  packages\analytics_core\src\runtime\controller.py:3795:                )
+  packages\analytics_core\src\runtime\controller.py:3796:                exp_entity = Experiment(
+  packages\analytics_core\src\runtime\controller.py:3797:                    id=f"{investigation_id}_{exp_code}",
+  packages\analytics_core\src\runtime\controller.py:3798:                    investigation_id=investigation_id,
+  packages\analytics_core\src\runtime\controller.py:4266:                            transition.verification_status, ev_entity.effect_size
+  packages\analytics_core\src\runtime\controller.py:4267:                        )
+  packages\analytics_core\src\runtime\controller.py:4268:                    if classification == "supporting":
+> packages\analytics_core\src\runtime\controller.py:4269:                        if ev_entity.id not in evidence_target_hyp.supporting_evidence_ids:
+> packages\analytics_core\src\runtime\controller.py:4270:                            evidence_target_hyp.supporting_evidence_ids.append(ev_entity.id)
+  packages\analytics_core\src\runtime\controller.py:4271:                        for ch in current_hyps:
+  packages\analytics_core\src\runtime\controller.py:4272:                            if (
+  packages\analytics_core\src\runtime\controller.py:4273:                                getattr(ch, "is_counter_hypothesis", False)
+  packages\analytics_core\src\runtime\controller.py:4274:                                and ch.hypothesis_code != evidence_target_hyp.hypothesis_code
+  packages\analytics_core\src\runtime\controller.py:4275:                                and _is_binary_mirror_hypothesis(ch, evidence_target_hyp)
+  packages\analytics_core\src\runtime\controller.py:4276:                            ):
+  packages\analytics_core\src\runtime\controller.py:4277:                                if ev_entity.id not in ch.contradicting_evidence_ids:
+  packages\analytics_core\src\runtime\controller.py:4278:                                    ch.contradicting_evidence_ids.append(ev_entity.id)
+  packages\analytics_core\src\runtime\controller.py:4279:                    elif classification == "contradicting":
+  packages\analytics_core\src\runtime\controller.py:4285:                                and ch.hypothesis_code != evidence_target_hyp.hypothesis_code
+  packages\analytics_core\src\runtime\controller.py:4286:                                and _is_binary_mirror_hypothesis(ch, evidence_target_hyp)
+  packages\analytics_core\src\runtime\controller.py:4287:                            ):
+> packages\analytics_core\src\runtime\controller.py:4288:                                if ev_entity.id not in ch.supporting_evidence_ids:
+> packages\analytics_core\src\runtime\controller.py:4289:                                    ch.supporting_evidence_ids.append(ev_entity.id)
+  packages\analytics_core\src\runtime\controller.py:4290:
+  packages\analytics_core\src\runtime\controller.py:4291:                # Register in Canonical Evidence Ledger with Epistemic Typing
+  packages\analytics_core\src\runtime\controller.py:4292:                claim_type = method_decision.claim_type_for(is_grouped, selected_exp.aggregation_type)
+  packages\analytics_core\src\runtime\controller.py:4293:                evidence_ledger.record_claim(
+  packages\analytics_core\src\runtime\controller.py:4294:                    claim_statement=ev_statement,
+  packages\analytics_core\src\runtime\controller.py:4295:                    claim_type=claim_type,
+  packages\analytics_core\src\runtime\controller.py:4296:                    source_experiment_id=exp_code,
+  packages\analytics_core\src\runtime\controller.py:4297:                    source_datasets=experiment_source_datasets,
+  packages\analytics_core\src\runtime\controller.py:4298:                    source_columns=list(dict.fromkeys([
+  packages\analytics_core\src\runtime\controller.py:4393:                            hypothesis_id=f"{investigation_id}_{current_hyps[target_idx].hypothesis_code}",
+  packages\analytics_core\src\runtime\controller.py:4394:                            evidence_id=ev_entity.id,
+  packages\analytics_core\src\runtime\controller.py:4395:                            prior_probability=target_prior,
+> packages\analytics_core\src\runtime\controller.py:4396:                            likelihood_p=None,
+  packages\analytics_core\src\runtime\controller.py:4397:                            bayes_factor=target_bayes_factor,
+  packages\analytics_core\src\runtime\controller.py:4398:                            posterior_probability=target_posterior,
+  packages\analytics_core\src\runtime\controller.py:4399:                            entropy_delta=delta_entropy,
+  packages\analytics_core\src\runtime\controller.py:4400:                            update_step_index=step_counter,
+  packages\analytics_core\src\runtime\controller.py:4401:                        )
+  packages\analytics_core\src\runtime\controller.py:4402:                        session.add(b_update)
+  packages\analytics_core\src\runtime\controller.py:4403:
+  packages\analytics_core\src\runtime\controller.py:4404:                return {
+  packages\analytics_core\src\runtime\controller.py:4405:                    "experiment": exp_code,
+  packages\analytics_core\src\runtime\controller.py:4529:            counter_hypotheses_for_stop = [h for h in current_hyps if getattr(h, "is_counter_hypothesis", False)]
+  packages\analytics_core\src\runtime\controller.py:4530:            if counter_hypotheses_for_stop:
+  packages\analytics_core\src\runtime\controller.py:4531:                counter_hypothesis_evaluated = all(
+> packages\analytics_core\src\runtime\controller.py:4532:                    bool(getattr(h, "supporting_evidence_ids", None) or getattr(h, "contradicting_evidence_ids", None))
+  packages\analytics_core\src\runtime\controller.py:4533:                    # A counter hypothesis that no candidate experiment has
+  packages\analytics_core\src\runtime\controller.py:4534:                    # ever targeted cannot be blocked on -- there is no
+  packages\analytics_core\src\runtime\controller.py:4535:                    # dedicated test the investigation could have run
+  packages\analytics_core\src\runtime\controller.py:4536:                    # against it, only cross-linked evidence from testing
+  packages\analytics_core\src\runtime\controller.py:4537:                    # the leading hypothesis (see _is_binary_mirror_hypothesis
+  packages\analytics_core\src\runtime\controller.py:4538:                    # for when that cross-link legitimately applies).
+  packages\analytics_core\src\runtime\controller.py:4539:                    or h.hypothesis_code not in hypothesis_codes_ever_targeted
+  packages\analytics_core\src\runtime\controller.py:4540:                    for h in counter_hypotheses_for_stop
+  packages\analytics_core\src\runtime\controller.py:4541:                )
+  packages\analytics_core\src\runtime\controller.py:4547:                # exists. They must still have direct evidence.
+  packages\analytics_core\src\runtime\controller.py:4548:                _non_leading = [h for h in current_hyps if h.hypothesis_code != _leading_hypothesis(current_hyps).hypothesis_code]
+  packages\analytics_core\src\runtime\controller.py:4549:                counter_hypothesis_evaluated = bool(_non_leading) and all(
+> packages\analytics_core\src\runtime\controller.py:4550:                    bool(getattr(h, "supporting_evidence_ids", None) or getattr(h, "contradicting_evidence_ids", None))
+  packages\analytics_core\src\runtime\controller.py:4551:                    for h in _non_leading
+  packages\analytics_core\src\runtime\controller.py:4552:                )
+  packages\analytics_core\src\runtime\controller.py:4553:
+  packages\analytics_core\src\runtime\controller.py:4554:            # A right-censoring column present in the data is a structural
+  packages\analytics_core\src\runtime\controller.py:4555:            # fact about how the churn outcome was measured, not merely one
+  packages\analytics_core\src\runtime\controller.py:4556:            # more optional experiment -- a crude rate computed without ever
+  packages\analytics_core\src\runtime\controller.py:4557:            # looking at how much of the "no churn" mass is actually
+  packages\analytics_core\src\runtime\controller.py:4558:            # unresolved (censored) observation can be systematically
+  packages\analytics_core\src\runtime\controller.py:4559:            # biased. When the semantic layer has identified a censoring
+  packages\analytics_core\src\runtime\controller.py:4628:                if attack_res.is_falsified:
+  packages\analytics_core\src\runtime\controller.py:4629:                    leading_hyp.belief_state = "falsified"
+  packages\analytics_core\src\runtime\controller.py:4630:                    # Principled Bayesian update on adversarial falsification:
+> packages\analytics_core\src\runtime\controller.py:4631:                    # Treat falsification as an adversarial likelihood weight (BF < 1).
+  packages\analytics_core\src\runtime\controller.py:4632:                    # A decisive Simpson's reversal or counter-evidence provides strong
+  packages\analytics_core\src\runtime\controller.py:4633:                    # evidence against the leading hypothesis.
+  packages\analytics_core\src\runtime\controller.py:4634:                    # BeliefEngine.compute_bayesian_posteriors ensures all hypothesis
+  packages\analytics_core\src\runtime\controller.py:4635:                    # probabilities are properly updated and normalized (sum = 1.0).
+  packages\analytics_core\src\runtime\controller.py:4636:                    priors = [float(h.posterior_probability) for h in current_hyps]
+  packages\analytics_core\src\runtime\controller.py:4637:                    adv_weight = 0.05 if attack_res.simpsons_paradox_detected else 0.15
+> packages\analytics_core\src\runtime\controller.py:4638:                    likelihoods = []
+  packages\analytics_core\src\runtime\controller.py:4639:                    for h in current_hyps:
+  packages\analytics_core\src\runtime\controller.py:4640:                        if h.hypothesis_code == leading_hyp.hypothesis_code:
+> packages\analytics_core\src\runtime\controller.py:4641:                            likelihoods.append(adv_weight)
+  packages\analytics_core\src\runtime\controller.py:4642:                        elif getattr(h, "is_counter_hypothesis", False) or h.hypothesis_code == getattr(counter_hyp, "hypothesis_code", None):
+> packages\analytics_core\src\runtime\controller.py:4643:                            likelihoods.append(1.0 / adv_weight if adv_weight > 0 else 1.0)
+  packages\analytics_core\src\runtime\controller.py:4644:                        else:
+> packages\analytics_core\src\runtime\controller.py:4645:                            likelihoods.append(1.0)
+  packages\analytics_core\src\runtime\controller.py:4646:                    try:
+> packages\analytics_core\src\runtime\controller.py:4647:                        new_posteriors, _ = BeliefEngine.compute_bayesian_posteriors(priors, likelihoods)
+  packages\analytics_core\src\runtime\controller.py:4648:                        for idx, h in enumerate(current_hyps):
+  packages\analytics_core\src\runtime\controller.py:4649:                            h.posterior_probability = float(new_posteriors[idx])
+  packages\analytics_core\src\runtime\controller.py:4650:                    except Exception:
+  packages\analytics_core\src\runtime\controller.py:4651:                        leading_hyp.posterior_probability = max(0.05, leading_hyp.posterior_probability * 0.10)
+  packages\analytics_core\src\runtime\controller.py:4652:                    # Persist the updated belief states and normalized posteriors
+  packages\analytics_core\src\runtime\controller.py:4653:                    for h in current_hyps:
+  packages\analytics_core\src\runtime\controller.py:4654:                        _h_row = session.query(Hypothesis).filter(
+  packages\analytics_core\src\runtime\controller.py:4655:                            Hypothesis.id == f"{investigation_id}_{h.hypothesis_code}"
+  packages\analytics_core\src\runtime\controller.py:4656:                        ).first()
+  packages\analytics_core\src\runtime\controller.py:4786:        # partial experiments) and against the leading hypothesis's SUPPORTING
+  packages\analytics_core\src\runtime\controller.py:4787:        # evidence lineage. Contradictory evidence is not support, and an old
+  packages\analytics_core\src\runtime\controller.py:4788:        # VERIFIED record must not survive a newer failed/partial verification.
+> packages\analytics_core\src\runtime\controller.py:4789:        leading_supporting_evidence_ids = set(
+> packages\analytics_core\src\runtime\controller.py:4790:            getattr(leading_hyp, "supporting_evidence_ids", None) or []
+  packages\analytics_core\src\runtime\controller.py:4791:        )
+  packages\analytics_core\src\runtime\controller.py:4792:        has_verified_evidence = False
+> packages\analytics_core\src\runtime\controller.py:4793:        if leading_supporting_evidence_ids:
+  packages\analytics_core\src\runtime\controller.py:4794:            with self.session_factory() as _verification_session:
+  packages\analytics_core\src\runtime\controller.py:4795:                _supporting_rows = (
+  packages\analytics_core\src\runtime\controller.py:4796:                    _verification_session.query(Evidence.id, Evidence.validation_status)
+> packages\analytics_core\src\runtime\controller.py:4797:                    .filter(Evidence.id.in_(leading_supporting_evidence_ids))
+  packages\analytics_core\src\runtime\controller.py:4798:                    .all()
+  packages\analytics_core\src\runtime\controller.py:4799:                )
+  packages\analytics_core\src\runtime\controller.py:4800:                _supporting_validation = {
+  packages\analytics_core\src\runtime\controller.py:4801:                    str(row[0]): str(row[1] or "").strip().upper()
+  packages\analytics_core\src\runtime\controller.py:4802:                    for row in _supporting_rows
+  packages\analytics_core\src\runtime\controller.py:4803:                }
+  packages\analytics_core\src\runtime\controller.py:4804:                _verification_rows = (
+  packages\analytics_core\src\runtime\controller.py:4805:                    _verification_session.query(EvidenceVerification)
+> packages\analytics_core\src\runtime\controller.py:4806:                    .filter(EvidenceVerification.evidence_id.in_(leading_supporting_evidence_ids))
+  packages\analytics_core\src\runtime\controller.py:4807:                    .order_by(EvidenceVerification.created_at.asc(), EvidenceVerification.id.asc())
+  packages\analytics_core\src\runtime\controller.py:4808:                    .all()
+  packages\analytics_core\src\runtime\controller.py:4809:                )
+  packages\analytics_core\src\runtime\controller.py:4810:                _latest_supporting_verification = {}
+  packages\analytics_core\src\runtime\controller.py:4811:                for _vr in _verification_rows:
+  packages\analytics_core\src\runtime\controller.py:4812:                    _latest_supporting_verification[str(_vr.evidence_id)] = str(
+  packages\analytics_core\src\runtime\controller.py:4813:                        getattr(_vr, "status", "") or ""
+  packages\analytics_core\src\runtime\controller.py:4814:                    ).strip().upper()
+  packages\analytics_core\src\runtime\controller.py:4815:                from packages.analytics_core.src.governance.verification_gate import (
+  packages\analytics_core\src\runtime\controller.py:4816:                    has_current_verified_supporting_evidence,
+  packages\analytics_core\src\runtime\controller.py:4817:                )
+  packages\analytics_core\src\runtime\controller.py:4818:                has_verified_evidence = has_current_verified_supporting_evidence(
+> packages\analytics_core\src\runtime\controller.py:4819:                    leading_supporting_evidence_ids,
+  packages\analytics_core\src\runtime\controller.py:4820:                    evidence_validation_status_by_id=_supporting_validation,
+  packages\analytics_core\src\runtime\controller.py:4821:                    latest_verification_status_by_id=_latest_supporting_verification,
+  packages\analytics_core\src\runtime\controller.py:4822:                )
+  packages\analytics_core\src\runtime\controller.py:4823:
+  packages\analytics_core\src\runtime\controller.py:4824:        # The assumption ledger was built before any experiment ran, so
+  packages\analytics_core\src\runtime\controller.py:4825:        # INDEPENDENT_VERIFICATION (like FORECAST_GENERALIZATION above) was
+  packages\analytics_core\src\runtime\controller.py:4826:        # necessarily created as unvalidated -- there was no evidence yet to
+  packages\analytics_core\src\runtime\controller.py:4827:        # check it against. `has_verified_evidence` is now that evidence:
+  packages\analytics_core\src\runtime\controller.py:4828:        # it means an independently re-executed proof agreed with the
+  packages\analytics_core\src\runtime\controller.py:4910:
+  packages\analytics_core\src\runtime\controller.py:4911:        # DEFECT-007: a hypothesis is only "directly tested" if a verified
+  packages\analytics_core\src\runtime\controller.py:4912:        # experiment actually targeted it (recorded in its own
+> packages\analytics_core\src\runtime\controller.py:4913:        # supporting_evidence_ids or contradicting_evidence_ids -- either
+  packages\analytics_core\src\runtime\controller.py:4914:        # counts, since a contradicting result is still direct evidence
+  packages\analytics_core\src\runtime\controller.py:4915:        # about that specific hypothesis, unlike untouched posterior share
+  packages\analytics_core\src\runtime\controller.py:4916:        # inherited purely from Bayesian normalization).
+  packages\analytics_core\src\runtime\controller.py:4917:        leading_directly_tested = bool(
+> packages\analytics_core\src\runtime\controller.py:4918:            getattr(leading_hyp, "supporting_evidence_ids", None)
+  packages\analytics_core\src\runtime\controller.py:4919:            or getattr(leading_hyp, "contradicting_evidence_ids", None)
+  packages\analytics_core\src\runtime\controller.py:4920:        )
+  packages\analytics_core\src\runtime\controller.py:4921:
+  packages\analytics_core\src\runtime\controller.py:4922:        # DEFECT-015: extract churn identifiability parameters for verdict
+  packages\analytics_core\src\runtime\controller.py:4923:        # formulation. IntentEngine's explicit CHURN classification is the
+  packages\analytics_core\src\runtime\controller.py:4924:        # authoritative lexical signal here. Method selection may compile a
+  packages\analytics_core\src\runtime\controller.py:4925:        # churn question into PREDICTION/ASSOCIATION for a particular execution
+  packages\analytics_core\src\runtime\controller.py:4926:        # path, but that must not bypass the churn-specific identifiability
+  packages\analytics_core\src\runtime\controller.py:4927:        # safeguards or the tenure/exposure confounding analysis.
+  packages\analytics_core\src\runtime\controller.py:5517:                analyst_result.finding == "none" and _data_clear and analyst_result.numbers.get("adequate_power")
+  packages\analytics_core\src\runtime\controller.py:5518:                and not analyst_result.numbers.get("mean_rank_disagreement")
+  packages\analytics_core\src\runtime\controller.py:5519:            ):
+> packages\analytics_core\src\runtime\controller.py:5520:                # DEFECT-026 Limit 1: A powered null result is NO_DETECTABLE_EFFECT!
+> packages\analytics_core\src\runtime\controller.py:5521:                verdict_eval.verdict_type = "NO_DETECTABLE_EFFECT"
+  packages\analytics_core\src\runtime\controller.py:5522:                calc_pwr = float(analyst_result.numbers.get("power", 0.95))
+  packages\analytics_core\src\runtime\controller.py:5523:                # Calibrated epistemic certainty: 95% CI bound and power, bounded between 0.80 and 0.95 (never 1.0)
+  packages\analytics_core\src\runtime\controller.py:5524:                verdict_eval.confidence_score = round(min(0.95, max(0.80, calc_pwr)), 2)
+  packages\analytics_core\src\runtime\controller.py:5525:                verdict_eval.direct_answer = analyst_result.to_text()
+  packages\analytics_core\src\runtime\controller.py:5526:                analyst_verdict_note = (
+> packages\analytics_core\src\runtime\controller.py:5527:                    "Verdict NO_DETECTABLE_EFFECT: adequately powered statistical test found no detectable difference; "
+  packages\analytics_core\src\runtime\controller.py:5528:                    "bound established by 95% confidence interval."
+  packages\analytics_core\src\runtime\controller.py:5529:                )
+  packages\analytics_core\src\runtime\controller.py:5530:                direct_ans = analyst_result.to_text()
+  packages\analytics_core\src\runtime\controller.py:5531:                main_find = f"{analyst_result.headline} (deterministic recomputation from the resolved contract columns)"
+  packages\analytics_core\src\runtime\controller.py:5532:            else:
+  packages\analytics_core\src\runtime\controller.py:5533:                if (
+  packages\analytics_core\src\runtime\controller.py:5534:                    verdict_eval.verdict_type in ("DIAGNOSED", "STATISTICALLY_SIGNIFICANT")
+  packages\analytics_core\src\runtime\controller.py:5535:                    and analyst_result.numbers.get("robust") is False
+  packages\analytics_core\src\runtime\controller.py:5536:                ):
+  packages\analytics_core\src\runtime\controller.py:5557:                _unsafe_reason = (
+  packages\analytics_core\src\runtime\controller.py:5558:                    "the mean-based and rank-based tests disagree, so 'no detectable difference' is not supported"
+  packages\analytics_core\src\runtime\controller.py:5559:                )
+> packages\analytics_core\src\runtime\controller.py:5560:            if _unsafe_reason and verdict_eval.verdict_type in ("DIAGNOSED", "STATISTICALLY_SIGNIFICANT", "NO_DETECTABLE_EFFECT"):
+  packages\analytics_core\src\runtime\controller.py:5561:                analyst_verdict_note = (
+  packages\analytics_core\src\runtime\controller.py:5562:                    f"{analyst_verdict_note} Downgraded from {verdict_eval.verdict_type} to INCONCLUSIVE: {_unsafe_reason}."
+  packages\analytics_core\src\runtime\controller.py:5563:                ).strip()
+  packages\analytics_core\src\runtime\controller.py:5564:                verdict_eval.verdict_type = "INCONCLUSIVE"
+  packages\analytics_core\src\runtime\controller.py:5565:                verdict_eval.confidence_score = 0.0
+  packages\analytics_core\src\runtime\controller.py:5566:                # The stored confidence follows the loop's posterior; an inconclusive verdict must not
+  packages\analytics_core\src\runtime\controller.py:5567:                # carry a high one.
+  packages\analytics_core\src\runtime\controller.py:5568:                top_prob = min(top_prob, 0.5)
+  packages\analytics_core\src\runtime\controller.py:5569:                direct_ans = analyst_result.to_text()
+  packages\analytics_core\src\runtime\controller.py:5605:                    },
+  packages\analytics_core\src\runtime\controller.py:5606:                )
+  packages\analytics_core\src\runtime\controller.py:5607:                if recon_status == "MISMATCH" and verdict_eval.verdict_type in (
+> packages\analytics_core\src\runtime\controller.py:5608:                    "DIAGNOSED", "STATISTICALLY_SIGNIFICANT", "NO_DETECTABLE_EFFECT",
+  packages\analytics_core\src\runtime\controller.py:5609:                ):
+  packages\analytics_core\src\runtime\controller.py:5610:                    # What executed contradicts what the analyst approved: do not present a decisive verdict.
+  packages\analytics_core\src\runtime\controller.py:5611:                    main_find = (
+  packages\analytics_core\src\runtime\controller.py:5612:                        f"{main_find} Downgraded from {verdict_eval.verdict_type} to INCONCLUSIVE: "
+  packages\analytics_core\src\runtime\controller.py:5613:                        f"execution did not match the approved plan ({'; '.join(discrepancies)})."
+  packages\analytics_core\src\runtime\controller.py:5614:                    ).strip()
+  packages\analytics_core\src\runtime\controller.py:5615:                    verdict_eval.verdict_type = "INCONCLUSIVE"
+  packages\analytics_core\src\runtime\controller.py:5616:                    verdict_eval.confidence_score = 0.0
+  packages\analytics_core\src\runtime\controller.py:5617:                    top_prob = min(top_prob, 0.5)
+  packages\analytics_core\src\runtime\controller.py:5727:                verdict_eval.direct_answer = direct_ans
+  packages\analytics_core\src\runtime\controller.py:5728:                verdict_eval.main_finding = main_find
+  packages\analytics_core\src\runtime\controller.py:5729:
+> packages\analytics_core\src\runtime\controller.py:5730:        # FINAL CLAIM-INTEGRITY GATE (P0): this is deliberately the last verdict
+  packages\analytics_core\src\runtime\controller.py:5731:        # mutation point before the final provenance manifest/response assembly.
+  packages\analytics_core\src\runtime\controller.py:5732:        # Any analyst overlay, reconciliation, grouping note, or quality handling
+  packages\analytics_core\src\runtime\controller.py:5733:        # above must not be able to restore an inferential claim after failed,
+  packages\analytics_core\src\runtime\controller.py:5734:        # missing, partial, or stale verification.
+  packages\analytics_core\src\runtime\controller.py:5735:        from packages.analytics_core.src.governance.verification_gate import verification_gate_reason
+  packages\analytics_core\src\runtime\controller.py:5736:        _verification_block = verification_gate_reason(
+  packages\analytics_core\src\runtime\controller.py:5737:            verdict_eval.verdict_type,
+  packages\analytics_core\src\runtime\controller.py:5738:            all_verifications_passed=(all_verifications_passed is True),
+  packages\analytics_core\src\runtime\controller.py:5739:            has_verified_evidence=(has_verified_evidence is True),
+  packages\analytics_core\src\runtime\controller.py:5806:            and final_quality_decision.recommendation_allowed
+  packages\analytics_core\src\runtime\controller.py:5807:        ):
+  packages\analytics_core\src\runtime\controller.py:5808:            _proposed_recommendation_id = f"REC-{gen_uuid()[:8]}"
+> packages\analytics_core\src\runtime\controller.py:5809:            _supporting_ids = tuple(dict.fromkeys(getattr(leading_hyp, "supporting_evidence_ids", None) or []))
+  packages\analytics_core\src\runtime\controller.py:5810:            _contradicting_ids = tuple(dict.fromkeys(getattr(leading_hyp, "contradicting_evidence_ids", None) or []))
+  packages\analytics_core\src\runtime\controller.py:5811:            _grounding_ids = tuple(dict.fromkeys(_supporting_ids + _contradicting_ids))
+  packages\analytics_core\src\runtime\controller.py:5812:            _validation_map = {}
+  packages\analytics_core\src\runtime\controller.py:5813:            _latest_verification_map = {}
+  packages\analytics_core\src\runtime\controller.py:5814:            if _grounding_ids:
+  packages\analytics_core\src\runtime\controller.py:5815:                with self.session_factory() as _grounding_session:
+  packages\analytics_core\src\runtime\controller.py:5816:                    _evidence_rows = (
+  packages\analytics_core\src\runtime\controller.py:5817:                        _grounding_session.query(Evidence)
+  packages\analytics_core\src\runtime\controller.py:5818:                        .filter(Evidence.id.in_(_grounding_ids))
+  packages\analytics_core\src\runtime\controller.py:5831:                        _latest_verification_map[str(_vr.evidence_id)] = str(getattr(_vr, "status", ""))
+  packages\analytics_core\src\runtime\controller.py:5832:
+  packages\analytics_core\src\runtime\controller.py:5833:            recommendation_grounding = evaluate_recommendation_grounding(
+> packages\analytics_core\src\runtime\controller.py:5834:                supporting_evidence_ids=_supporting_ids,
+  packages\analytics_core\src\runtime\controller.py:5835:                contradicting_evidence_ids=_contradicting_ids,
+  packages\analytics_core\src\runtime\controller.py:5836:                evidence_validation_status_by_id=_validation_map,
+  packages\analytics_core\src\runtime\controller.py:5837:                latest_verification_status_by_id=_latest_verification_map,
+  packages\analytics_core\src\runtime\controller.py:5838:            )
+  packages\analytics_core\src\runtime\controller.py:5839:            self.checkpointer.record_event(
+  packages\analytics_core\src\runtime\controller.py:5840:                investigation_id=investigation_id,
+  packages\analytics_core\src\runtime\controller.py:5841:                execution_id=exec_id,
+  packages\analytics_core\src\runtime\controller.py:5842:                event_type="decision.recommendation.grounding_evaluated",
+  packages\analytics_core\src\runtime\controller.py:5843:                payload={
+  packages\analytics_core\src\runtime\controller.py:5844:                    "recommendation_id": _proposed_recommendation_id,
+  packages\analytics_core\src\runtime\controller.py:5845:                    "recommendation_admissibility": recommendation_grounding.status,
+  packages\analytics_core\src\runtime\controller.py:5846:                    "grounded_hypothesis_id": f"{investigation_id}_{leading_hyp.hypothesis_code}",
+> packages\analytics_core\src\runtime\controller.py:5847:                    "supporting_evidence_ids": list(recommendation_grounding.supporting_evidence_ids),
+> packages\analytics_core\src\runtime\controller.py:5848:                    "verified_supporting_evidence_ids": list(recommendation_grounding.verified_supporting_evidence_ids),
+> packages\analytics_core\src\runtime\controller.py:5849:                    "unverified_supporting_evidence_ids": list(recommendation_grounding.unverified_supporting_evidence_ids),
+  packages\analytics_core\src\runtime\controller.py:5850:                    "verified_contradicting_evidence_ids": list(recommendation_grounding.verified_contradicting_evidence_ids),
+  packages\analytics_core\src\runtime\controller.py:5851:                    "reason": recommendation_grounding.reason,
+  packages\analytics_core\src\runtime\controller.py:5852:                },
+  packages\analytics_core\src\runtime\controller.py:5853:            )
+  packages\analytics_core\src\runtime\controller.py:5854:
+  packages\analytics_core\src\runtime\controller.py:5855:        if recommendation_grounding is not None and recommendation_grounding.status == "GROUNDED":
+  packages\analytics_core\src\runtime\controller.py:5856:            target_seg = getattr(leading_hyp, "target_value", None) or canonical_group_dimension_col
+  packages\analytics_core\src\runtime\controller.py:5857:            # Audit P1 fix: the gain/risk/net math is no longer computed
+  packages\analytics_core\src\runtime\controller.py:5858:            # inline here -- it's delegated to DecisionUtilityEngine, the
+  packages\analytics_core\src\runtime\controller.py:5914:                verdict_type=verdict_eval.verdict_type,
+  packages\analytics_core\src\runtime\controller.py:5915:                confidence_score=(
+  packages\analytics_core\src\runtime\controller.py:5916:                    1.0 if (verdict_eval.verdict_type == "OBSERVED" and analyst_result is not None and analyst_result.descriptive)
+> packages\analytics_core\src\runtime\controller.py:5917:                    else round(min(0.95, max(0.80, float(analyst_result.numbers.get("power", 0.95)))), 2) if (verdict_eval.verdict_type == 
+"NO_DETECTABLE_EFFECT" and analyst_result is not None)
+> packages\analytics_core\src\runtime\controller.py:5918:                    else 0.90 if verdict_eval.verdict_type == "NO_DETECTABLE_EFFECT"
+  packages\analytics_core\src\runtime\controller.py:5919:                    else top_prob
+  packages\analytics_core\src\runtime\controller.py:5920:                ),
+  packages\analytics_core\src\runtime\controller.py:5921:                justification=(
+  packages\analytics_core\src\runtime\controller.py:5922:                    f"{verdict_eval.justification} Stopping reason: {stopping_reason}."
+  packages\analytics_core\src\runtime\controller.py:5923:                    + (f" {temporal_provenance_note}" if temporal_provenance_note else "")
+  packages\analytics_core\src\runtime\controller.py:5924:                ),
+  packages\analytics_core\src\runtime\controller.py:5925:                net_variance_explained_pct=variance_explained_pct or 0.0,
+  packages\analytics_core\src\runtime\controller.py:5926:                counter_hypothesis_refuted=(
+  packages\analytics_core\src\runtime\controller.py:5927:                    verdict_eval.counter_hypothesis_refuted
+  packages\analytics_core\src\runtime\controller.py:5967:                    # An OBSERVED descriptive answer is an exact recomputation of a sample statistic, not a belief
+  packages\analytics_core\src\runtime\controller.py:5968:                    # about the world; the leading hypothesis's posterior is irrelevant to it.
+  packages\analytics_core\src\runtime\controller.py:5969:                    1.0 if (verdict_eval.verdict_type == "OBSERVED" and analyst_result is not None and analyst_result.descriptive)
+> packages\analytics_core\src\runtime\controller.py:5970:                    else round(min(0.95, max(0.80, float(analyst_result.numbers.get("power", 0.95)))), 2) if (verdict_eval.verdict_type == 
+"NO_DETECTABLE_EFFECT" and analyst_result is not None)
+> packages\analytics_core\src\runtime\controller.py:5971:                    else 0.90 if verdict_eval.verdict_type == "NO_DETECTABLE_EFFECT"
+  packages\analytics_core\src\runtime\controller.py:5972:                    else top_prob
+  packages\analytics_core\src\runtime\controller.py:5973:                )
+  packages\analytics_core\src\runtime\controller.py:5974:
+  packages\analytics_core\src\runtime\controller.py:5975:                inv_rec.reproducible_manifest_hash = manifest_hash
+  packages\analytics_core\src\runtime\controller.py:5976:                # Session 8: these two columns were only ever written for compound
+  packages\analytics_core\src\runtime\controller.py:5977:                # objectives, so the API reported stopping_criteria_met=False for
+  packages\analytics_core\src\runtime\controller.py:5978:                # every ordinary investigation. Persist the real outcome so a
+  packages\analytics_core\src\runtime\controller.py:5979:                # human verifier can tell "converged" from "ran out of budget".
+  packages\analytics_core\src\runtime\controller.py:5980:                inv_rec.stopping_criteria_met = bool(
+
+
+

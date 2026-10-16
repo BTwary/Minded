@@ -62,7 +62,9 @@ export default function MiningCursorTrail() {
           r: isBurst ? 1.5 + Math.random() * 3.0 : 0.9 + Math.random() * 2.2,
           life: 1.0,
           decay: isBurst ? 0.02 + Math.random() * 0.03 : 0.015 + Math.random() * 0.025,
-          hue: Math.random() > 0.3 ? 42 + Math.random() * 12 : 140 + Math.random() * 25, // Gold / Laser Emerald
+          hue: typeof document !== "undefined" && document.documentElement.dataset.theme === "light"
+            ? (Math.random() > 0.4 ? 158 + Math.random() * 12 : 142 + Math.random() * 10) // Emerald gradient
+            : (Math.random() > 0.35 ? 38 + Math.random() * 8 : 28 + Math.random() * 8),    // Amber-copper gradient
           sat: 80 + Math.random() * 20,
           lig: 55 + Math.random() * 20,
         });

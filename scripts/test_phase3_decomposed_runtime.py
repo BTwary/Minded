@@ -73,11 +73,28 @@ def run_phase3_tests():
         except Exception:
             pass
 
+    # Mirror apps/api/src/core/database.py: one pinned connection (StaticPool) so the controller's
+    # checkpointer and its main session never deadlock on SQLite's single-writer lock.
+    from sqlalchemy.pool import StaticPool
     test_engine = create_engine(
         f"sqlite:///{db_path}?timeout=30",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         echo=False,
     )
+
+    # The worker and controller write through their own connections while earlier steps of this test
+    # still hold read transactions. In SQLite's default rollback-journal mode a reader blocks the
+    # writer's commit ("database is locked"); WAL lets readers and one writer proceed together.
+    from sqlalchemy import event as _sa_event
+
+    @_sa_event.listens_for(test_engine, "connect")
+    def _sqlite_wal(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        cur.close()
+
     Base.metadata.create_all(bind=test_engine)
     TestingSession = sessionmaker(bind=test_engine)
     db = TestingSession()
@@ -153,7 +170,12 @@ def run_phase3_tests():
     exp_specs = ExperimentEngine.design_experiments(hyps, semantic)
     assert len(exp_specs) == 2
     exec_provider = DuckDBExecutionProvider()
-    val, cnt, dur, _ = exec_provider.execute_query(df_sample, "data_table", exp_specs[0].query_sql)
+    res_exec = exec_provider.execute_query(
+        df_sample, "data_table", exp_specs[0].query_sql,
+        aggregation_type=exp_specs[0].aggregation_type,
+        primary_result_column=exp_specs[0].primary_result_column,
+    )
+    val, cnt, dur = res_exec.primary_value, res_exec.row_count, res_exec.execution_time_ms
     assert val > 0.0
     assert cnt == 300
     assert dur >= 0.0

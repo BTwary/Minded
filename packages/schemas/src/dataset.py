@@ -65,6 +65,7 @@ class DatasetProfileSchema(BaseModel):
     duplicate_row_count: int = 0
     data_quality: DataQualityBreakdownSchema
     summary_text: Optional[str] = None
+    first_look: Optional[Dict[str, Any]] = None
     profiled_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

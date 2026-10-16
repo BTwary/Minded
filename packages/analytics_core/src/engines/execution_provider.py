@@ -27,6 +27,72 @@ class BaseExecutionProvider(ABC):
         pass
 
 
+# Columns with at most this many distinct values get exact per-category counts in a
+# relation digest (enough to pin down a grouping dimension without hashing every row).
+_DIGEST_MAX_CATEGORIES = 500
+
+
+def relation_digest(frame: Any) -> Dict[str, Any]:
+    """Order-independent fingerprint of a (possibly very large) result relation.
+
+    Used when a result relation is too large to carry onward (see
+    ``MAX_QUERY_RESULT_ROWS``). The executing engine computes this over the FULL result
+    before truncation; the independent engine recomputes it from its own full result.
+    Exact row count, per-column non-null counts, exact (``math.fsum``) numeric sums and
+    exact per-category counts must agree, so a truncated relation can still be verified
+    rather than failing closed on every dataset larger than the carry limit.
+    """
+    import math
+
+    pdf = frame.to_pandas() if hasattr(frame, "to_pandas") else frame
+    digest: Dict[str, Any] = {
+        "rows": int(len(pdf)),
+        "columns": [str(c) for c in pdf.columns],
+        "non_null": {},
+        "numeric_sums": {},
+        "category_counts": {},
+    }
+    for col in pdf.columns:
+        series = pdf[col]
+        name = str(col)
+        digest["non_null"][name] = int(series.notna().sum())
+        if pd.api.types.is_bool_dtype(series):
+            continue
+        if pd.api.types.is_numeric_dtype(series):
+            values = pd.to_numeric(series, errors="coerce").dropna().to_numpy(dtype="float64")
+            digest["numeric_sums"][name] = float(math.fsum(values.tolist())) if len(values) else 0.0
+        else:
+            nunique = int(series.nunique(dropna=True))
+            if nunique <= _DIGEST_MAX_CATEGORIES:
+                counts = series.dropna().astype(str).value_counts()
+                digest["category_counts"][name] = {str(k): int(v) for k, v in counts.items()}
+    return digest
+
+
+def relation_digests_equivalent(
+    primary: Dict[str, Any], secondary: Dict[str, Any], rtol: float = 1e-6
+) -> Tuple[bool, float, str]:
+    """Compare two relation digests. Returns (equivalent, max_relative_delta, reason)."""
+    if primary.get("rows") != secondary.get("rows"):
+        return False, 1.0, f"row_count_mismatch:{primary.get('rows')}!={secondary.get('rows')}"
+    if sorted(primary.get("columns", [])) != sorted(secondary.get("columns", [])):
+        return False, 1.0, "column_set_mismatch"
+    if primary.get("non_null") != secondary.get("non_null"):
+        return False, 1.0, "non_null_count_mismatch"
+    if primary.get("category_counts") != secondary.get("category_counts"):
+        return False, 1.0, "category_count_mismatch"
+    worst = 0.0
+    for col, a in primary.get("numeric_sums", {}).items():
+        if col not in secondary.get("numeric_sums", {}):
+            return False, 1.0, f"numeric_column_missing:{col}"
+        b = secondary["numeric_sums"][col]
+        delta = abs(a - b) / max(abs(a), abs(b), 1e-9)
+        worst = max(worst, delta)
+        if delta > rtol:
+            return False, worst, f"numeric_sum_mismatch:{col}"
+    return True, worst, "ok"
+
+
 def _derive_primary_metric(
     result: pd.DataFrame,
     *,
@@ -169,15 +235,20 @@ def _execute_duckdb_worker(
             con.register(name, frame)
         result = con.execute(sql).fetchdf()
         truncated = len(result) > max_result_rows
-        if truncated:
-            result = result.head(max_result_rows).copy()
+        # The primary metric must be derived from the FULL result. Truncation only bounds
+        # the frame carried onward; deriving an aggregate (e.g. VARIANCE over raw rows)
+        # from the truncated head silently yields a wrong value. ``is_truncated`` stays
+        # True, so independent verification still fails closed on a truncated relation.
         primary_metric, resolved_primary_column = _derive_primary_metric(
             result,
             aggregation_type=aggregation_type,
             primary_result_column=primary_result_column,
             sql=sql,
         )
-        return {"primary_metric": primary_metric, "primary_result_column": resolved_primary_column, "result_df": result, "is_truncated": truncated}
+        digest = relation_digest(result) if truncated else None
+        if truncated:
+            result = result.head(max_result_rows).copy()
+        return {"primary_metric": primary_metric, "primary_result_column": resolved_primary_column, "result_df": result, "is_truncated": truncated, "relation_digest": digest}
     finally:
         con.close()
 
@@ -258,6 +329,7 @@ class DuckDBExecutionProvider(BaseExecutionProvider):
                 self.status = "TRUNCATED" if truncated else "SUCCESS"
                 self.is_truncated = truncated
                 self.primary_result_column = None
+                self.relation_digest = None
             def __iter__(self):
                 return iter((self.primary_value, self.row_count, self.execution_time_ms, self.result_df))
             def __getitem__(self, idx):
@@ -267,5 +339,6 @@ class DuckDBExecutionProvider(BaseExecutionProvider):
             payload["primary_metric"], n_rows, duration_ms, result_df, input_rows=n_rows, truncated=truncated
         )
         execution.primary_result_column = payload.get("primary_result_column")
+        execution.relation_digest = payload.get("relation_digest")
         return execution
 

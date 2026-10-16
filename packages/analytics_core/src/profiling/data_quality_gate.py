@@ -286,7 +286,11 @@ class DataQualityGate:
             try:
                 tmp = df[[time_col, metric_col]].dropna()
                 bucket_sizes = tmp.groupby(time_col)[metric_col].size()
-                min_bucket_n = 3
+                # Three observations produce a highly unstable median; with only
+                # 3–4 orders per period, a single ordinary large order can trigger a
+                # false 20x scale-change blocker. Require at least five observations
+                # per bucket before this heuristic may hard-block analysis.
+                min_bucket_n = 5
                 well_populated_buckets = bucket_sizes[bucket_sizes >= min_bucket_n].index
                 # Bucket by the raw value of time_col (works for strings like
                 # "2026-01" as well as actual dates truncated by the caller).
@@ -553,6 +557,7 @@ class DataQualityGate:
                 if group_col == metric_col:
                     continue
                 if not (pd.api.types.is_object_dtype(df[group_col])
+                        or pd.api.types.is_string_dtype(df[group_col])
                         or isinstance(df[group_col].dtype, pd.CategoricalDtype)
                         or pd.api.types.is_bool_dtype(df[group_col])):
                     continue

@@ -58,6 +58,7 @@ kind = "pytest"
 command = ["{python}", "-m", "pytest", "-q", "tests/independent_release/"]
 expected_exit_code = 0
 max_skips = 6
+timeout_seconds = 1800
 production_path = true
 
 [[check]]
@@ -143,6 +144,15 @@ kind = "python_module"
 command = ["{python}", "-m", "scripts.audit_canonical_serialization", "--root", "{root}"]
 expected_exit_code = 0
 production_path = false
+
+[[check]]
+id = "intent_contract_patch_lifecycle"
+description = "Canonical intent patches preserve material requirements and unresolved intent cannot execute"
+kind = "pytest"
+command = ["{python}", "-m", "pytest", "-q", "tests/independent_release/test_intent_state_contract.py"]
+expected_exit_code = 0
+max_skips = 0
+production_path = true
 
 [[check]]
 id = "dependency_lock_integrity"
@@ -315,4 +325,42 @@ max_skips = 0
 production_path = true
 fault_injection = "Mutate stress answers by factor 1.13; verifier must fail"
 
+
+[[check]]
+id = "analytical_operation_registry"
+description = "Typed aggregation registry, multi-dimensional grouping, new descriptive primitives, and approval-bound compound operation graph"
+kind = "pytest"
+command = ["{python}", "-m", "pytest", "-q", "tests/independent_release/test_analytical_operation_registry.py"]
+expected_exit_code = 0
+max_skips = 0
+production_path = true
+fault_injection = "Unsupported aggregation, unknown group, invalid graph dependency, or altered aggregate result must be rejected"
+
+[[check]]
+id = "common_descriptive_intent_expansion"
+description = "Common distribution and data-quality questions compile to exact typed operations and execute through the approved contract"
+kind = "pytest"
+command = ["{python}", "-m", "pytest", "-q", "tests/independent_release/test_common_descriptive_intents_expansion.py"]
+expected_exit_code = 0
+max_skips = 0
+production_path = true
+fault_injection = "Ambiguous/missing target, unsupported aggregation, or operation mismatch must not silently execute another calculation"
+
+[[check]]
+id = "estimand_compatible_evidence"
+description = "Estimand-compatible inferential evidence classification and clause-aware contract parsing"
+kind = "pytest"
+command = ["{python}", "-m", "pytest", "-q", "tests/independent_release/test_independent_audit_remediation_2026_10_15.py"]
+expected_exit_code = 0
+max_skips = 0
+production_path = true
+fault_injection = "Underpowered inferential tests or over-greedy clause parsing must not silently produce false verified verdicts"
+
+[[check]]
+id = "release_harness_portability"
+description = "Release audit harness and scripts resolve repo root dynamically without hardcoded absolute paths"
+kind = "command"
+command = ["{python}", "-c", "from pathlib import Path; h = Path('release_evidence/independent_audit_2026-10-15/audit_harness.py').read_text(encoding='utf-8'); assert 'C:/Users' not in h, 'Hardcoded absolute path found in audit harness'"]
+expected_exit_code = 0
+production_path = false
 

@@ -45,7 +45,11 @@ def synthesize_questions(
     ingest-and-run autonomy does not require a human-authored prompt.
     """
     p = _as_profile(profile)
-    label = dataset_label or p.dataset_name or "this dataset"
+    # NOTE: the dataset name is deliberately NOT embedded in question text. The
+    # question compiler resolves every noun phrase against dataset columns, so a
+    # file name such as "sales" or "title_rows (2)" is read as a requested
+    # variable that does not exist and the investigation fails closed.
+    del dataset_label  # accepted for API compatibility only
     cols = list(p.columns)
     metrics = _pick(cols, _METRIC_TYPES)
     times = _pick(cols, _TIME_TYPES)
@@ -58,30 +62,30 @@ def synthesize_questions(
 
     if metric_name and time_name:
         questions.append(
-            f"Why did {metric_name} change over {time_name} in {label}, and which segments explain the movement?"
+            f"Why did {metric_name} change over {time_name}, and which segments explain the movement?"
         )
     elif metric_name and dim_name:
         questions.append(
-            f"Which {dim_name} segments drive variation in {metric_name} in {label}?"
+            f"Which {dim_name} segments drive variation in {metric_name}?"
         )
     elif metric_name:
         questions.append(
-            f"What are the primary drivers, concentrations, and anomalies in {metric_name} within {label}?"
+            f"What are the primary drivers, concentrations, and anomalies in {metric_name}?"
         )
     else:
         questions.append(
-            f"What are the most important patterns, anomalies, and data-quality risks in {label}?"
+            "What are the most important patterns, anomalies, and data-quality risks in this dataset?"
         )
 
     if dim_name and metric_name and time_name:
         questions.append(
-            f"Is the {metric_name} trend in {label} robust across {dim_name}, or does aggregation hide a reversal?"
+            f"Is the {metric_name} trend robust across {dim_name}, or does aggregation hide a reversal?"
         )
 
     quality = p.data_quality
     if quality and quality.overall_score < 85:
         questions.append(
-            f"How do missing values, duplicates, or outliers in {label} (quality score {quality.overall_score:.0f}/100) affect the main findings?"
+            f"How do missing values, duplicates, or outliers (quality score {quality.overall_score:.0f}/100) affect the main findings?"
         )
 
     # Deduplicate while preserving order.

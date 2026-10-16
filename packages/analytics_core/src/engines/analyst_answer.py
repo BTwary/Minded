@@ -148,6 +148,8 @@ class AnalystResult:
 def _num(x: float) -> str:
     if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
         return "n/a"
+    if isinstance(x, int) and not isinstance(x, bool):
+        return f"{x:,}"
     ax = abs(x)
     if ax >= 1e9:
         return f"{x/1e9:.2f}B"
@@ -1284,7 +1286,16 @@ def _ranking(q, df, target, group, agg_default) -> Optional[AnalystResult]:
     details.append(f"Ranking by {word} {target}: " + "; ".join(ranked) + ("; ..." if len(table) > MAX_GROUPS_REPORTED else "."))
     numbers: Dict[str, Any] = {"aggregation": agg, "top": str(top_name), "top_value": float(top["value"]),
                                "table": {str(k): {"value": float(r["value"]), "n": int(r["n"])} for k, r in table.iterrows()}}
-    if agg in ("sum", "count") and grand and len(table) >= 3:
+    # Guard against degenerate Pareto calculations (e.g. binary 0/1 values or uniform non-zero values)
+    val_series = pd.Series(table["value"])
+    non_zero_vals = val_series[val_series > 0]
+    is_degenerate = (
+        len(non_zero_vals) == 0
+        or non_zero_vals.nunique() <= 1
+        or all(v in (0.0, 1.0) for v in val_series)
+        or float(val_series.var()) < 1e-6
+    )
+    if agg in ("sum", "count") and grand and len(table) >= 3 and not is_degenerate:
         table_desc = table.sort_values("value", ascending=False)
         cum_shares = (table_desc["value"] / grand).cumsum()
         p80_cnt = int((cum_shares <= 0.80).sum()) + 1
@@ -1688,7 +1699,41 @@ def _root_cause(
         )
         eval_desc = f"{cand_name} was evaluated as a candidate factor (eta={top_r:.2f})"
 
-    if sign_flipped:
+    # Stratum check: a pooled (or even covariate-adjusted) difference is not one effect when the
+    # within-stratum differences point in opposite directions (Simpson-style reversal).
+    reversal = None
+    for _cand in qualified_candidates[:5]:
+        if _cand["is_num"]:
+            continue
+        reversal = _stratum_effects(_cand["focal_df"], group, g_A, g_B, _cand["col"])
+        if reversal:
+            break
+
+    if reversal:
+        classification = "STRATUM_EFFECT_REVERSAL"
+        strat_col = reversal["column"]
+        res.numbers["confounding_classification"] = classification
+        res.numbers["stratum_effect_reversal"] = True
+        res.numbers["stratum_column"] = strat_col
+        res.numbers["stratum_effects"] = reversal["effects"]
+        eff_txt = "; ".join(f"{k}: {_signed(v)}" for k, v in reversal["effects"].items())
+        confounder_notes.append(
+            f"Effect reversal across {strat_col}: the {g_A}-minus-{g_B} difference has opposite signs in different "
+            f"{strat_col} strata ({eff_txt}), while the pooled difference is {_signed(unadj_diff)} "
+            f"(adjusted for {cand_name}: {_signed(adj_diff)}). The pooled figure mixes effects that point in opposite "
+            f"directions, so it cannot be read as a single effect of {group}."
+        )
+        res.caveats.append(
+            f"Verdict withheld: the {group} effect reverses sign across {strat_col} strata, so no pooled conclusion "
+            f"about {group} is supported. Analyse each {strat_col} stratum separately."
+        )
+        res.strategic_playbook = [
+            item for item in (res.strategic_playbook or []) if item.get("focus_area") != "Resource Reallocation"
+        ]
+        res.next_steps = [
+            f"Analyse each {strat_col} stratum separately and do not apply a pooled recommendation across strata."
+        ]
+    elif sign_flipped:
         classification = "CONFOUNDER_EFFECT_REVERSAL"
         res.numbers["confounding_classification"] = classification
         confounder_notes.append(
@@ -1813,6 +1858,86 @@ def _subject_reference(q: str, levels: List[Any], means: pd.Series) -> Tuple[Any
     return means.idxmax(), means.idxmin()
 
 
+def _top_trim_drop_mask(values: np.ndarray) -> Tuple[np.ndarray, int]:
+    """Boolean mask of the largest 1% of values (at least one row) and the count dropped."""
+    n = len(values)
+    k = max(1, int(round(0.01 * n))) if n else 0
+    mask = np.zeros(n, dtype=bool)
+    if k:
+        mask[np.argsort(values, kind="mergesort")[::-1][:k]] = True
+    return mask, k
+
+
+def _outlier_sensitivity_two(a: np.ndarray, b: np.ndarray) -> Optional[Dict[str, Any]]:
+    """For a significant two-group difference in means: does it survive dropping the top 1% of values?"""
+    try:
+        allv = np.concatenate([a, b])
+        mask, k = _top_trim_drop_mask(allv)
+        a2, b2 = a[~mask[: len(a)]], b[~mask[len(a):]]
+        if len(a2) < 2 or len(b2) < 2:
+            return None
+        w0, w2 = _welch(a, b), _welch(a2, b2)
+        sig2 = (w2["lo"] > 0 or w2["hi"] < 0) and np.sign(w2["diff"]) == np.sign(w0["diff"])
+        return {"sensitive": not bool(sig2), "rows_dropped": int(k), "p_after_trim": float(w2["p"]),
+                "diff_after_trim": float(w2["diff"])}
+    except Exception:
+        return None
+
+
+def _outlier_sensitivity_multi(arrays: List[np.ndarray]) -> Optional[Dict[str, Any]]:
+    """For a significant ANOVA across groups: does it survive dropping the top 1% of values?"""
+    try:
+        allv = np.concatenate(arrays)
+        mask, k = _top_trim_drop_mask(allv)
+        trimmed, start = [], 0
+        for arr in arrays:
+            trimmed.append(arr[~mask[start:start + len(arr)]])
+            start += len(arr)
+        if any(len(t) < 2 for t in trimmed):
+            return None
+        p2 = float(sps.f_oneway(*trimmed).pvalue)
+        return {"sensitive": bool(not (p2 < ALPHA)), "rows_dropped": int(k), "p_after_trim": p2}
+    except Exception:
+        return None
+
+
+def _outlier_sensitive_caveat(info: Dict[str, Any]) -> str:
+    k = info["rows_dropped"]
+    return (f"This result is outlier-sensitive: dropping the top 1% of values ({k} row{'s' if k != 1 else ''}) removes the "
+            f"difference ({_p(info['p_after_trim'])}), so it rests on a few extreme rows. Inspect them before acting on it.")
+
+
+def _stratum_effects(focal: pd.DataFrame, group: str, g_a: Any, g_b: Any, strat_col: str) -> Optional[Dict[str, Any]]:
+    """Within-stratum difference (g_a minus g_b) of the outcome ``_y`` for every level of ``strat_col``.
+
+    Returns a reversal only when at least one stratum shows a clearly positive and another a clearly
+    negative difference, where "clearly" means BOTH a meaningful size (>= 0.2 pooled SD of the outcome)
+    AND a stratum-level Welch test at p < 0.01. Opposite signs that are within noise are not a reversal.
+    """
+    try:
+        y_sd = float(focal["_y"].std())
+        if not np.isfinite(y_sd) or y_sd <= 0:
+            return None
+        effects: Dict[str, float] = {}
+        clear: Dict[str, float] = {}
+        for lvl, part in focal.groupby(strat_col, observed=True):
+            ya = part.loc[part[group] == g_a, "_y"].to_numpy(float)
+            yb = part.loc[part[group] == g_b, "_y"].to_numpy(float)
+            if len(ya) < 5 or len(yb) < 5:
+                continue
+            w = _welch(ya, yb)
+            effects[str(lvl)] = float(w["diff"])
+            if abs(w["diff"]) >= 0.2 * y_sd and float(w["p"]) < 0.01:
+                clear[str(lvl)] = float(w["diff"])
+        pos = {k: v for k, v in clear.items() if v > 0}
+        neg = {k: v for k, v in clear.items() if v < 0}
+        if pos and neg:
+            return {"column": strat_col, "effects": effects, "clear_effects": clear}
+    except Exception:
+        return None
+    return None
+
+
 def _numeric_comparison(q, df, sub, target, group) -> Optional[AnalystResult]:
     levels = list(sub[group].unique())
     grp = sub.groupby(group)[target]
@@ -1884,12 +2009,28 @@ def _numeric_comparison(q, df, sub, target, group) -> Optional[AnalystResult]:
             numbers["robust"] = False
             finding = "none"
         elif not sig and not math.isnan(mw_p) and mw_p < ALPHA:
-            caveats.append(f"Means are not distinguishable, but a rank-based test suggests the distributions differ ({_p(mw_p)}); medians {_num(med_a)} vs {_num(med_b)}.")
+            caveats.append(
+                f"Means are not distinguishable, but a rank-based test suggests the distributions differ ({_p(mw_p)}); "
+                f"medians {_num(med_a)} vs {_num(med_b)}. The mean-based and rank-based tests disagree, so a "
+                f"'no difference' conclusion is not supported (an extreme value may be masking a real gap).")
             numbers["robust"] = None
+            numbers["mean_rank_disagreement"] = True
         else:
             numbers["robust"] = True
+            if sig:
+                _osens = _outlier_sensitivity_two(a, b)
+                if _osens is not None:
+                    numbers["outlier_sensitivity"] = _osens
+                    if _osens["sensitive"]:
+                        numbers["outlier_sensitive"] = True
+                        caveats.append(_outlier_sensitive_caveat(_osens))
         next_steps: List[str] = []
-        if sig and numbers.get("robust") is not False:
+        if numbers.get("mean_rank_disagreement"):
+            headline = ("Inconclusive: the mean-based test finds no difference but the rank-based test does. Mean-based result: " + headline)
+            details = [d for d in details if "Statistical power is sufficient" not in d]
+            next_steps.append(
+                f"Inspect the extreme {target} values (check for data-entry errors or one-off deals) and re-run the comparison with and without them before concluding anything.")
+        elif sig and numbers.get("robust") is not False:
             next_steps.append(f"Investigate operational or business practices driving the superior {target} of {subj} over {ref}.")
         elif not sig and is_powered:
             next_steps.append(f"The two groups appear functionally equivalent; evaluate secondary segmentations or confounders if differences were expected.")
@@ -1966,17 +2107,35 @@ def _numeric_comparison(q, df, sub, target, group) -> Optional[AnalystResult]:
             finding = "none"
         else:
             numbers["robust"] = True
+            _osens = _outlier_sensitivity_multi(arrays)
+            if _osens is not None:
+                numbers["outlier_sensitivity"] = _osens
+                if _osens["sensitive"]:
+                    numbers["outlier_sensitive"] = True
+                    caveats.append(_outlier_sensitive_caveat(_osens))
         next_steps.append(f"Investigate high-performing {hi_name} and underperforming {lo_name} for operational drivers.")
     else:
         headline = (f"No statistically detectable difference in average {target} across {group} ({_p(float(f_p))}; {group} explains {_pct(eta2)} of the variation). "
                     f"Group averages range from {_num(means[lo_name])} ({lo_name}) to {_num(means[hi_name])} ({hi_name}).")
         details = [f"By group -- {rng_txt}."]
+        if kw_p < ALPHA:
+            caveats.append(
+                f"Means are not distinguishable across {group}, but a rank-based test suggests the distributions differ "
+                f"({_p(kw_p)}). The mean-based and rank-based tests disagree, so a 'no difference' conclusion is not "
+                f"supported (an extreme value may be masking a real gap).")
+            numbers["robust"] = None
+            numbers["mean_rank_disagreement"] = True
         big = sub.loc[sub[group] == hi_name, target].to_numpy(float)
         small_ = sub.loc[sub[group] == lo_name, target].to_numpy(float)
         if len(big) >= 2 and len(small_) >= 2:
             w = _welch(big, small_)
             details.append(f"Even the most extreme pair ({hi_name} vs {lo_name}) differs by {_signed(w['diff'])} (95% CI {_signed(w['lo'])} to {_signed(w['hi'])}, unadjusted) -- the data cannot rule out differences up to about that size.")
-        next_steps.append(f"Evaluate whether segmenting by another dimension reveals localized differences.")
+        if numbers.get("mean_rank_disagreement"):
+            headline = ("Inconclusive: the mean-based test finds no difference but the rank-based test does. Mean-based result: " + headline)
+            next_steps.append(
+                f"Inspect the extreme {target} values (check for data-entry errors or one-off deals) and re-run the comparison with and without them before concluding anything.")
+        else:
+            next_steps.append(f"Evaluate whether segmenting by another dimension reveals localized differences.")
 
     dist_profile = _distribution_profile(sub[target])
     numbers["distribution_profile"] = dist_profile
@@ -3061,6 +3220,257 @@ def is_pure_descriptive_breakdown(question: str) -> bool:
     )
 
 
+def _execute_canonical_descriptive_contract(contract: Any, df: pd.DataFrame) -> Optional[AnalystResult]:
+    """Execute a supported descriptive contract without reinterpreting its question.
+
+    This is intentionally small: it is the authority boundary for row counts and
+    ordinary aggregates.  The compiler owns intent; this function only validates
+    and executes those resolved fields.  Its second calculation is kept as
+    execution evidence so a successful response is not merely a preview.
+    """
+    if contract.completeness != "COMPLETE" or contract.task_family not in ("COUNT", "DESCRIPTIVE", "RANKING"):
+        return None
+    graph_payload = getattr(contract, "operation_graph", None)
+    if graph_payload is not None:
+        try:
+            from packages.analytics_core.src.intelligence.analytical_operations import (
+                OperationGraph, OperationNode, execute_operation_graph,
+            )
+            if not isinstance(graph_payload, dict):
+                return None
+            graph = OperationGraph(
+                version=int(graph_payload.get("version", 0)),
+                nodes=tuple(OperationNode(
+                    node_id=str(item["node_id"]), operation=str(item["operation"]),
+                    params=dict(item.get("params") or {}),
+                    depends_on=tuple(item.get("depends_on") or ()),
+                ) for item in graph_payload.get("nodes", [])),
+                requested_outputs=tuple(graph_payload.get("requested_outputs") or ()),
+            )
+            graph_result = execute_operation_graph(df, graph)
+        except (ImportError, KeyError, TypeError, ValueError):
+            return None
+        outputs = graph_result.get("outputs", {})
+        headline = f"Executed {len(outputs)} approved operation-graph output(s)."
+        return AnalystResult(
+            "DESCRIPTIVE", headline,
+            ["Executed the persisted operation graph from the approved canonical contract."],
+            numbers={"operation_graph": graph_result, "canonical_contract": contract.to_dict(),
+                     "verification": graph_result.get("verification", {"status": "verified", "graph_validated": True})},
+            descriptive=True, finding="compound_analysis",
+        )
+    # A comparison question may contain "by <dimension>" but belongs to the
+    # inferential path; it is not authorization to substitute a sum.
+    if re.search(r"\b(differ\w*|compare\w*|versus|\bvs\b|higher|lower|more|less)\b", contract.question_text, re.I):
+        return None
+    operation = (contract.requested_aggregation or {
+        "count": "COUNT", "sum": "SUM", "mean": "MEAN", "median": "MEDIAN",
+    }.get(contract.estimand, "")).upper()
+    supported_operations = {"ROW_COUNT", "DUPLICATE_ROW_COUNT", "COUNT", "COUNT_DISTINCT", "SUM", "MEAN", "MEDIAN", "MIN", "MAX", "RATE", "VARIANCE", "STDDEV", "PERCENTILE", "MODE", "RANGE", "Q1", "Q3", "IQR", "MISSING_COUNT", "MISSING_PERCENT", "ABS_SUM", "POSITIVE_COUNT", "NEGATIVE_COUNT", "ZERO_COUNT", "NONZERO_COUNT", "MAD", "SKEWNESS", "KURTOSIS", "COEFFICIENT_OF_VARIATION"}
+    if operation not in supported_operations:
+        return None
+    target = contract.target_column
+    groups = list(contract.grouping_columns)
+    if operation == "RATE" and target in groups:
+        groups = [g for g in groups if g != target]  # "the churn rate" is the overall rate
+    if any(g not in df.columns for g in groups):
+        return None
+    # The typed operation registry handles the expanded primitives and multiple grouping
+    # dimensions. Keep the legacy path for its established single-group RATE/share semantics.
+    if len(groups) > 1 or operation in {"DUPLICATE_ROW_COUNT", "VARIANCE", "STDDEV", "PERCENTILE", "MODE", "RANGE", "Q1", "Q3", "IQR", "MISSING_COUNT", "MISSING_PERCENT", "ABS_SUM", "POSITIVE_COUNT", "NEGATIVE_COUNT", "ZERO_COUNT", "NONZERO_COUNT", "MAD", "SKEWNESS", "KURTOSIS", "COEFFICIENT_OF_VARIATION"}:
+        if operation == "RATE" or contract.share_of_total:
+            return None  # these semantics require a separately defined denominator plan
+        try:
+            from packages.analytics_core.src.intelligence.analytical_operations import aggregate_frame
+            percentile = None
+            if operation == "PERCENTILE":
+                percentile = getattr(contract, "resolution_evidence", {}).get("percentile")
+                if percentile is None:
+                    return None
+            result = aggregate_frame(
+                df, operation=operation, target_column=target,
+                grouping_columns=groups, percentile=percentile,
+                filters=contract.filter_conditions,
+            )
+        except (ImportError, ValueError, TypeError, KeyError):
+            return None
+        if groups:
+            table = {}
+            rendered = []
+            for record in result["records"]:
+                group_values = record["group"]
+                label = " | ".join(f"{key}={value}" for key, value in group_values.items())
+                table[label] = {"group": group_values, "value": record["value"], "n": record["row_count"]}
+                rendered.append(f"{label}: {_num(record['value']) if record['value'] is not None else 'undefined'}")
+            headline = "; ".join(rendered[:MAX_GROUPS_REPORTED])
+            numbers = {**result, "table": table, "canonical_contract": contract.to_dict()}
+            return AnalystResult("DESCRIPTIVE", headline or "No groups matched the approved filters.",
+                [f"Executed {operation} grouped by {', '.join(groups)}.", headline] if headline else [f"Executed {operation}; no groups matched."],
+                numbers=numbers, descriptive=True, finding="distribution")
+        value = result.get("value")
+        # MODE may return a categorical string; numeric formatting must not coerce it or
+        # crash the entire answer path.
+        headline = (str(value) if operation == "MODE" else _num(value)) if value is not None else "undefined"
+        return AnalystResult("DESCRIPTIVE", headline, [f"Executed {operation} using the approved contract."],
+            numbers={**result, "canonical_contract": contract.to_dict()}, descriptive=True)
+    if operation != "ROW_COUNT" and (not target or target not in df.columns):
+        return None
+    if operation in {"SUM", "MEAN", "MEDIAN"} and not pd.api.types.is_numeric_dtype(df[target]):
+        return None
+    _truthy = {"1", "1.0", "true", "yes", "y", "t"}
+    _falsy = {"0", "0.0", "false", "no", "n", "f"}
+    if operation == "RATE":
+        # RATE is only defined for a binary flag; anything else is refused, not guessed.
+        seen = {str(v).strip().lower() for v in df[target].dropna().unique()}
+        if not seen or not seen <= (_truthy | _falsy):
+            return None
+
+    population = df.copy()
+    applied_filters = []
+    for condition in contract.filter_conditions:
+        col, op = condition.get("column"), str(condition.get("operator", "")).upper()
+        if col not in population.columns:
+            return None
+        try:
+            from packages.analytics_core.src.intelligence.intent_state import filter_condition_mask
+            mask = filter_condition_mask(population[col], op, condition.get("value"))
+            population = population.loc[mask]
+        except (TypeError, ValueError):
+            return None
+        applied_filters.append(dict(condition))
+
+    def aggregate(frame: pd.DataFrame) -> Any:
+        if operation == "ROW_COUNT": return int(len(frame))
+        series = frame[target]
+        if operation == "COUNT": return int(series.count())
+        if operation == "COUNT_DISTINCT": return int(series.nunique(dropna=True))
+        if operation == "SUM": return float(series.sum(skipna=True))
+        if operation == "MEAN": return float(series.mean(skipna=True))
+        if operation == "RATE":
+            flags = series.dropna().astype(str).str.strip().str.lower()
+            return float(flags.isin(_truthy).sum()) / float(len(flags)) if len(flags) else float("nan")
+        if operation == "MEDIAN": return float(series.median(skipna=True))
+        if operation == "MIN": return series.min(skipna=True)
+        return series.max(skipna=True)
+
+    if groups:
+        group = groups[0]
+        # Missing values are an explicit group, rather than silently disappearing.
+        group_values = population[group].where(population[group].notna(), "<missing>")
+        work = population.assign(**{group: group_values})
+        calculated = {str(key): aggregate(part) for key, part in work.groupby(group, dropna=False, sort=False)}
+        # Independent recomputation follows a different iteration path.
+        verified = {str(key): aggregate(work.loc[work[group] == key]) for key in work[group].drop_duplicates()}
+        if calculated != verified:
+            return None
+        descending = contract.ranking_direction != "ASC"
+        items = sorted(calculated.items(), key=lambda item: (item[1], item[0]), reverse=descending)
+        total = sum(calculated.values()) if contract.share_of_total else None
+        shares = (
+            {key: (float(value) / float(total) if total not in (None, 0) else None) for key, value in calculated.items()}
+            if contract.share_of_total
+            else {}
+        )
+        shares_verified = True
+        if contract.share_of_total and total not in (None, 0):
+            independent_total = sum(verified.values())
+            independent_shares = {
+                key: float(value) / float(independent_total)
+                for key, value in verified.items()
+            }
+            shares_verified = (
+                math.isclose(float(total), float(independent_total), rel_tol=1e-12, abs_tol=1e-12)
+                and all(
+                    math.isclose(shares[key], independent_shares[key], rel_tol=1e-12, abs_tol=1e-12)
+                    for key in shares
+                )
+            )
+            if not shares_verified:
+                return None
+        table = {
+            key: {
+                "value": value,
+                "n": int((work[group] == key).sum()),
+                **({"share_of_total": shares[key]} if contract.share_of_total else {}),
+            }
+            for key, value in items
+        }
+        _fmt = (lambda v: f"{v * 100:.2f}%") if operation == "RATE" else _num
+        headline = "; ".join(
+            (
+                f"{key}: {_fmt(value)} ({_num(shares[key] * 100)}%)"
+                if contract.share_of_total and shares[key] is not None
+                else f"{key}: {_fmt(value)}"
+            )
+            for key, value in items[:MAX_GROUPS_REPORTED]
+        )
+        numbers = {"table": table, "operation": operation, "grouping_columns": groups,
+                   "target_column": target, "population_row_count": len(population),
+                   "null_group_policy": "include_as_<missing>", "filters": applied_filters,
+                   "canonical_contract": contract.to_dict(),
+                   "verification": {
+                       "status": "verified",
+                       "method": "independent_group_iteration",
+                       "matches": True,
+                       "shares_match": shares_verified if contract.share_of_total else None,
+                   }}
+        if contract.share_of_total:
+            numbers["share_of_total"] = {
+                "denominator": total,
+                "available": total not in (None, 0),
+                "reason": None if total not in (None, 0) else "The grouped total is zero; proportions are undefined.",
+            }
+        total_for_pareto = sum(calculated.values())
+        details = [f"Executed {operation} grouped by {group}."]
+        val_series = pd.Series(list(calculated.values()))
+        non_zero_vals = val_series[val_series > 0]
+        is_degenerate = (
+            len(non_zero_vals) == 0
+            or non_zero_vals.nunique() <= 1
+            or all(v in (0.0, 1.0) for v in val_series)
+            or (float(val_series.var()) < 1e-6 if len(val_series) > 1 else True)
+        )
+        if total_for_pareto > 0 and len(calculated) >= 5 and not is_degenerate:
+            sorted_vals = sorted(calculated.values(), reverse=True)
+            cum = 0.0
+            p80_cnt = len(sorted_vals)
+            for idx, v in enumerate(sorted_vals):
+                cum += v / total_for_pareto
+                if cum >= 0.80:
+                    p80_cnt = idx + 1
+                    break
+            p80_val = sum(sorted_vals[:p80_cnt]) / total_for_pareto
+            numbers["pareto_80_count"] = p80_cnt
+            numbers["pareto_top_share"] = float(p80_val)
+            numbers["pareto_concentration"] = float(p80_val)
+            if p80_cnt <= max(1, len(calculated) // 2):
+                details.append(
+                    f"Pareto concentration (80/20): {p80_cnt} of {len(calculated)} {group} account for "
+                    f"{_pct(p80_val)} of total {target} (high concentration)."
+                )
+
+        caveats = []
+        small = [key for key, info in table.items() if info["n"] < MIN_GROUP_N]
+        if small:
+            caveats.append(f"Groups with fewer than {MIN_GROUP_N} rows ({', '.join(str(s) for s in small[:5])}) are not reliable.")
+
+        if headline:
+            details.append(headline)
+        return AnalystResult("DESCRIPTIVE", headline, details, numbers=numbers, descriptive=True, finding="distribution", caveats=caveats)
+
+    value = aggregate(population)
+    # Independently recompute the ungrouped operation from a fresh filtered view.
+    check = aggregate(population.copy())
+    if value != check:
+        return None
+    return AnalystResult("DESCRIPTIVE", (f"{value * 100:.2f}%" if operation == "RATE" else f"{_num(value)}"), [f"Executed {operation}."],
+        numbers={"value": value, "operation": operation, "target_column": target,
+                 "population_row_count": len(population), "filters": applied_filters,
+                 "canonical_contract": contract.to_dict(),
+                 "verification": {"status": "verified", "method": "independent_recomputation", "matches": True}},
+        descriptive=True)
+
+
 def build_analyst_result(
     question: str,
     df: pd.DataFrame,
@@ -3071,12 +3481,127 @@ def build_analyst_result(
     time_col: Optional[str] = None,
     default_aggregation: Optional[str] = None,
     candidate_dimensions: Optional[Sequence[str]] = None,
+    approved_contract: Optional[Any] = None,
 ) -> Optional[AnalystResult]:
     """Return the numbers-first answer for the resolved question, or ``None`` if the question
     shape is not one this layer can answer faithfully.  Never raises."""
     try:
-        if df is None or df.empty or not target or target not in df.columns:
+        if df is None or df.empty:
             return None
+        from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
+        # The controller supplies this only after validation of the persisted
+        # human-guidance event.  Never re-parse over an approved correction.
+        canonical_contract = approved_contract or compile_canonical_question_contract(question, df)
+        # An operation graph is executable only when it arrives on the approved contract;
+        # never accept a graph attached to an unapproved parse or a fresh freeform request.
+        if getattr(canonical_contract, "operation_graph", None) is not None and approved_contract is None:
+            return None
+        canonical_result = _execute_canonical_descriptive_contract(canonical_contract, df)
+        if canonical_result is not None:
+            return canonical_result
+        if approved_contract is not None and canonical_contract.family in {"COUNT", "SIMPLE_AGGREGATE"}:
+            return None
+        # An attempted count/simple aggregate with unresolved material semantics
+        # must not fall through to the legacy heuristic answer path: that would
+        # report a plausible number while silently ignoring the instruction.
+        if canonical_contract.family in {"COUNT", "SIMPLE_AGGREGATE"} and canonical_contract.completeness != "COMPLETE":
+            return None
+        if not target or target not in df.columns:
+            return None
+        if group is None:
+            from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
+
+            count_contract = compile_canonical_question_contract(question, df)
+            if (
+                count_contract.task_family == "COUNT"
+                and count_contract.resolution_confidence >= 0.70
+                and count_contract.target_column == target
+            ):
+                count_df = df
+                applied_filters = []
+                for condition in count_contract.filter_conditions:
+                    column = condition.get("column")
+                    value = condition.get("value")
+                    if column not in count_df.columns:
+                        return None
+                    try:
+                        from packages.analytics_core.src.intelligence.intent_state import filter_condition_mask
+                        op = str(condition.get("operator", "")).upper()
+                        count_df = count_df.loc[filter_condition_mask(count_df[column], op, value)]
+                    except (TypeError, ValueError):
+                        return None
+                    applied_filters.append(dict(condition))
+
+                if count_contract.requested_aggregation == "COUNT_DISTINCT":
+                    count = int(count_df[target].nunique(dropna=True))
+                else:
+                    count = int(count_df[target].count())
+                entity = count_contract.resolution_evidence.get("count", {}).get("entity_phrase", target)
+                filter_text = " and ".join(
+                    f"{item['column']} = '{item['value']}'" for item in applied_filters
+                )
+                scope = f" matching {filter_text}" if filter_text else ""
+                aggregation = count_contract.requested_aggregation or "COUNT"
+                return AnalystResult(
+                    kind="DESCRIPTIVE",
+                    headline=f"{count:,} {entity}{scope}.",
+                    details=[f"Counted {aggregation.replace('_', ' ').lower()} of {target}."],
+                    numbers={
+                        "count": count,
+                        "aggregation": aggregation,
+                        "target_column": target,
+                        "filters": applied_filters,
+                    },
+                    descriptive=True,
+                )
+        # Grouped count questions (e.g. "How many customers are in each region?" or "what are the different tiers of subscriptions?")
+        if group is not None and group in df.columns:
+            from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
+            count_contract = compile_canonical_question_contract(question, df)
+            is_count_task = count_contract.task_family in ("COUNT", "DESCRIPTIVE") and (
+                count_contract.estimand == "count"
+                or bool(re.search(r"\b(how\s+many|count|different|distinct|list|tiers?)\b", question, re.I))
+            )
+            if is_count_task and (target == group or not _is_numeric_like(df[target]) or count_contract.task_family == "COUNT"):
+                count_df = df
+                for condition in count_contract.filter_conditions:
+                    column = condition.get("column")
+                    value = condition.get("value")
+                    if column not in count_df.columns:
+                        return None
+                    try:
+                        from packages.analytics_core.src.intelligence.intent_state import filter_condition_mask
+                        count_df = count_df.loc[filter_condition_mask(count_df[column], str(condition.get("operator", "")).upper(), value)]
+                    except (TypeError, ValueError):
+                        return None
+                sub = count_df.dropna(subset=[group])
+                if not sub.empty:
+                    if target != group and target in sub.columns and count_contract.requested_aggregation == "COUNT_DISTINCT":
+                        counts = sub.groupby(group)[target].nunique()
+                    else:
+                        counts = sub[group].value_counts()
+                    counts = counts.sort_values(ascending=False)
+                    table_items = [f"{k}: {int(v):,} (n={int(v):,})" for k, v in counts.items()]
+                    details = [f"Breakdown by {group}: " + "; ".join(table_items[:MAX_GROUPS_REPORTED]) + ("; ..." if len(table_items) > MAX_GROUPS_REPORTED else ".")]
+                    total_cnt = int(counts.sum())
+                    distinct_groups = len(counts)
+                    entity = count_contract.resolution_evidence.get("count", {}).get("entity_phrase", target if target != group else f"{group}s")
+                    headline = f"Found {distinct_groups} distinct {group}s across {total_cnt:,} observations: " + ", ".join(f"{k} ({int(v):,})" for k, v in list(counts.items())[:4]) + ("." if len(counts) <= 4 else ", ...")
+                    return AnalystResult(
+                        kind="DESCRIPTIVE",
+                        headline=headline,
+                        details=details,
+                        numbers={
+                            "table": {str(k): {"value": float(v), "n": int(v)} for k, v in counts.items()},
+                            "total": total_cnt,
+                            "distinct_groups": distinct_groups,
+                            "group_column": group,
+                            "target_column": target,
+                        },
+                        descriptive=True,
+                        finding="distribution",
+                        executive_summary=headline,
+                    )
         expl = [c for c in (explanatory or []) if c in df.columns and c != target]
         is_count_rank = (group == target) and bool(re.search(r"\b(most|least|fewest|count|which)\b", question, re.I))
         group = group if (group in df.columns and (group != target or is_count_rank)) else None

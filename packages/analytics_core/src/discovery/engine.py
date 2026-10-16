@@ -78,7 +78,7 @@ class DiscoveryEngine:
                     dimensions.append({"column": col, "cardinality": unique_count, "top_values": series.value_counts().head(5).to_dict()})
 
             # Categorical / String Dimensions
-            elif pd.api.types.is_string_dtype(series) or pd.api.types.is_categorical_dtype(series) or pd.api.types.is_object_dtype(series):
+            elif pd.api.types.is_string_dtype(series) or isinstance(series.dtype, pd.CategoricalDtype) or pd.api.types.is_object_dtype(series):
                 if unique_count < row_count:
                     dimensions.append({
                         "column": col,

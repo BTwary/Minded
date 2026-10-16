@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -17,6 +17,7 @@ import {
   Upload,
 } from "lucide-react";
 import { fetchProjects, fetchProjectSummary } from "../lib/api";
+import { getWorkspaceRequestGeneration, workspaceResetEvents } from "../lib/workspaceState";
 
 const starterQuestions = [
   "Why did sales change this quarter?",
@@ -31,6 +32,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
+  const requestGenerationRef = useRef(0);
 
   useEffect(() => {
     // Check first-run experience status from local storage
@@ -43,20 +45,51 @@ export default function HomePage() {
       // In private mode or restricted context
     }
 
-    (async () => {
+    const loadSummary = async () => {
+      const requestId = ++requestGenerationRef.current;
+      const workspaceGeneration = getWorkspaceRequestGeneration();
+      setLoading(true);
+      setLoadError(false);
       try {
         const projects = await fetchProjects();
         const projectId = projects[0]?.id || "";
         if (projectId) {
-          setSummary(await fetchProjectSummary(projectId));
+          const result = await fetchProjectSummary(projectId);
+          if (requestId === requestGenerationRef.current && workspaceGeneration === getWorkspaceRequestGeneration()) {
+            setSummary(result);
+          }
+        } else if (requestId === requestGenerationRef.current) {
+          setSummary(null);
         }
       } catch (error) {
         console.error("Failed to load workspace summary:", error);
-        setLoadError(true);
+        if (requestId === requestGenerationRef.current && workspaceGeneration === getWorkspaceRequestGeneration()) {
+          setSummary(null);
+          setLoadError(true);
+        }
       } finally {
-        setLoading(false);
+        if (requestId === requestGenerationRef.current && workspaceGeneration === getWorkspaceRequestGeneration()) {
+          setLoading(false);
+        }
       }
-    })();
+    };
+    void loadSummary();
+
+    const onResetStarted = () => {
+      requestGenerationRef.current += 1;
+      setSummary(null);
+      setLoadError(false);
+      setLoading(true);
+    };
+    const onResetFinished = () => { void loadSummary(); };
+    window.addEventListener(workspaceResetEvents.started, onResetStarted);
+    window.addEventListener(workspaceResetEvents.completed, onResetFinished);
+    window.addEventListener(workspaceResetEvents.failed, onResetFinished);
+    return () => {
+      window.removeEventListener(workspaceResetEvents.started, onResetStarted);
+      window.removeEventListener(workspaceResetEvents.completed, onResetFinished);
+      window.removeEventListener(workspaceResetEvents.failed, onResetFinished);
+    };
   }, []);
 
   const handleDismissWelcome = () => {

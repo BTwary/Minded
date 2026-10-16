@@ -77,9 +77,13 @@ def run_phase2_final_certification():
         except Exception:
             pass
 
+    # Mirror apps/api/src/core/database.py: one pinned connection (StaticPool) so the controller's
+    # checkpointer and its main session never deadlock on SQLite's single-writer lock.
+    from sqlalchemy.pool import StaticPool
     test_engine = create_engine(
         f"sqlite:///{db_path}?timeout=30",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         echo=False,
     )
     Base.metadata.create_all(bind=test_engine)

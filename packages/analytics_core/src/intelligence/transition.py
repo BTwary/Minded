@@ -127,6 +127,7 @@ class ScientificTransitionService:
         semantic: Optional[Any] = None,
         dataset_fingerprints: Optional[Dict[str, str]] = None,
         primary_result_truncated: bool = False,
+        primary_result_digest: Optional[Dict[str, Any]] = None,
         # DEFECT-005: the target hypothesis's claim_type ("ASSOCIATION",
         # "PREDICTION", "OBSERVATION", or "" for the legacy root-cause
         # default). Used ONLY to route OBSERVATION/segmentation hypotheses
@@ -211,32 +212,57 @@ class ScientificTransitionService:
                     }
                 else:
                     v_col, d_col = v_candidates[0], d_candidates[0]
+                _sr_df = result_df
+                if len(v_candidates) == 1 and len(d_candidates) == 1:
+                    # Raw-row relations (e.g. the ANOVA/variance experiments select
+                    # `region, revenue` per order) have many rows per group. Treating each
+                    # raw row as a "group" reported the single largest ORDER's region as the
+                    # "leading category" with a ~0% share. Reduce to one row per group first,
+                    # from the full analysis frame when the carried result is only the head
+                    # of a larger (truncated) relation.
+                    _v, _d = v_candidates[0], d_candidates[0]
+                    if is_additive_metric and result_df[_d].duplicated().any():
+                        _src = result_df
+                        if (
+                            primary_df is not None
+                            and _d in getattr(primary_df, "columns", [])
+                            and _v in getattr(primary_df, "columns", [])
+                            and (primary_result_truncated or len(primary_df) >= len(result_df))
+                        ):
+                            _src = primary_df[[_d, _v]]
+                        _agg = "sum"
+                        _grouped = (
+                            _src.assign(**{_v: pd.to_numeric(_src[_v], errors="coerce")})
+                            .groupby(_d, dropna=True, as_index=False)[_v]
+                            .agg(_agg)
+                        )
+                        _sr_df = _grouped
                 if len(v_candidates) == 1 and len(d_candidates) == 1 and is_additive_metric:
                     # Additive metric: "share of total" is a scientifically
                     # meaningful statement -- SUM across categories equals the
                     # grand total, so one category's fraction of it is well-defined.
-                    values = pd.to_numeric(result_df[v_col], errors="coerce")
+                    values = pd.to_numeric(_sr_df[v_col], errors="coerce")
                     if values.notna().any() and (values < 0).any():
                         structured_res = {
                             "dimension": d_col,
                             "metric": v_col,
                             "top_value": None,
                             "top_share_pct": None,
-                            "row_count": len(result_df),
+                            "row_count": len(_sr_df),
                             "share_status": "UNAVAILABLE_NEGATIVE_COMPONENTS",
                             "share_reason": "Signed/negative additive components make concentration-as-share ambiguous; no percentage was fabricated.",
                         }
                     else:
                         total = float(values.fillna(0).sum())
                         if total > 0:
-                            sorted_df = result_df.reindex(values.sort_values(ascending=False).index)
+                            sorted_df = _sr_df.reindex(values.sort_values(ascending=False).index)
                             top_row = sorted_df.iloc[0]
                             structured_res = {
                                 "dimension": d_col,
                                 "metric": v_col,
                                 "top_value": str(top_row[d_col]),
                                 "top_share_pct": round(float(top_row[v_col]) / total * 100, 2),
-                                "row_count": len(result_df),
+                                "row_count": len(_sr_df),
                                 "share_status": "COMPUTED",
                             }
                 elif len(v_candidates) == 1 and len(d_candidates) == 1:
@@ -251,7 +277,7 @@ class ScientificTransitionService:
                     # rates has no business interpretation). The only valid
                     # comparison is which group has the highest/lowest value
                     # of the correctly-aggregated metric itself.
-                    sorted_df = result_df.reindex(result_df[v_col].sort_values(ascending=False).index)
+                    sorted_df = _sr_df.reindex(_sr_df[v_col].sort_values(ascending=False).index)
                     top_row = sorted_df.iloc[0]
                     bottom_row = sorted_df.iloc[-1]
                     spread = float(top_row[v_col]) - float(bottom_row[v_col])
@@ -264,7 +290,7 @@ class ScientificTransitionService:
                         "bottom_metric_value": round(float(bottom_row[v_col]), 6),
                         "spread": round(spread, 6),
                         "is_additive": False,
-                        "row_count": len(result_df),
+                        "row_count": len(_sr_df),
                     }
         raw_obs = RawObservationRecord(
             observation_id=f"OBS-{_uuid.uuid4().hex[:8]}",
@@ -299,6 +325,7 @@ class ScientificTransitionService:
             weight_column=getattr(metric_definition, "weight_column", None),
             primary_result_df=result_df,
             primary_result_truncated=primary_result_truncated,
+            primary_result_digest=primary_result_digest,
             relational_plan=relational_plan,
             relation_tables=relation_tables,
             primary_result_column=primary_result_column,

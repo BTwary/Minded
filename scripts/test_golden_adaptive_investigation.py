@@ -87,7 +87,10 @@ def run_9_golden_adaptive_tests():
 
     temp_dir = tempfile.mkdtemp(prefix="aaos_adaptive_golden_")
     db_path = os.path.join(temp_dir, "adaptive_test.db")
-    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+    # Mirror apps/api/src/core/database.py: one pinned connection (StaticPool) so the controller's
+    # checkpointer and its main session never deadlock on SQLite's single-writer lock.
+    from sqlalchemy.pool import StaticPool
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
 
@@ -110,7 +113,11 @@ def run_9_golden_adaptive_tests():
         "row_count": [1000, 1000, 1000, 1000],
     })
     detector = ConcentrationPatternDetector()
-    expl = detector.detect(obs_df, {})
+    # Two numeric columns are present, so column order must not decide which one is the metric:
+    # without a declared estimand the detector fails closed...
+    assert detector.detect(obs_df, {}) is None
+    # ...and with the estimand declared it finds the concentration.
+    expl = detector.detect(obs_df, {"value_column": "cost_metric", "dimension_column": "datacenter_region"})
     assert expl is not None
     assert expl.dominant_value == "us-east"
     assert expl.dominant_share > 0.90
@@ -156,11 +163,16 @@ def run_9_golden_adaptive_tests():
     # [GOLDEN 3] In-Loop Adversarial Attack & Targeted Replanning
     # ------------------------------------------------------------------------
     print("\n[GOLDEN 3] Testing In-Loop Adversarial Attack & Dynamic Counter-Experiments...")
-    df_simpsons = pd.DataFrame({
-        "department": ["Eng", "Sales"] * 200,
-        "seniority": ["Junior", "Junior", "Senior", "Senior"] * 100,
-        "bonus_pct": [12.0, 15.0, 25.0, 22.0] * 100,
-    })
+    # A genuine Simpson's reversal: Eng out-earns Sales by ~2 points inside EVERY seniority level, yet
+    # Eng is behind overall because Eng is mostly Junior (low bonus) and Sales mostly Senior (high bonus).
+    # Mixed-sign strata would be effect modification, which the detector deliberately does not flag.
+    _rng = np.random.RandomState(3)
+    _cells = [("Eng", "Junior", 180, 12.0), ("Eng", "Senior", 20, 27.0),
+              ("Sales", "Junior", 20, 10.0), ("Sales", "Senior", 180, 25.0)]
+    df_simpsons = pd.DataFrame(
+        [(d, s, v) for d, s, n, mu in _cells for v in _rng.normal(mu, 1.0, n)],
+        columns=["department", "seniority", "bonus_pct"],
+    )
     h_lead = PredictiveHypothesis(
         id="HYP-01",
         hypothesis_code="HYP-01",
@@ -197,13 +209,30 @@ def run_9_golden_adaptive_tests():
     # [GOLDEN 4] Multiverse Robustness Influencing Candidate Selection
     # ------------------------------------------------------------------------
     print("\n[GOLDEN 4] Testing Multiverse Robustness Engine & Candidate Scoring...")
+    # Row-level observations (250 per region) so trimming / aggregation variants are meaningful.
+    _rng4 = np.random.RandomState(0)
+    obs_rows = pd.DataFrame(
+        [(reg, _rng4.normal(mu, mu * 0.1))
+         for reg, mu in (("us-east", 94.0), ("us-west", 2.0), ("eu-central", 2.5), ("ap-southeast", 1.5))
+         for _ in range(250)],
+        columns=["datacenter_region", "cost_metric"],
+    )
     multi_report = MultiverseEngine.evaluate_specification_curve(
-        df=obs_df,
+        df=obs_rows,
         dimension_col="datacenter_region",
         target_metric_col="cost_metric",
     )
     assert multi_report.total_specifications >= 3
     assert multi_report.robustness_pct >= 90.0
+
+    # Four one-row aggregates are fragile by construction: trimming removes the dominant row, so the
+    # specification curve must NOT call that finding robust.
+    agg_report = MultiverseEngine.evaluate_specification_curve(
+        df=obs_df,
+        dimension_col="datacenter_region",
+        target_metric_col="cost_metric",
+    )
+    assert agg_report.robustness_pct < 90.0
 
     scored_exps = EIGOptimizer.score_candidate_experiments(
         replan_res.candidates,
@@ -211,8 +240,15 @@ def run_9_golden_adaptive_tests():
         multiverse_report=multi_report,
     )
     assert len(scored_exps) >= 1
-    assert scored_exps[0].robustness_value >= 0.90
-    print(f" -> PASSED: Multiverse specification curve evaluated ({multi_report.robustness_pct:.1f}% robustness) and integrated into candidate scores.")
+    # The investigation-level multiverse score is NOT mass-copied onto candidates (that would manufacture
+    # differentiation between experiments): a candidate's robustness_value is its own explicit value, and
+    # supplying the report must not change any candidate's value or the ranking.
+    unscored_report = EIGOptimizer.score_candidate_experiments(replan_res.candidates, [h_lead])
+    assert [s.robustness_value for s in scored_exps] == [s.robustness_value for s in unscored_report]
+    assert [s.experiment.code for s in scored_exps] == [s.experiment.code for s in unscored_report]
+    for s in scored_exps:
+        assert s.robustness_value == getattr(s.experiment, "robustness_value", 0.0)
+    print(f" -> PASSED: Multiverse specification curve evaluated ({multi_report.robustness_pct:.1f}% robustness); candidate robustness stays candidate-specific.")
 
     # ------------------------------------------------------------------------
     # [GOLDEN 5] N-Hypothesis Bayesian Updating with ANOVA Effect Size
@@ -253,11 +289,15 @@ def run_9_golden_adaptive_tests():
     # [GOLDEN 6] Active Evidence Pattern Discovery (Observation != Hypothesis)
     # ------------------------------------------------------------------------
     print("\n[GOLDEN 6] Testing Active Evidence Pattern Discovery (Observation != Hypothesis)...")
+    _rng6 = np.random.RandomState(6)
     sec_df = pd.DataFrame({
-        "segment_name": ["Alpha", "Beta", "Gamma"],
-        "metric_delta": [500.0, -20.0, 10.0],
+        "segment_name": np.repeat(["Alpha", "Beta", "Gamma"], 10),
+        "metric_delta": np.concatenate([_rng6.normal(m, 15.0, 10) for m in (500.0, -20.0, 10.0)]),
     })
     diff_detector = SegmentDifferenceDetector()
+    # Three one-row-per-segment aggregates have no within-group variance: descriptive, not a finding.
+    assert diff_detector.detect(pd.DataFrame({
+        "segment_name": ["Alpha", "Beta", "Gamma"], "metric_delta": [500.0, -20.0, 10.0]}), {}) is None
     diff_expl = diff_detector.detect(sec_df, {})
     assert diff_expl is not None
     assert diff_expl.pattern_name.lower() == "segment_difference"

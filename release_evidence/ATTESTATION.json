@@ -1,0 +1,41 @@
+{
+  "certification_datasets": {
+    "diamonds.csv": "9574730b03aba241d899c4a97511c5061b19358fab89510774fb6c24168345c4",
+    "flights.csv": "237d834127d9c6355630d8f443a7a2377b5925923010009b59809ba0b67f4fac",
+    "mpg.csv": "c14b8b855ea7ee86cb9736bf8caaf281c4685ca08826f3eb2acaccaaf40f0d5a",
+    "penguins.csv": "e07636bd8af74260099ea2f8678e2eabbf35def579940cc76f67061ee16c06c1",
+    "planets.csv": "a6d10044887e17396974525a366f5fa2e4b34df70f491e64eb9943de0e3d3825",
+    "taxis.csv": "08d6d71784dbaa2651fee37fc03389754194c05d72d2d19cbc2c799dea6ac09d",
+    "tips.csv": "e54cc4d2ce1bff65d32ca60b3e4b802e06bde1d7e7caf6f796f6bf7370e863b0",
+    "titanic.csv": "81787d320d7f7b03df935e91de8bd19e11d45c5bbcab86ef4d4a76dc91b7d4f2"
+  },
+  "files": {
+    "alembic.ini": "51ba04221b23920e495f297bb8be8a7608f9a1a48f8a51fc39cd6e724bc47658",
+    "data/certification/checksums.sha256": "da639ea678230e406f08f358f0c2349570275fc6414da96c66f968fd557aa0e4",
+    "docs/AAOS_V40_RELEASE_STATUS.md": "5f87ca3d3d76b23a579e6626c14b9d687e2eb187dc696007bbf11a56427f01cb",
+    "real_stress_results_clean.json": "1e92da7dfe6cf7054aa2f977edf6bf2388061d230acf079825daa11fca836810",
+    "real_stress_results_raw.json": "df591a887e734e2489c5774d2fb5c1d24a43606eb169fd34d5c73a2e08eae333",
+    "requirements-ai.txt": "906a3df835493fe52525254aed8a5bb89dee37ef375ab63629b4440ac0413936",
+    "requirements-cloud.txt": "98095041c8046df46e951a34203b956c2d1bb9effc245af6df1472fabd51a20a",
+    "requirements-demo.txt": "834f6a5f83618d00ff80803f043d0c73353711879eb6fd345d2dbe3427d6e685",
+    "requirements-hf-space.txt": "4d8031406d04ab37ef69a1f82b2ee52471a7d3d59381c8693364fa3ab4e8d4e5",
+    "requirements-lock.txt": "88cbf26fb14f00f48aab75dd32cf243ba5c4a4db644c292c7a2aefae488a84dc",
+    "requirements-server.txt": "0363bb5d6670e527a6eaabdfa83a8f7529c2f6af142ac833b80bd8ae1287addd",
+    "requirements.txt": "4f6ab0eded583085c3788698cd198e9797276147f33982f07041821bad7b3dd4",
+    "tests/independent_release/manifest.toml": "afd6990243bea6a3f6e91997336d20ed6a1a04547b5a8e4fcc3e42a4a4677831"
+  },
+  "gate": {
+    "check_results": {
+      "PASS": 36
+    },
+    "clean_room_verified": true,
+    "decision": "RELEASE-CANDIDATE",
+    "report_file": "release_evidence/GATE_REPORT.json",
+    "report_sha256": "c3d892e96a0df04bbafa7f6304e01d14ec4577621ad051ef7a4ae442ce2f33da"
+  },
+  "platform": "Windows-11-10.0.26300-SP0",
+  "python": "3.14.5",
+  "schema": 1,
+  "source_files": 703,
+  "source_tree_sha256": "05909cf0ed9f6c6398dfa8e69a6ddff56c3ac7d79db2df24858a01e75a4ac3df"
+}

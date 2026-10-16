@@ -77,8 +77,8 @@ def test_project_reset_is_project_scoped(tmp_path, monkeypatch):
 
     assert db.get(Dataset, "d1") is None
     assert db.get(DatasetVersion, "v1") is None
-    assert db.get(AlertRule, "r1") is None
-    assert db.get(AlertEvent, "e1") is None
+    assert db.get(AlertRule, "r1").is_active is False
+    assert db.get(AlertEvent, "e1") is not None
     assert db.get(Dataset, "d2") is not None
     assert db.get(DatasetVersion, "v2") is not None
     assert db.get(AlertRule, "r2") is not None

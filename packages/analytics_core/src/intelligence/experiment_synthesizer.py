@@ -1,4 +1,4 @@
-"""ExperimentSynthesizer: Dynamic candidate experiment generation from predictive hypotheses,
+﻿"""ExperimentSynthesizer: Dynamic candidate experiment generation from predictive hypotheses,
 unresolved predictions, and discovered evidence.
 """
 from dataclasses import dataclass, field, asdict
@@ -14,6 +14,7 @@ from packages.analytics_core.src.intelligence.likelihood_model import concentrat
 from packages.schemas.src.analysis import AggregationType
 from packages.schemas.src.semantic_role import ExperimentRole
 from packages.analytics_core.src.relational.plan_serialization import plan_to_dict
+from packages.analytics_core.src.relational.expressions import quote_sql_identifier
 
 # Named thresholds shared between hypothesis narrative text and the EIG
 # likelihood model below, so the number a hypothesis claims and the number
@@ -316,7 +317,7 @@ class ExperimentSynthesizer:
         if access is None or not hypotheses:
             return []
         from packages.analytics_core.src.relational.compiler import JoinHop, RelationalPlan
-        from packages.analytics_core.src.relational.expressions import AggExpr, ColumnRef, Comparison, Literal
+        from packages.analytics_core.src.relational.expressions import AggExpr, ColumnRef, Comparison, Literal, quote_sql_identifier
 
         hops = [JoinHop(**hop) for hop in access.join_hops]
         typed_filters = [
@@ -783,10 +784,12 @@ class ExperimentSynthesizer:
                 # 3. Distributional Uniformity Test (Counter Hypothesis)
                 unif_code = "EXP-UNIF" if idx == 1 else f"EXP-UNIF-{h.hypothesis_code}"
                 unif_metric_expr = MetricSemanticsResolver.sql_aggregation_expression(metric_def, "mean_metric")
+                quoted_metric = quote_sql_identifier(metric)
+                quoted_dimension = quote_sql_identifier(h_dim) if h_dim else None
                 unif_sql = (
-                    f"SELECT {h_dim}, {unif_metric_expr}, STDDEV({metric}) AS std_metric FROM data_table GROUP BY {h_dim} ORDER BY mean_metric DESC"
+                    f"SELECT {quoted_dimension}, {unif_metric_expr}, STDDEV({quoted_metric}) AS \"std_metric\" FROM data_table GROUP BY {quoted_dimension} ORDER BY \"mean_metric\" DESC"
                     if h_dim else
-                    f"SELECT {unif_metric_expr}, STDDEV({metric}) AS std_metric FROM data_table"
+                    f"SELECT {unif_metric_expr}, STDDEV({quoted_metric}) AS \"std_metric\" FROM data_table"
                 )
                 candidates.append(
                     CandidateExperiment(
@@ -815,6 +818,11 @@ class ExperimentSynthesizer:
                         target_metric=metric,
                         metrics=[metric],
                         dimensions=[h_dim] if h_dim else [],
+                        # The query aliases its aggregate "mean_metric" whatever the metric's aggregation
+                        # (an additive metric emits SUM(...) AS mean_metric). Declare it, because the
+                        # SUM inference only looks for "total_metric" and the multi-row result would
+                        # otherwise fail closed, ending the loop without testing anything.
+                        primary_result_column="mean_metric",
                         expected_outcomes=["Uniform mean and spread across all categories (< 5% dispersion)"],
                     )
                 )
@@ -1583,3 +1591,5 @@ class ExperimentSynthesizer:
         ]
 
         return replan
+
+

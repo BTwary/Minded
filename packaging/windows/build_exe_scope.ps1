@@ -1,11 +1,17 @@
 param(
   [string]$PythonRuntimePath = "",
-  [string]$OfflineBundleRoot = (Join-Path $PSScriptRoot 'bundle')
+  [string]$OfflineBundleRoot = (Join-Path $PSScriptRoot 'bundle'),
+  [string]$PyInstallerWorkRoot = ""
 )
 $ErrorActionPreference = "Stop"
 
 Write-Host "MindEd AA-OS offline desktop bundle build"
 Write-Host "Before running this script, install packaging\windows\requirements-desktop.txt (pywebview, pyinstaller) into the build Python/venv."
+$GeneratedPyInstallerWorkRoot = -not $PyInstallerWorkRoot
+if ($GeneratedPyInstallerWorkRoot) {
+  $PyInstallerWorkRoot = Join-Path $env:TEMP ("MindedAAOS-PyInstaller-" + [guid]::NewGuid().ToString('N'))
+}
+New-Item -ItemType Directory -Force -Path $PyInstallerWorkRoot | Out-Null
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 # Select authoritative build Python: explicit $PythonRuntimePath if specified, else repo .venv, else active Python
@@ -52,6 +58,13 @@ New-Item -ItemType Directory -Force -Path $OfflineBundleRoot | Out-Null
 & $BuildPython -m pip show pywebview *> $null
 if ($LASTEXITCODE -ne 0) { throw "pywebview is required in the isolated release-build environment (native desktop window)." }
 
+# The release toolchain must be exactly the hash-locked desktop closure, and the analytical
+# runtime exactly requirements-lock.txt -- ranges are not a reproducible build.
+& $BuildPython (Join-Path $Root 'scripts\verify_desktop_pins.py') (Join-Path $PSScriptRoot 'requirements-desktop.txt')
+if ($LASTEXITCODE -ne 0) { throw "Desktop build toolchain does not match packaging\windows\requirements-desktop.txt." }
+& $BuildPython (Join-Path $Root 'scripts\verify_desktop_pins.py') (Join-Path $Root 'requirements-lock.txt')
+if ($LASTEXITCODE -ne 0) { throw "Build environment does not match requirements-lock.txt." }
+
 # --windowed / --noconsole: no terminal window is shown, matching a normal
 # installed application. --hidden-import covers pywebview's Windows backend,
 # which PyInstaller's static analysis cannot always discover on its own.
@@ -62,7 +75,11 @@ if (Test-Path $AppIcon -PathType Leaf) { $IconArgs = @('--icon', $AppIcon) }
 $OnefilePath = Join-Path $OfflineBundleRoot 'standalone'
 if (Test-Path $OnefilePath) { Remove-Item -Recurse -Force $OnefilePath }
 
-& $BuildPython -m PyInstaller --noconfirm --clean --name MindEd_AAOS_v1.0.0_Windows_x64 --onefile --windowed `
+$PreviousPyInstallerErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& $BuildPython -m PyInstaller --noconfirm --clean --name MindEd_AAOS_v1.0.0_Windows_x64 --onedir --noupx --windowed `
+  --workpath $PyInstallerWorkRoot `
+  --specpath $PyInstallerWorkRoot `
   --paths $Root `
   --add-data "$StaticOut;frontend" `
   --add-data "$AppIcon;." `
@@ -88,18 +105,35 @@ if (Test-Path $OnefilePath) { Remove-Item -Recurse -Force $OnefilePath }
   --exclude-module jupyter `
   @IconArgs `
   --distpath $OnefilePath (Join-Path $Root 'packaging\windows\minded_entry.py')
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller bundle failed." }
+$PyInstallerExitCode = $LASTEXITCODE
+$ErrorActionPreference = $PreviousPyInstallerErrorActionPreference
+if ($PyInstallerExitCode -ne 0) { throw "PyInstaller bundle failed (exit code $PyInstallerExitCode)." }
 
-$BuiltExe = Join-Path $OnefilePath 'MindEd_AAOS_v1.0.0_Windows_x64.exe'
+# One-folder build: <name>\<name>.exe + <name>\_internal (the real Python/library payload).
+# Unlike --onefile, nothing is unpacked to %TEMP% on every launch, so the app opens in seconds.
+$BuiltDir = Join-Path $OnefilePath 'MindEd_AAOS_v1.0.0_Windows_x64'
+$BuiltExe = Join-Path $BuiltDir 'MindEd_AAOS_v1.0.0_Windows_x64.exe'
+if (-not (Test-Path $BuiltExe -PathType Leaf)) { throw "PyInstaller one-folder output not found at $BuiltExe" }
+if (-not (Test-Path (Join-Path $BuiltDir '_internal') -PathType Container)) { throw "PyInstaller _internal payload missing from $BuiltDir" }
 $Bundle = Join-Path $OfflineBundleRoot 'MindedAAOS'
 New-Item -ItemType Directory -Force -Path $Bundle | Out-Null
-Copy-Item $BuiltExe (Join-Path $Bundle 'MindEd_AAOS_v1.0.0_Windows_x64.exe') -Force
-Copy-Item $BuiltExe (Join-Path $Bundle 'MindedAAOS.exe') -Force
-New-Item -ItemType Directory -Force -Path (Join-Path $Bundle '_internal') | Out-Null
+Copy-Item (Join-Path $BuiltDir '*') $Bundle -Recurse -Force
+# Fallback launcher name expected by install.ps1 / MindedLauncher.cs (must stay beside _internal).
+Copy-Item (Join-Path $Bundle 'MindEd_AAOS_v1.0.0_Windows_x64.exe') (Join-Path $Bundle 'MindedAAOS.exe') -Force
 Copy-Item $StaticOut (Join-Path $Bundle 'frontend') -Recurse -Force
 $IconSrc = Join-Path $PSScriptRoot 'app.ico'
 if (Test-Path $IconSrc -PathType Leaf) { Copy-Item $IconSrc (Join-Path $Bundle 'app.ico') -Force }
 Set-Content -Path (Join-Path $Bundle 'OFFLINE_MODE') -Value '1' -Encoding ascii
+
+# Certified local wheelhouse (required by scripts/offline_desktop_certification.py and install.ps1):
+# every wheel is fetched hash-verified from the two lock files, binary-only, for this build Python.
+$Wheelhouse = Join-Path $Bundle 'wheelhouse'
+New-Item -ItemType Directory -Force -Path $Wheelhouse | Out-Null
+foreach ($Lock in @((Join-Path $Root 'requirements-lock.txt'), (Join-Path $PSScriptRoot 'requirements-desktop.txt'))) {
+  & $BuildPython -m pip download --require-hashes --only-binary=:all: --no-deps -r $Lock -d $Wheelhouse
+  if ($LASTEXITCODE -ne 0) { throw "Could not build the certified wheelhouse from $Lock." }
+}
+if (-not (Get-ChildItem -Path $Wheelhouse -Filter '*.whl' -File | Select-Object -First 1)) { throw "Wheelhouse is empty." }
 
 $TargetExe = Join-Path $Bundle 'MindedAAOS.exe'
 $ProductExe = Join-Path $Bundle 'MindEd_AAOS_v1.0.0_Windows_x64.exe'
@@ -133,7 +167,13 @@ $Hashes | Out-File -FilePath $SumsPath -Encoding ascii
   console = 'hidden'
 } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Bundle 'MindedAAOS.exe.manifest.json') -Encoding utf8
 
+# Certify the staged bundle before anything is released from it.
+& $BuildPython (Join-Path $Root 'scripts\offline_desktop_certification.py') --bundle $OfflineBundleRoot
+if ($LASTEXITCODE -ne 0) { throw "Offline desktop certification FAILED for $OfflineBundleRoot." }
+
 Write-Host "Offline desktop bundle created at: $Bundle"
 Write-Host "Bundle artifacts:"
 Get-ChildItem -Path $Bundle | Select-Object Name, Length
-
+if ($GeneratedPyInstallerWorkRoot) {
+  Remove-Item -Recurse -Force $PyInstallerWorkRoot
+}

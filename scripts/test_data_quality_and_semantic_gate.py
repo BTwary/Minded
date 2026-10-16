@@ -30,17 +30,25 @@ class TestDataQualityAndSemanticGate(unittest.TestCase):
         print(" -> [TEST 01] Empty dataset fail-closed rejection: PASSED")
 
     def test_02_severe_missingness_detection(self):
-        """100% missing columns flagged as critical issues."""
+        """A 100%-null column blocks only the analysis that needs it; otherwise it is surfaced as a warning."""
         df = pd.DataFrame({
             "id": range(20),
             "all_nulls": [np.nan] * 20,
             "metric": [10.0 + i for i in range(20)],
         })
-        assessment = DataQualityGate.evaluate_fitness(df, "missing_data")
-        self.assertIn("Column 'all_nulls' is 100% missing (all nulls).", assessment.critical_issues)
-        self.assertEqual(assessment.fitness_verdict, "UNFIT")
-        self.assertFalse(assessment.can_proceed)
-        print(" -> [TEST 02] Severe missingness critical issue: PASSED")
+        # Unused by the question: visible as a warning, but it must not block unrelated analysis.
+        unrelated = DataQualityGate.evaluate_fitness(df, "missing_data", metric_col="metric")
+        self.assertEqual(unrelated.critical_issues, [])
+        self.assertTrue(any("'all_nulls' is 100% missing" in w for w in unrelated.warnings))
+        self.assertTrue(unrelated.can_proceed)
+        self.assertNotEqual(unrelated.fitness_verdict, "UNFIT")
+
+        # Required by the question (it is the resolved metric): critical, fail-closed.
+        required = DataQualityGate.evaluate_fitness(df, "missing_data", metric_col="all_nulls")
+        self.assertTrue(any("'all_nulls' is 100% missing" in c and "required" in c for c in required.critical_issues))
+        self.assertEqual(required.fitness_verdict, "UNFIT")
+        self.assertFalse(required.can_proceed)
+        print(" -> [TEST 02] Severe missingness: scoped critical vs warning: PASSED")
 
     def test_03_constant_column_detection(self):
         """Zero-variance constant columns detected and penalized."""

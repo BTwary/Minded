@@ -25,10 +25,21 @@ namespace Minded.Uninstall
 
             try
             {
-                // Kill running Minded processes
-                foreach (Process p in Process.GetProcessesByName("Minded"))
+                // Stop every process of the installed product: the launcher (Minded.exe), the
+                // packaged application (MindedAAOS.exe) and the PyInstaller-named executable.
+                // Isolated analytical workers re-run the same executable, so they match too.
+                string[] productProcesses = { "Minded", "MindedAAOS", "MindEd_AAOS_v1.0.0_Windows_x64" };
+                string stillRunning = StopProductProcesses(productProcesses, 15000);
+                if (stillRunning != null)
                 {
-                    try { p.Kill(); } catch { }
+                    MessageBox.Show(
+                        "Minded is still running (" + stillRunning + ") and could not be closed.\n\n" +
+                        "Close it from Task Manager and run the uninstaller again. Nothing was removed.",
+                        "Uninstall Incomplete",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                    return;
                 }
 
                 // 1. Remove Desktop Shortcut
@@ -71,6 +82,40 @@ namespace Minded.Uninstall
             {
                 MessageBox.Show("Error during uninstall: " + ex.Message, "Uninstall Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        // Returns null when every matching process has exited, otherwise the name of one that has not.
+        static string StopProductProcesses(string[] names, int timeoutMs)
+        {
+            int selfId = Process.GetCurrentProcess().Id;
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            string remaining = null;
+            do
+            {
+                remaining = null;
+                foreach (string name in names)
+                {
+                    foreach (Process p in Process.GetProcessesByName(name))
+                    {
+                        if (p.Id == selfId) continue;
+                        try
+                        {
+                            if (!p.HasExited)
+                            {
+                                p.Kill();
+                                p.WaitForExit(2000);
+                            }
+                            if (!p.HasExited) remaining = name;
+                        }
+                        catch (Exception)
+                        {
+                            // Access denied or already gone: re-check on the next pass.
+                            try { if (!p.HasExited) remaining = name; } catch (Exception) { }
+                        }
+                    }
+                }
+            } while (remaining != null && DateTime.UtcNow < deadline);
+            return remaining;
         }
     }
 }

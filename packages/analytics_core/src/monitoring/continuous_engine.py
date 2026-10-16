@@ -1,159 +1,265 @@
-"""Continuous Autonomous Monitoring Engine: Detects Anomaly Deviations & Triggers Autonomous Investigation Loops."""
+"""Persisted, version-to-version evaluation for local alert rules."""
+from __future__ import annotations
+
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-import numpy as np
+import hashlib
+import json
+from typing import Any, Optional
+
 import pandas as pd
 from sqlalchemy.orm import Session
-from apps.api.src.core.config import settings
-from apps.api.src.models.entities import AlertEvent, AlertRule, Dataset, Investigation, gen_uuid
+
+from apps.api.src.models.entities import AlertEvent, AlertRule, Dataset, DatasetVersion
 from apps.api.src.services.dataset_service import DatasetService
-from packages.analytics_core.src.runtime.controller import InvestigationController
-from packages.analytics_core.src.execution.queue import DatabaseQueueProvider
-from packages.analytics_core.src.execution.state_machine import InvestigationState
 from packages.analytics_core.src.semantic.metric_semantics import MetricSemanticsResolver
 from packages.schemas.src.analysis import AggregationType
 
 
 class ContinuousMonitorEngine:
-    """Evaluates active alert rules, detects distribution anomalies, and autonomously dispatches root-cause investigations."""
+    """Evaluate configured rules against compatible adjacent dataset versions."""
 
     def __init__(self, db: Session):
         self.db = db
         self.dataset_service = DatasetService(db)
-        self.controller = InvestigationController(session_factory=lambda: db)
-        self.queue = DatabaseQueueProvider(session_factory=lambda: db)
 
-    def evaluate_project_rules(self, project_id: str) -> List[Dict[str, Any]]:
-        """Evaluate all active monitoring rules for a given project."""
-        rules = (
-            self.db.query(AlertRule)
-            .filter(AlertRule.project_id == project_id, AlertRule.is_active == True)
-            .all()
+    def evaluate_project_rules(
+        self,
+        project_id: str,
+        *,
+        trigger: str = "manual",
+        dataset_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        query = self.db.query(AlertRule).filter(
+            AlertRule.project_id == project_id,
+            AlertRule.is_active.is_(True),
         )
-        triggered_events = []
+        if dataset_id:
+            query = query.filter(AlertRule.dataset_id == dataset_id)
 
-        for rule in rules:
+        outcomes: list[dict[str, Any]] = []
+        for rule in query.order_by(AlertRule.created_at.asc()).all():
+            outcomes.append(self._evaluate_rule(rule, trigger))
+        return outcomes
+
+    @staticmethod
+    def _aggregate(frame: pd.DataFrame, column: str, semantics: Any) -> Optional[float]:
+        aggregation = semantics.aggregation_type
+        if aggregation in {AggregationType.RATE, AggregationType.RATIO, AggregationType.PROPORTION}:
+            numerator = semantics.numerator_column
+            denominator = semantics.denominator_column
+            if numerator and denominator and numerator in frame and denominator in frame:
+                numerator_sum = pd.to_numeric(frame[numerator], errors="coerce").sum(min_count=1)
+                denominator_sum = pd.to_numeric(frame[denominator], errors="coerce").sum(min_count=1)
+                if pd.isna(numerator_sum) or pd.isna(denominator_sum) or denominator_sum == 0:
+                    return None
+                return float(numerator_sum / denominator_sum)
+            aggregation = (
+                AggregationType.WEIGHTED_MEAN
+                if semantics.weight_column
+                else AggregationType.MEAN
+            )
+
+        if aggregation == AggregationType.WEIGHTED_MEAN and semantics.weight_column:
+            weight_column = semantics.weight_column
+            if weight_column not in frame:
+                return None
+            pairs = pd.DataFrame({
+                "metric": pd.to_numeric(frame[column], errors="coerce"),
+                "weight": pd.to_numeric(frame[weight_column], errors="coerce"),
+            }).dropna()
+            weight_sum = pairs["weight"].sum()
+            if pairs.empty or weight_sum == 0:
+                return None
+            return float((pairs["metric"] * pairs["weight"]).sum() / weight_sum)
+
+        values = pd.to_numeric(frame[column], errors="coerce").dropna()
+        if values.empty:
+            return None
+        if aggregation == AggregationType.SUM:
+            return float(values.sum(min_count=1))
+        if aggregation == AggregationType.COUNT:
+            return float(values.count())
+        if aggregation == AggregationType.COUNT_DISTINCT:
+            return float(values.nunique())
+        if aggregation == AggregationType.MEAN:
+            return float(values.mean())
+        if aggregation == AggregationType.MEDIAN:
+            return float(values.median())
+        if aggregation == AggregationType.MIN:
+            return float(values.min())
+        if aggregation == AggregationType.MAX:
+            return float(values.max())
+        raise ValueError(f"Unsupported monitoring aggregation: {aggregation.value}")
+
+    @staticmethod
+    def _schema(profile: Optional[dict[str, Any]]) -> Optional[dict[str, str]]:
+        if not profile or not isinstance(profile.get("columns"), list):
+            return None
+        return {
+            str(column.get("name")): str(column.get("data_type", "")).upper()
+            for column in profile["columns"]
+            if isinstance(column, dict) and column.get("name") is not None
+        }
+
+    def _record_rule_outcome(self, rule: AlertRule, trigger: str, status: str) -> None:
+        rule.last_evaluated_at = datetime.now(timezone.utc)
+        rule.last_evaluation_status = status
+        rule.last_evaluation_trigger = trigger
+        self.db.commit()
+
+    def _evaluate_rule(self, rule: AlertRule, trigger: str) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        try:
+            dataset = self.db.query(Dataset).filter(
+                Dataset.id == rule.dataset_id,
+                Dataset.project_id == rule.project_id,
+            ).first()
+            if dataset is None:
+                self._record_rule_outcome(rule, trigger, "SOURCE_UNAVAILABLE")
+                return {"rule_id": rule.id, "status": "SOURCE_UNAVAILABLE"}
+
+            current = self.db.query(DatasetVersion).filter(
+                DatasetVersion.dataset_id == dataset.id,
+                DatasetVersion.version_number == dataset.current_version,
+            ).first()
+            previous = self.db.query(DatasetVersion).filter(
+                DatasetVersion.dataset_id == dataset.id,
+                DatasetVersion.version_number == dataset.current_version - 1,
+            ).first()
+            if current is None or previous is None:
+                self._record_rule_outcome(rule, trigger, "BASELINE_UNAVAILABLE")
+                return {
+                    "rule_id": rule.id,
+                    "dataset_id": dataset.id,
+                    "dataset_version": dataset.current_version,
+                    "status": "BASELINE_UNAVAILABLE",
+                }
+
+            current_schema = self._schema(current.profile_json)
+            previous_schema = self._schema(previous.profile_json)
+            if current_schema is None or previous_schema is None:
+                self._record_rule_outcome(rule, trigger, "PROFILE_UNAVAILABLE")
+                return {"rule_id": rule.id, "dataset_id": dataset.id, "status": "PROFILE_UNAVAILABLE"}
+            if current_schema != previous_schema:
+                self._record_rule_outcome(rule, trigger, "INCOMPATIBLE_SCHEMA")
+                return {"rule_id": rule.id, "dataset_id": dataset.id, "status": "INCOMPATIBLE_SCHEMA"}
+            if rule.metric_name not in current_schema:
+                self._record_rule_outcome(rule, trigger, "METRIC_UNAVAILABLE")
+                return {"rule_id": rule.id, "dataset_id": dataset.id, "status": "METRIC_UNAVAILABLE"}
+            if rule.threshold_pct_change is None:
+                self._record_rule_outcome(rule, trigger, "THRESHOLD_UNAVAILABLE")
+                return {"rule_id": rule.id, "dataset_id": dataset.id, "status": "THRESHOLD_UNAVAILABLE"}
+
+            baseline_df = self.dataset_service.get_dataset_dataframe(dataset.id, previous.version_number)
+            current_df = self.dataset_service.get_dataset_dataframe(dataset.id, current.version_number)
+            if rule.metric_name not in baseline_df or rule.metric_name not in current_df:
+                self._record_rule_outcome(rule, trigger, "METRIC_UNAVAILABLE")
+                return {"rule_id": rule.id, "dataset_id": dataset.id, "status": "METRIC_UNAVAILABLE"}
+
+            metric = rule.metric_name
+            semantics = MetricSemanticsResolver.resolve(
+                metric, current_df, table_name=dataset.name, group_dimension_col=None, grain="row"
+            )
+            aggregation = semantics.aggregation_type
+            baseline_value = self._aggregate(baseline_df, metric, semantics)
+            current_value = self._aggregate(current_df, metric, semantics)
+            if baseline_value is None or current_value is None or baseline_value == 0:
+                self._record_rule_outcome(rule, trigger, "BASELINE_UNDEFINED")
+                return {"rule_id": rule.id, "dataset_id": dataset.id, "status": "BASELINE_UNDEFINED"}
+
+            change_pct = (current_value - baseline_value) / baseline_value * 100.0
+            if abs(change_pct) < rule.threshold_pct_change:
+                self._record_rule_outcome(rule, trigger, "NO_CHANGE")
+                return {
+                    "rule_id": rule.id,
+                    "dataset_id": dataset.id,
+                    "dataset_version": current.version_number,
+                    "status": "NO_CHANGE",
+                    "change_pct": change_pct,
+                }
+
+            identity_payload = {
+                "rule_id": rule.id,
+                "dataset_version_id": current.id,
+                "dataset_fingerprint": current.content_hash,
+                "metric": metric,
+                "baseline_value": baseline_value,
+                "current_value": current_value,
+                "threshold": rule.threshold_pct_change,
+            }
+            event_identity = hashlib.sha256(
+                json.dumps(identity_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()
+            existing = self.db.query(AlertEvent).filter(
+                AlertEvent.event_identity == event_identity
+            ).first()
+            if existing:
+                self._record_rule_outcome(rule, trigger, "DUPLICATE")
+                return {
+                    "rule_id": rule.id,
+                    "event_id": existing.id,
+                    "dataset_id": dataset.id,
+                    "dataset_version": current.version_number,
+                    "status": "DUPLICATE",
+                }
+
+            dimensions = {
+                "comparison": "adjacent_dataset_versions",
+                "metric_aggregation": aggregation.value,
+                "metric_semantics": semantics.to_provenance_dict(),
+                "metric_unit": semantics.unit,
+                "threshold_pct_change": rule.threshold_pct_change,
+                "baseline_rows": previous.row_count,
+                "comparison_rows": current.row_count,
+                "trigger": trigger,
+            }
+            event = AlertEvent(
+                project_id=rule.project_id,
+                rule_id=rule.id,
+                event_identity=event_identity,
+                dataset_id=dataset.id,
+                dataset_version=current.version_number,
+                dataset_version_id=current.id,
+                dataset_fingerprint=current.content_hash,
+                metric_name=metric,
+                baseline_period=f"v{previous.version_number}",
+                comparison_period=f"v{current.version_number}",
+                title=f"{metric} changed {change_pct:+.1f}% between dataset versions",
+                severity=rule.severity,
+                description=(
+                    f"{metric} {aggregation.value.lower()} changed from {baseline_value:,.6g} "
+                    f"in version {previous.version_number} to {current_value:,.6g} "
+                    f"in version {current.version_number} ({change_pct:+.2f}%)."
+                ),
+                current_value=current_value,
+                expected_value=baseline_value,
+                deviation_percentage=round(change_pct, 4),
+                affected_dimensions_json=dimensions,
+                evidence_summary=(
+                    f"Compared profile-compatible snapshots {previous.id} and {current.id}; "
+                    f"content hashes {previous.content_hash or 'not recorded'} and {current.content_hash or 'not recorded'}."
+                ),
+                is_resolved=False,
+                lifecycle_status="active",
+                triggered_at=now,
+            )
+            self.db.add(event)
+            self._record_rule_outcome(rule, trigger, "TRIGGERED")
+            self.db.refresh(event)
+            return {
+                "rule_id": rule.id,
+                "event_id": event.id,
+                "dataset_id": dataset.id,
+                "dataset_version": current.version_number,
+                "status": "TRIGGERED",
+                "change_pct": change_pct,
+            }
+        except Exception as exc:
+            self.db.rollback()
             try:
-                # Load dataset
-                dataset = self.db.query(Dataset).filter(Dataset.id == rule.dataset_id).first()
-                if not dataset:
-                    continue
-
-                df = self.dataset_service.get_dataset_dataframe(dataset.id, dataset.current_version)
-                if df.empty or rule.metric_name not in df.columns:
-                    continue
-
-                # Compute metric deviation (period-over-period or outlier threshold)
-                metric_col = rule.metric_name
-                time_col = next((c for c in df.columns if any(k in c.lower() for k in ["date", "time", "order_date"])), None)
-
-                if time_col and time_col in df.columns:
-                    df["_period"] = df[time_col].astype(str).str.slice(0, 7)
-                    periods = sorted(df["_period"].unique())
-                    if len(periods) >= 2:
-                        p_prev = periods[-2]
-                        p_curr = periods[-1]
-                        metric_def = MetricSemanticsResolver.resolve(
-                            metric_col,
-                            df,
-                            table_name=dataset.name,
-                            group_dimension_col=None,
-                            grain="row",
-                        )
-
-                        def _aggregate_period(frame: pd.DataFrame) -> Optional[float]:
-                            series = frame[metric_col]
-                            agg = metric_def.aggregation_type
-                            if agg == AggregationType.SUM:
-                                return float(series.sum())
-                            if agg == AggregationType.MEAN:
-                                return float(series.mean()) if len(series.dropna()) else None
-                            if agg == AggregationType.COUNT:
-                                return float(series.count())
-                            if agg == AggregationType.COUNT_DISTINCT:
-                                return float(series.nunique(dropna=True))
-                            if agg in (AggregationType.RATE, AggregationType.RATIO, AggregationType.PROPORTION):
-                                num = metric_def.numerator_column
-                                den = metric_def.denominator_column
-                                if num and den and den in frame.columns:
-                                    den_sum = float(frame[den].sum())
-                                    return float(frame[num].sum()) / den_sum if den_sum else None
-                                return float(series.mean()) if len(series.dropna()) else None
-                            if agg == AggregationType.WEIGHTED_MEAN and metric_def.weight_column in frame.columns:
-                                vals = frame[metric_col]
-                                weights = frame[metric_def.weight_column]
-                                mask = vals.notna() & weights.notna()
-                                weight_sum = float(weights[mask].sum())
-                                return float((vals[mask] * weights[mask]).sum()) / weight_sum if weight_sum else None
-                            return float(series.mean()) if len(series.dropna()) else None
-
-                        val_prev = _aggregate_period(df[df["_period"] == p_prev])
-                        val_curr = _aggregate_period(df[df["_period"] == p_curr])
-                        # A missing/undefined period aggregate or zero baseline does not
-                        # imply a zero change. Do not manufacture an analytical percentage.
-                        pct_change = None
-                        if val_prev is not None and val_curr is not None and val_prev != 0:
-                            pct_change = (val_curr - val_prev) / val_prev * 100.0
-
-                        # Check threshold only when the deviation is defined.
-                        if pct_change is not None and abs(pct_change) >= rule.threshold_pct_change:
-                            # Autonomous Trigger
-                            analysis_id = None
-                            evidence_summary = None
-
-                            if rule.auto_investigate:
-                                inv_id = f"INV-ALERT-{gen_uuid()[:8]}"
-                                question = f"Why did {metric_col} change by {pct_change:.1f}% between {p_prev} and {p_curr}?"
-                                inv_entity = Investigation(
-                                    id=inv_id,
-                                    project_id=project_id,
-                                    question=question,
-                                    status=InvestigationState.QUEUED,
-                                )
-                                self.db.add(inv_entity)
-                                self.db.commit()
-                                self.queue.enqueue(investigation_id=inv_id, priority=50)
-                                analysis_id = inv_id
-                                evidence_summary = f"Autonomous investigation enqueued for {metric_col} ({pct_change:+.1f}% shift)."
-
-                            event = AlertEvent(
-                                rule_id=rule.id,
-                                title=f"Anomaly: {metric_col} {pct_change:+.1f}% Shift",
-                                severity=rule.severity,
-                                description=(
-                                    f"Observed {pct_change:+.1f}% deviation in {metric_col} between {p_prev} ({val_prev:,.4g}) "
-                                    f"and {p_curr} ({val_curr:,.4g}). Metric semantics: {metric_def.aggregation_type.value}."
-                                ),
-                                current_value=val_curr,
-                                expected_value=val_prev,
-                                deviation_percentage=round(pct_change, 2),
-                                affected_dimensions_json={
-                                    "period_a": p_prev,
-                                    "period_b": p_curr,
-                                    "metric_aggregation": metric_def.aggregation_type.value,
-                                    "metric_semantics": metric_def.to_provenance_dict(),
-                                },
-                                investigation_analysis_id=analysis_id,
-                                evidence_summary=evidence_summary,
-                                is_resolved=False,
-                                triggered_at=datetime.now(timezone.utc),
-                            )
-                            self.db.add(event)
-                            self.db.commit()
-                            self.db.refresh(event)
-
-                            rule.last_evaluated_at = datetime.now(timezone.utc)
-                            self.db.commit()
-
-                            triggered_events.append({
-                                "event_id": event.id,
-                                "rule_name": rule.name,
-                                "metric": metric_col,
-                                "deviation_pct": pct_change,
-                                "investigation_id": analysis_id,
-                                "evidence_summary": evidence_summary,
-                            })
-            except Exception as e:
-                continue
-
-        return triggered_events
+                failed_rule = self.db.query(AlertRule).filter(AlertRule.id == rule.id).first()
+                if failed_rule:
+                    self._record_rule_outcome(failed_rule, trigger, "FAILED")
+            except Exception:
+                self.db.rollback()
+            return {"rule_id": rule.id, "status": "FAILED", "error": str(exc)}

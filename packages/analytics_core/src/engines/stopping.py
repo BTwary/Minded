@@ -28,7 +28,7 @@ class StoppingEngine:
         leading_posterior: Optional[float] = None,
         entropy_delta: float = 0.0,
         experiments_completed: int = 0,
-        all_verifications_passed: bool = True,
+        all_verifications_passed: Optional[bool] = None,
         counter_hypothesis_evaluated: bool = True,
         has_unresolved_adversarial_issue: bool = False,
         min_experiments: int = 1,
@@ -44,8 +44,13 @@ class StoppingEngine:
         entropy_history: Optional[List[float]] = None,
         **kwargs,
     ) -> StoppingDecision:
+        # Missing verification status is not a successful verification. Callers
+        # must supply an explicit result; legacy alias `all_verified` remains
+        # supported but cannot turn an omitted value into success.
         if all_verified is not None:
-            all_verifications_passed = all_verified
+            all_verifications_passed = bool(all_verified)
+        else:
+            all_verifications_passed = all_verifications_passed is True
         if adversarial_survived is not None:
             has_unresolved_adversarial_issue = not adversarial_survived
         if iteration_count is not None:

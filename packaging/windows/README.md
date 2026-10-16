@@ -21,7 +21,9 @@ The `.exe` is a self-contained local application that serves the exported fronte
 
 ### Native window requirements
 
-- Build machine needs `pywebview` and `pyinstaller` installed from the certified wheelhouse — see `packaging/windows/requirements-desktop.txt`.
+- Build machine needs the hash-locked desktop toolchain: `python -m pip install --require-hashes -r packaging\windows\requirements-desktop.txt` (Windows x64, CPython 3.12). `build_exe_scope.ps1` verifies the installed versions against the pins, builds the `wheelhouse/` from the lock files, and runs `offline_desktop_certification.py` on the staged bundle.
+- `build_exe_scope.ps1` uses a unique temporary PyInstaller work/spec directory by default. Supply `-PyInstallerWorkRoot <path>` to retain or choose that directory; supply `-OfflineBundleRoot <path>` to choose the staged bundle destination.
+- Signing: `packaging\windows\sign_release.ps1 -Path <bundle> -Thumbprint <cert>` signs and verifies every executable; `verify_release_signature.ps1` is the acceptance check on the clean test machine. A release is not signed until `SIGNATURE_AUDIT: PASS`.
 - End-user machine needs the **Microsoft Edge WebView2 Runtime**. Windows 10 (22H2+) and Windows 11 ship it pre-installed; only older Windows 10 builds may need the redistributable from Microsoft, which the installer can optionally bundle (`MicrosoftEdgeWebview2Setup.exe`, offline/evergreen bootstrapper) for fully air-gapped installs.
 - If the runtime window ever fails to start (e.g. WebView2 missing), the packaged app shows a native message box explaining why instead of crashing to a console.
 

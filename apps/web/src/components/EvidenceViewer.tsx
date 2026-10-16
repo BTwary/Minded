@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronRight, Database, FileCode, Layers, ShieldCheck, GitBranch } from "lucide-react";
+import { ChevronDown, ChevronRight, Database, FileCode, Layers, ShieldCheck, GitBranch } from "lucide-react";
 import { EvidenceItem } from "../types";
 
 interface Props {
@@ -19,17 +19,25 @@ export default function EvidenceViewer({ evidence }: Props) {
     <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          <h3 className="text-sm font-semibold text-white">Mathematical & Auditable Evidence</h3>
+          <ShieldCheck className="w-4 h-4 text-cyan-400" />
+          <h3 className="text-sm font-semibold text-white">Recorded Evidence and Calculations</h3>
         </div>
-        <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">
-          100% Deterministic Verification
+        <span className="text-xs bg-slate-950 text-slate-400 border border-slate-800 px-2 py-0.5 rounded-full font-mono">
+          Verification shown per record
         </span>
       </div>
 
       <div className="space-y-3">
         {evidence.map((ev) => {
           const isOpen = openItem === ev.id;
+          const validationStatus = String(ev.validation_status || "UNVERIFIED").toUpperCase();
+          const statusTone = ["PASSED", "VERIFIED"].includes(validationStatus)
+            ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+            : validationStatus === "FAILED"
+              ? "bg-rose-500/10 text-rose-300 border-rose-500/30"
+              : validationStatus === "WARNING"
+                ? "bg-amber-500/10 text-amber-200 border-amber-500/30"
+                : "bg-slate-800 text-slate-300 border-slate-700";
           return (
             <div
               key={ev.id}
@@ -50,8 +58,7 @@ export default function EvidenceViewer({ evidence }: Props) {
                 </div>
 
                 <div className="flex items-center space-x-2 flex-shrink-0 mt-0.5">
-                  <span className="inline-flex items-center space-x-1 text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                    <CheckCircle2 className="w-3 h-3" />
+                  <span className={`inline-flex items-center space-x-1 text-[11px] font-medium border px-2 py-0.5 rounded-full ${statusTone}`}>
                     <span>{ev.validation_status}</span>
                   </span>
                   {isOpen ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}

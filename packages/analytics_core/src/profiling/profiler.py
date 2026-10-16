@@ -82,6 +82,93 @@ class DataProfiler:
             f"Identified {len(potential_pks)} potential primary key(s)."
         )
 
+        # Deterministic First Look generation
+        # 1. Infer row representation
+        entity_name = "record"
+        if potential_pks:
+            pk = potential_pks[0]
+            clean_pk = pk.lower().replace("_id", "").replace("id", "").strip("_")
+            if clean_pk:
+                entity_name = clean_pk
+        row_meaning = f"Each row represents one {entity_name} observation."
+
+        # 2. Quality summary items
+        quality_findings: List[str] = []
+        if duplicate_rows > 0:
+            quality_findings.append(f"{duplicate_rows:,} duplicate rows detected ({duplicate_rows / total_rows * 100:.1f}%).")
+        if total_null_cells > 0:
+            quality_findings.append(f"{total_null_cells:,} missing cell values ({total_null_cells / total_cells * 100:.1f}% total).")
+        if total_outliers > 0:
+            quality_findings.append(f"{total_outliers:,} statistical outliers detected across numeric fields.")
+        if not quality_findings:
+            quality_findings.append("No duplicate rows or missing values detected; clean record integrity.")
+
+        # 3. Categorize columns
+        id_cols = [c for c in df.columns if any(k in c.lower() for k in ["_id", "id", "key", "pk"])]
+        binary_cols = [c for c in df.columns if c not in id_cols and set(df[c].dropna().unique()).issubset({0, 1})]
+        continuous_cols = [c for c in df.columns if c not in id_cols and c not in binary_cols and pd.api.types.is_numeric_dtype(df[c])]
+        categorical_cols = [c for c in df.columns if c not in id_cols and c not in binary_cols and not pd.api.types.is_numeric_dtype(df[c])]
+
+        # 4. Generate 5-8 deterministic, relevant suggested questions
+        suggested_questions: List[Dict[str, str]] = []
+        if categorical_cols:
+            primary_cat = categorical_cols[0]
+            suggested_questions.append({
+                "question": f"How many {entity_name}s are in each {primary_cat}?",
+                "category": "Volume & Distribution",
+                "purpose": f"Count records across distinct {primary_cat} categories.",
+            })
+            suggested_questions.append({
+                "question": f"What are the different {primary_cat}s?",
+                "category": "Distinct Categories",
+                "purpose": f"Inspect all distinct values and observation counts in {primary_cat}.",
+            })
+            if len(categorical_cols) > 1:
+                sec_cat = categorical_cols[1]
+                suggested_questions.append({
+                    "question": f"What are the different {sec_cat}s?",
+                    "category": "Distinct Categories",
+                    "purpose": f"Inspect all distinct values and observation counts in {sec_cat}.",
+                })
+
+        if continuous_cols and categorical_cols:
+            primary_num = continuous_cols[0]
+            primary_cat = categorical_cols[0]
+            suggested_questions.append({
+                "question": f"Average {primary_num} by {primary_cat}",
+                "category": "Mean Breakdown",
+                "purpose": f"Compare mean {primary_num} across {primary_cat} groups.",
+            })
+
+        if binary_cols and categorical_cols:
+            primary_bin = binary_cols[0]
+            b_label = primary_bin.replace("_event", "").replace("is_", "")
+            suggested_questions.append({
+                "question": f"{b_label} rate by {categorical_cols[0]}",
+                "category": "Rate Comparison",
+                "purpose": f"Compute observed {b_label} rates per {categorical_cols[0]}.",
+            })
+
+        if continuous_cols and len(continuous_cols) >= 2:
+            suggested_questions.append({
+                "question": f"What is the correlation between {continuous_cols[0]} and {continuous_cols[1]}?",
+                "category": "Association",
+                "purpose": "Evaluate linear correlation and statistical significance.",
+            })
+
+        first_look = {
+            "row_meaning": row_meaning,
+            "entity_name": entity_name,
+            "shape": {"rows": total_rows, "columns": total_cols},
+            "quality_score": quality_breakdown.overall_score,
+            "quality_findings": quality_findings,
+            "categorical_columns": categorical_cols,
+            "continuous_columns": continuous_cols,
+            "binary_columns": binary_cols,
+            "identifier_columns": id_cols,
+            "suggested_questions": suggested_questions,
+        }
+
         return DatasetProfileSchema(
             dataset_name=dataset_name,
             version=version,
@@ -93,6 +180,7 @@ class DataProfiler:
             duplicate_row_count=duplicate_rows,
             data_quality=quality_breakdown,
             summary_text=summary_text,
+            first_look=first_look,
         )
 
     def _profile_column(self, series: pd.Series, col_name: str, total_rows: int) -> ColumnProfileSchema:

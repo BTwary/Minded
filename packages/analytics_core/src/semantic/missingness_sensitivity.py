@@ -390,6 +390,14 @@ class MissingnessSensitivityEngine:
                 None,
             )
 
+        # DEFECT (multi-dataset AOV): a rate/ratio metric whose raw numerator/denominator pair could
+        # not be resolved degrades to MEAN/SUM over ``target_col`` -- which can be a non-numeric
+        # identifier (e.g. order_id for "average order value"). Bounding a mean or sum of strings is
+        # undefined (float('O0000001') crashed the whole investigation). No defensible bound exists, so
+        # report that honestly (callers turn None into an "insufficient" sensitivity result).
+        if not (pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series)):
+            return None, None, None, "none", {"note": "target column is non-numeric; mean/sum bounds are undefined"}, None
+
         if agg == AggregationType.MEAN or agg == AggregationType.WEIGHTED_MEAN or (
             agg in _RATE_LIKE and not (metric_def and metric_def.numerator_column and metric_def.denominator_column)
         ):

@@ -36,7 +36,13 @@ export default function ReportGeneratorModal({ isOpen, onClose, analysis }: Prop
     lines.push(`**Generated:** ${dateStr}`);
     lines.push(`**Epistemic Verdict:** ${analysis.verdict || "CONFIRMED"}`);
     lines.push(`**Confidence Standard:** ${analysis.confidence}`);
-    lines.push(`**Provenance SHA-256:** \`${analysis.manifest?.reproducible_hash || "N/A"}\``);
+    const provHash = (
+      analysis.manifest?.reproducible_hash ||
+      analysis.reproducible_manifest_hash ||
+      (analysis.provenance as any)?.manifest_hash ||
+      "N/A"
+    );
+    lines.push(`**Provenance SHA-256:** \`${provHash}\``);
     lines.push(`\n---\n`);
 
     lines.push(`## 1. Executive Summary`);
@@ -63,13 +69,13 @@ export default function ReportGeneratorModal({ isOpen, onClose, analysis }: Prop
       }
     }
 
-    lines.push(`\n## 3. Independently Verified Evidence`);
+    lines.push(`\n## 3. Recorded Evidence and Validation Status`);
     if (analysis.evidence && analysis.evidence.length > 0) {
       analysis.evidence.forEach((ev, idx) => {
         lines.push(`### Evidence Item #${idx + 1} (${ev.validation_status})`);
         lines.push(`* **Statement:** ${ev.statement}`);
         lines.push(`* **Recomputation Summary:** ${ev.calculation_summary}`);
-        lines.push(`* **Rows Analyzed:** ${ev.row_count_analyzed.toLocaleString()}`);
+        lines.push(`* **Rows Analyzed:** ${ev.row_count_analyzed?.toLocaleString() || "Not recorded"}`);
         if (ev.sql_executed) lines.push(`* **Authoritative SQL:** \`${ev.sql_executed}\``);
         if (ev.statistical_test) lines.push(`* **Statistical Test:** ${ev.statistical_test} (p-value: ${ev.p_value})`);
       });
@@ -88,14 +94,16 @@ export default function ReportGeneratorModal({ isOpen, onClose, analysis }: Prop
     const totalEv = analysis.evidence?.length || 0;
     const passedEv = analysis.evidence?.filter((e) => e.validation_status === "PASSED").length || 0;
     const failedEv = analysis.evidence?.filter((e) => e.validation_status === "FAILED").length || 0;
-    const valStatus = totalEv > 0 && passedEv === totalEv ? "PASSED (100% verified within ≤ 1.0% relative tolerance)" : `${passedEv}/${totalEv} Claims Passed Validation`;
+    const valStatus = totalEv > 0 && passedEv === totalEv
+      ? "All recorded evidence statuses are PASSED"
+      : `${passedEv}/${totalEv} evidence records have PASSED status`;
 
     lines.push(`\n## 5. Epistemic Audit & Manifest Provenance`);
     lines.push(`* **Execution Time:** ${analysis.manifest?.execution_time_seconds || 0}s`);
     lines.push(`* **Total Reasoning Steps:** ${analysis.manifest?.total_steps || analysis.steps?.length || 0}`);
     lines.push(`* **Execution Provider:** ${analysis.manifest?.ai_provider || "Deterministic Core"}`);
     lines.push(`* **Independent Validation Status:** ${valStatus}`);
-    lines.push(`* **Claim Validation Breakdown:** ${passedEv} Passed, ${failedEv} Failed out of ${totalEv} recomputed claims`);
+    lines.push(`* **Recorded Validation Breakdown:** ${passedEv} Passed, ${failedEv} Failed out of ${totalEv} evidence records`);
 
     return lines.join("\n");
   };
@@ -192,7 +200,14 @@ export default function ReportGeneratorModal({ isOpen, onClose, analysis }: Prop
             <span>Cryptographically Bound Evidence Provenance</span>
           </div>
           <span className="font-mono text-[11px] text-slate-400">
-            Hash: {analysis.manifest?.reproducible_hash?.substring(0, 16)}...
+            Hash: {
+              (
+                analysis.manifest?.reproducible_hash ||
+                analysis.reproducible_manifest_hash ||
+                (analysis.provenance as any)?.manifest_hash ||
+                "N/A"
+              ).substring(0, 16)
+            }...
           </span>
         </div>
       </div>

@@ -37,6 +37,7 @@ class ProcessExecutionResult:
 
 
 _WORKER_MODULE = "packages.analytics_core.src.execution._isolated_worker"
+FROZEN_WORKER_FLAG = "--aaos-isolated-worker"
 
 
 def serialize_ipc(val: Any, dir_path: Path, prefix: str) -> Any:
@@ -170,9 +171,17 @@ def run_isolated(fn: Callable[..., Any], *args, timeout_seconds: int = 60, **kwa
         existing = child_env.get("PYTHONPATH", "")
         child_env["PYTHONPATH"] = os.pathsep.join([p for p in sys.path if p] + ([existing] if existing else []))
         
+        # In a frozen (PyInstaller) build, sys.executable is the desktop app itself and
+        # "-m" is not understood by its bootloader: re-launching it would open a second
+        # GUI instead of running the worker. The desktop entrypoint dispatches this flag
+        # to the worker before any GUI/single-instance logic (see minded_entry.py).
+        if getattr(sys, "frozen", False):
+            worker_cmd = [sys.executable, FROZEN_WORKER_FLAG, str(request_path), str(response_path)]
+        else:
+            worker_cmd = [sys.executable, "-m", _WORKER_MODULE, str(request_path), str(response_path)]
         try:
             completed = subprocess.run(
-                [sys.executable, "-m", _WORKER_MODULE, str(request_path), str(response_path)],
+                worker_cmd,
                 timeout=timeout_seconds,
                 capture_output=True,
                 env=child_env,

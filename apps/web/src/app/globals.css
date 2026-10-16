@@ -2,192 +2,546 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #020904;
-  --foreground: #f7f7e8;
-  --gold: #d4af37;
-  --laser-cyan: #38ef7d;
+/* -------------------------------------------------------------------------- */
+/* MindEd Design System: Cognitech Noir (Dark) & Analytic Ivory (Light)       */
+/* -------------------------------------------------------------------------- */
+
+:root,
+html[data-theme="dark"] {
+  /* Cognitech Noir — Graphite-to-espresso gradient (#0E0E0E → #1A1A1A) */
+  --background: #0E0E0E;
+  --background-end: #1A1A1A;
+  --bg-gradient: linear-gradient(135deg, #0E0E0E 0%, #141414 50%, #1A1A1A 100%);
+  --surface-1: #151515;
+  --surface-2: #1E1E1E;
+  --surface-3: #262626;
+  --surface-border: rgba(255, 204, 112, 0.12);
+  --foreground: #F4F4F6;
+  --muted: #A1A1AA;
+  --muted-2: #71717A;
+
+  /* Accent: Amber-Copper gradient (#F5A623 → #FFCC70) */
+  --accent: #F5A623;
+  --accent-strong: #FFCC70;
+  --accent-gradient: linear-gradient(135deg, #F5A623 0%, #FFCC70 100%);
+  --accent-gradient-hover: linear-gradient(135deg, #E0961B 0%, #F5BA58 100%);
+  --accent-soft: rgba(245, 166, 35, 0.14);
+  --success: #4ADE80;
+  --danger: #F87171;
+
+  /* Ambient Rim Light for active panels */
+  --panel-rim: rgba(255, 204, 112, 0.08);
+  --panel-glow: 0 0 0 1px rgba(255, 204, 112, 0.14), 0 8px 24px rgba(255, 204, 112, 0.08);
+  --modal-glow: 0 0 24px rgba(255, 204, 112, 0.12), 0 24px 50px rgba(0, 0, 0, 0.7);
+
+  /* Chart palette (Cyan → Blue → Violet) */
+  --chart-cyan: #06B6D4;
+  --chart-blue: #3B82F6;
+  --chart-violet: #8B5CF6;
+  --chart-gradient: linear-gradient(90deg, #06B6D4 0%, #3B82F6 50%, #8B5CF6 100%);
+  --chart-glow: 0 0 10px rgba(59, 130, 246, 0.45);
+
+  color-scheme: dark;
 }
 
+html[data-theme="light"] {
+  /* Analytic Ivory — Warm ivory (#F8F9F7) with faint vignette edges */
+  --background: #F8F9F7;
+  --bg-gradient: radial-gradient(ellipse at 50% 35%, #FFFFFF 0%, #F8F9F7 70%, #ECEFE9 100%);
+  --surface-1: #FFFFFF;
+  --surface-2: #F2F4F0;
+  --surface-3: #E6EAE3;
+  --surface-border: #E0E4DE;
+  --foreground: #141E17;
+  --muted: #4B5A50;
+  --muted-2: #6E7E73;
+
+  /* Accent: Emerald gradient (#00A86B → #4ADE80) */
+  --accent: #00A86B;
+  --accent-strong: #4ADE80;
+  --accent-gradient: linear-gradient(135deg, #00A86B 0%, #4ADE80 100%);
+  --accent-gradient-hover: linear-gradient(135deg, #008755 0%, #34D399 100%);
+  --accent-soft: rgba(0, 168, 107, 0.12);
+  --success: #00A86B;
+  --danger: #DC2626;
+
+  /* Micro-shadow for elevation */
+  --panel-rim: rgba(0, 0, 0, 0.05);
+  --panel-glow: 0 2px 6px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.03);
+  --modal-glow: 0 0 24px rgba(0, 168, 107, 0.12), 0 20px 40px rgba(0, 0, 0, 0.1);
+
+  /* Chart palette (Cyan → Blue → Violet) */
+  --chart-cyan: #06B6D4;
+  --chart-blue: #3B82F6;
+  --chart-violet: #8B5CF6;
+  --chart-gradient: linear-gradient(90deg, #06B6D4 0%, #3B82F6 50%, #8B5CF6 100%);
+  --chart-glow: 0 0 8px rgba(6, 182, 212, 0.35);
+
+  color-scheme: light;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Base & Typography System                                                   */
+/* -------------------------------------------------------------------------- */
+
+html,
 body {
+  background: var(--bg-gradient);
+  background-attachment: fixed;
   color: var(--foreground);
-  background: var(--background);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  min-height: 100vh;
+  transition: background 200ms ease, color 180ms ease;
   overflow-x: hidden;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
-a, button, [role="button"] {
+/* Dark Theme Typography: Inter SemiBold for headers, IBM Plex Sans for body */
+html[data-theme="dark"] body {
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 400;
+}
+
+html[data-theme="dark"] h1,
+html[data-theme="dark"] h2,
+html[data-theme="dark"] h3,
+html[data-theme="dark"] h4,
+html[data-theme="dark"] h5,
+html[data-theme="dark"] h6,
+html[data-theme="dark"] .font-heading {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+/* Light Theme Typography: Inter Medium with Source Sans Pro for body */
+html[data-theme="light"] body {
+  font-family: "Source Sans 3", "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 400;
+}
+
+html[data-theme="light"] h1,
+html[data-theme="light"] h2,
+html[data-theme="light"] h3,
+html[data-theme="light"] h4,
+html[data-theme="light"] h5,
+html[data-theme="light"] h6,
+html[data-theme="light"] .font-heading {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+/* Micro-motion: Smooth transitions (150–200 ms) for hover and mode changes */
+a, button, [role="button"], input, select, textarea {
   cursor: pointer;
+  transition: background-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+              color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 180ms cubic-bezier(0.4, 0, 0.2, 1),
+              transform 180ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 ::selection {
-  background: #d4af37;
-  color: #020904;
+  background: var(--accent);
+  color: #0E0E0E;
 }
 
-/* Custom sleek gold-emerald scrollbar */
+/* -------------------------------------------------------------------------- */
+/* Scrollbar Pairing                                                          */
+/* -------------------------------------------------------------------------- */
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-::-webkit-scrollbar-track {
-  background: #05150a;
+html[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: #0E0E0E;
 }
-
-::-webkit-scrollbar-thumb {
-  background: #0e2d19;
-  border: 1px solid rgba(212, 175, 55, 0.2);
+html[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #282828;
+  border: 1px solid rgba(255, 204, 112, 0.2);
   border-radius: 4px;
 }
+html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: #383838;
+  border-color: rgba(255, 204, 112, 0.45);
+}
 
-::-webkit-scrollbar-thumb:hover {
-  background: #195431;
-  border-color: rgba(56, 239, 125, 0.4);
+html[data-theme="light"] ::-webkit-scrollbar-track {
+  background: #F1F3F0;
+}
+html[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #CBD2C9;
+  border: 1px solid rgba(0, 168, 107, 0.2);
+  border-radius: 4px;
+}
+html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #A4B2A0;
+  border-color: rgba(0, 168, 107, 0.5);
 }
 
 /* -------------------------------------------------------------------------- */
-/* MindEd visual themes                                                       */
+/* Tailwind Palette Overrides                                                 */
+/* Maps standard Tailwind slate/cyan/emerald utilities to the design system    */
 /* -------------------------------------------------------------------------- */
-html,
-body {
-  background: var(--background);
-  color: var(--foreground);
-  transition: background-color 180ms ease, color 180ms ease;
-}
 
-:root,
-html[data-theme="dark"] {
-  --background: #211207;
-  --surface-1: #2b1709;
-  --surface-2: #351c0b;
-  --surface-3: #42230c;
-  --surface-border: #694015;
-  --foreground: #fff8ed;
-  --muted: #d2b28b;
-  --muted-2: #a68258;
-  --accent: #e9a23b;
-  --accent-strong: #f5b84f;
-  --accent-soft: rgba(233, 162, 59, 0.14);
-  --success: #7fcf8a;
-  --danger: #ff8b74;
-}
-
-html[data-theme="light"] {
-  --background: #eef8ea;
-  --surface-1: #f6fbf3;
-  --surface-2: #e5f2df;
-  --surface-3: #d7ead0;
-  --surface-border: #b6d0ad;
-  --foreground: #18331d;
-  --muted: #4f6752;
-  --muted-2: #708170;
-  --accent: #3c7d4a;
-  --accent-strong: #286138;
-  --accent-soft: rgba(60, 125, 74, 0.12);
-  --success: #367b47;
-  --danger: #a74b3e;
-}
-
-/* Preserve existing Tailwind class structure while changing the entire visual
-   language consistently. These higher-specificity selectors override palette
-   utilities without requiring a page-by-page rewrite. */
-html[data-theme="light"] .bg-slate-950,
 html[data-theme="dark"] .bg-slate-950 { background-color: var(--background) !important; }
-html[data-theme="light"] .bg-slate-900,
 html[data-theme="dark"] .bg-slate-900 { background-color: var(--surface-1) !important; }
-html[data-theme="light"] .bg-slate-800,
 html[data-theme="dark"] .bg-slate-800 { background-color: var(--surface-2) !important; }
-html[data-theme="light"] .bg-slate-700,
 html[data-theme="dark"] .bg-slate-700 { background-color: var(--surface-3) !important; }
+
+html[data-theme="dark"] .bg-slate-950\/60,
+html[data-theme="dark"] .bg-slate-950\/70,
+html[data-theme="dark"] .bg-slate-950\/80,
+html[data-theme="dark"] .bg-slate-950\/90 { background-color: rgba(14, 14, 14, 0.88) !important; }
+
+html[data-theme="dark"] .bg-slate-900\/40,
+html[data-theme="dark"] .bg-slate-900\/60,
+html[data-theme="dark"] .bg-slate-900\/70,
+html[data-theme="dark"] .bg-slate-900\/80,
+html[data-theme="dark"] .bg-slate-900\/90 { background-color: rgba(21, 21, 21, 0.88) !important; }
+
+html[data-theme="dark"] .border-slate-800,
+html[data-theme="dark"] .border-slate-700 { border-color: var(--surface-border) !important; }
+
+html[data-theme="dark"] .text-slate-100,
+html[data-theme="dark"] .text-slate-200,
+html[data-theme="dark"] .text-white,
+html[data-theme="dark"] .text-slate-50 { color: var(--foreground) !important; }
+
+html[data-theme="dark"] .text-slate-300,
+html[data-theme="dark"] .text-slate-400 { color: var(--muted) !important; }
+
+html[data-theme="dark"] .text-slate-500,
+html[data-theme="dark"] .text-slate-600 { color: var(--muted-2) !important; }
+
+/* Light Theme Overrides */
+html[data-theme="light"] .bg-slate-950 { background-color: var(--background) !important; }
+html[data-theme="light"] .bg-slate-900 { background-color: var(--surface-1) !important; }
+html[data-theme="light"] .bg-slate-800 { background-color: var(--surface-2) !important; }
+html[data-theme="light"] .bg-slate-700 { background-color: var(--surface-3) !important; }
 
 html[data-theme="light"] .bg-slate-950\/60,
 html[data-theme="light"] .bg-slate-950\/70,
-html[data-theme="light"] .bg-slate-950\/90,
-html[data-theme="dark"] .bg-slate-950\/60,
-html[data-theme="dark"] .bg-slate-950\/70,
-html[data-theme="dark"] .bg-slate-950\/90 { background-color: color-mix(in srgb, var(--background) 88%, transparent) !important; }
+html[data-theme="light"] .bg-slate-950\/80,
+html[data-theme="light"] .bg-slate-950\/90 { background-color: rgba(248, 249, 247, 0.92) !important; }
 
 html[data-theme="light"] .bg-slate-900\/40,
 html[data-theme="light"] .bg-slate-900\/60,
 html[data-theme="light"] .bg-slate-900\/70,
-html[data-theme="dark"] .bg-slate-900\/40,
-html[data-theme="dark"] .bg-slate-900\/60,
-html[data-theme="dark"] .bg-slate-900\/70 { background-color: color-mix(in srgb, var(--surface-1) 88%, transparent) !important; }
+html[data-theme="light"] .bg-slate-900\/80,
+html[data-theme="light"] .bg-slate-900\/90 { background-color: rgba(255, 255, 255, 0.92) !important; }
 
 html[data-theme="light"] .border-slate-800,
-html[data-theme="light"] .border-slate-700,
-html[data-theme="dark"] .border-slate-800,
-html[data-theme="dark"] .border-slate-700 { border-color: var(--surface-border) !important; }
+html[data-theme="light"] .border-slate-700 { border-color: var(--surface-border) !important; }
 
 html[data-theme="light"] .text-slate-100,
 html[data-theme="light"] .text-slate-200,
-html[data-theme="dark"] .text-slate-100,
-html[data-theme="dark"] .text-slate-200 { color: var(--foreground) !important; }
-/* `text-white` / `text-slate-50` are used throughout the app (headings, card
-   titles, empty-state copy) as a literal "brightest text" color. That's fine
-   against the dark theme's near-black background, but in light mode it left
-   headings rendering as literal white-on-near-white -- effectively invisible.
-   Map them to the theme's foreground color like the other text utilities. */
 html[data-theme="light"] .text-white,
-html[data-theme="light"] .text-slate-50,
-html[data-theme="dark"] .text-white,
-html[data-theme="dark"] .text-slate-50 { color: var(--foreground) !important; }
-html[data-theme="light"] .text-slate-300,
-html[data-theme="light"] .text-slate-400,
-html[data-theme="dark"] .text-slate-300,
-html[data-theme="dark"] .text-slate-400 { color: var(--muted) !important; }
-html[data-theme="light"] .text-slate-500,
-html[data-theme="light"] .text-slate-600,
-html[data-theme="dark"] .text-slate-500,
-html[data-theme="dark"] .text-slate-600 { color: var(--muted-2) !important; }
+html[data-theme="light"] .text-slate-50 { color: var(--foreground) !important; }
 
+html[data-theme="light"] .text-slate-300,
+html[data-theme="light"] .text-slate-400 { color: var(--muted) !important; }
+
+html[data-theme="light"] .text-slate-500,
+html[data-theme="light"] .text-slate-600 { color: var(--muted-2) !important; }
+
+/* -------------------------------------------------------------------------- */
+/* Accent Mapping & Highlights                                                */
+/* -------------------------------------------------------------------------- */
+
+/* Dark Mode Accents (Amber-Copper) */
+html[data-theme="dark"] .text-cyan-300,
+html[data-theme="dark"] .text-cyan-400,
+html[data-theme="dark"] .text-amber-400,
+html[data-theme="dark"] .text-emerald-400 { color: var(--accent) !important; }
+
+html[data-theme="dark"] .text-emerald-300,
+html[data-theme="dark"] .text-amber-300 { color: var(--accent-strong) !important; }
+
+html[data-theme="dark"] .bg-cyan-500\/10,
+html[data-theme="dark"] .bg-cyan-500\/20,
+html[data-theme="dark"] .bg-emerald-500\/10,
+html[data-theme="dark"] .bg-emerald-500\/20,
+html[data-theme="dark"] .bg-amber-500\/10 { background-color: var(--accent-soft) !important; }
+
+html[data-theme="dark"] .border-cyan-500\/20,
+html[data-theme="dark"] .border-cyan-500\/30,
+html[data-theme="dark"] .border-cyan-500\/40,
+html[data-theme="dark"] .border-emerald-500\/30,
+html[data-theme="dark"] .border-amber-500\/30 { border-color: rgba(255, 204, 112, 0.25) !important; }
+
+/* Light Mode Accents (Emerald) */
 html[data-theme="light"] .text-cyan-300,
 html[data-theme="light"] .text-cyan-400,
-html[data-theme="dark"] .text-cyan-300,
-html[data-theme="dark"] .text-cyan-400 { color: var(--accent-strong) !important; }
-html[data-theme="light"] .bg-cyan-600,
-html[data-theme="light"] .bg-cyan-500,
-html[data-theme="dark"] .bg-cyan-600,
-html[data-theme="dark"] .bg-cyan-500 { background-color: var(--accent) !important; }
+html[data-theme="light"] .text-amber-400,
+html[data-theme="light"] .text-emerald-400 { color: var(--accent) !important; }
+
+html[data-theme="light"] .text-emerald-300,
+html[data-theme="light"] .text-amber-300 { color: #008755 !important; }
+
 html[data-theme="light"] .bg-cyan-500\/10,
 html[data-theme="light"] .bg-cyan-500\/20,
-html[data-theme="dark"] .bg-cyan-500\/10,
-html[data-theme="dark"] .bg-cyan-500\/20 { background-color: var(--accent-soft) !important; }
+html[data-theme="light"] .bg-emerald-500\/10,
+html[data-theme="light"] .bg-emerald-500\/20 { background-color: var(--accent-soft) !important; }
+
 html[data-theme="light"] .border-cyan-500\/20,
 html[data-theme="light"] .border-cyan-500\/30,
 html[data-theme="light"] .border-cyan-500\/40,
-html[data-theme="dark"] .border-cyan-500\/20,
-html[data-theme="dark"] .border-cyan-500\/30,
-html[data-theme="dark"] .border-cyan-500\/40 { border-color: color-mix(in srgb, var(--accent) 45%, var(--surface-border)) !important; }
+html[data-theme="light"] .border-emerald-500\/30 { border-color: rgba(0, 168, 107, 0.28) !important; }
+
+/* -------------------------------------------------------------------------- */
+/* Buttons: Rounded Corners (6–8 px) with Gradient Hover                      */
+/* -------------------------------------------------------------------------- */
+
+button,
+.btn,
+a.btn,
+[role="button"] {
+  border-radius: 7px !important; /* 6-8px per spec */
+}
+
+/* Dark Mode Primary Buttons: Amber-Copper gradient (#F5A623 → #FFCC70) */
+html[data-theme="dark"] .bg-emerald-600,
+html[data-theme="dark"] .bg-cyan-600,
+html[data-theme="dark"] .primary,
+html[data-theme="dark"] button.primary,
+html[data-theme="dark"] a.primary {
+  background: var(--accent-gradient) !important;
+  color: #0E0E0E !important;
+  font-weight: 600 !important;
+  border: none !important;
+  box-shadow: 0 2px 10px rgba(245, 166, 35, 0.25) !important;
+}
+
+html[data-theme="dark"] .bg-emerald-600:hover,
+html[data-theme="dark"] .bg-cyan-600:hover,
+html[data-theme="dark"] .primary:hover,
+html[data-theme="dark"] button.primary:hover,
+html[data-theme="dark"] a.primary:hover {
+  background: var(--accent-gradient-hover) !important;
+  box-shadow: 0 4px 18px rgba(245, 166, 35, 0.4) !important;
+  transform: translateY(-1px);
+}
+
+/* Light Mode Primary Buttons: Emerald gradient (#00A86B → #4ADE80) */
+html[data-theme="light"] .bg-emerald-600,
+html[data-theme="light"] .bg-cyan-600,
+html[data-theme="light"] .primary,
+html[data-theme="light"] button.primary,
+html[data-theme="light"] a.primary {
+  background: var(--accent-gradient) !important;
+  color: #FFFFFF !important;
+  font-weight: 600 !important;
+  border: none !important;
+  box-shadow: 0 2px 10px rgba(0, 168, 107, 0.22) !important;
+}
+
+html[data-theme="light"] .bg-emerald-600:hover,
+html[data-theme="light"] .bg-cyan-600:hover,
+html[data-theme="light"] .primary:hover,
+html[data-theme="light"] button.primary:hover,
+html[data-theme="light"] a.primary:hover {
+  background: var(--accent-gradient-hover) !important;
+  box-shadow: 0 4px 18px rgba(0, 168, 107, 0.35) !important;
+  transform: scale(1.02);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Panels & Cards: Ambient Rim Light (Dark) & Micro-Shadow (Light)            */
+/* -------------------------------------------------------------------------- */
+
+/* Dark Theme: Subtle ambient rim light rgba(255, 204, 112, 0.08) around active cards */
+html[data-theme="dark"] .card,
+html[data-theme="dark"] section.rounded-2xl,
+html[data-theme="dark"] section.rounded-xl,
+html[data-theme="dark"] div.rounded-2xl.border,
+html[data-theme="dark"] div.rounded-xl.border {
+  border-color: rgba(255, 204, 112, 0.12) !important;
+  background-color: var(--surface-1);
+}
+
+html[data-theme="dark"] .active-card,
+html[data-theme="dark"] .card:hover,
+html[data-theme="dark"] section.rounded-2xl:hover,
+html[data-theme="dark"] div.rounded-xl.border:hover,
+html[data-theme="dark"] [data-active="true"] {
+  box-shadow: var(--panel-glow) !important;
+  border-color: rgba(255, 204, 112, 0.28) !important;
+}
+
+/* Light Theme: Micro-shadow (0 2px 6px rgba(0,0,0,0.05)) for elevation */
+html[data-theme="light"] .card,
+html[data-theme="light"] section.rounded-2xl,
+html[data-theme="light"] section.rounded-xl,
+html[data-theme="light"] div.rounded-2xl.border,
+html[data-theme="light"] div.rounded-xl.border {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05) !important;
+  border-color: var(--surface-border) !important;
+  background-color: var(--surface-1);
+}
+
+/* Light Theme: Gentle scale-up (1.02x) on hover states */
+html[data-theme="light"] .card:hover,
+html[data-theme="light"] div.rounded-xl.border:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08) !important;
+  border-color: rgba(0, 168, 107, 0.35) !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Iconography: Duotone and Soft Glow                                         */
+/* -------------------------------------------------------------------------- */
+
+/* Dark Theme: Duotone icons (amber + graphite) with soft glow on hover */
+html[data-theme="dark"] svg.lucide {
+  color: var(--accent);
+  transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html[data-theme="dark"] svg.lucide:hover {
+  filter: drop-shadow(0 0 6px rgba(255, 204, 112, 0.55));
+  color: var(--accent-strong);
+}
+
+/* Light Theme: Emerald + slate duotone with gentle scale and color shift */
+html[data-theme="light"] svg.lucide {
+  color: var(--accent);
+  transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html[data-theme="light"] svg.lucide:hover {
+  filter: drop-shadow(0 0 4px rgba(0, 168, 107, 0.4));
+  color: #008755;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Premium Detailing                                                          */
+/* -------------------------------------------------------------------------- */
+
+/* 1. Modals & Tooltips: Glass-blur overlay with 4–6 px blur and soft border glow */
+.fixed.inset-0.z-50,
+.modal-backdrop {
+  backdrop-filter: blur(5px) !important;
+  -webkit-backdrop-filter: blur(5px) !important;
+}
+
+html[data-theme="dark"] .fixed.inset-0.z-50 > div,
+html[data-theme="dark"] [role="dialog"],
+html[data-theme="dark"] .modal-window {
+  box-shadow: var(--modal-glow) !important;
+  border: 1px solid rgba(255, 204, 112, 0.22) !important;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+html[data-theme="light"] .fixed.inset-0.z-50 > div,
+html[data-theme="light"] [role="dialog"],
+html[data-theme="light"] .modal-window {
+  box-shadow: var(--modal-glow) !important;
+  border: 1px solid rgba(0, 168, 107, 0.22) !important;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+[role="tooltip"],
+.tooltip {
+  backdrop-filter: blur(5px) !important;
+  -webkit-backdrop-filter: blur(5px) !important;
+  border-radius: 6px !important;
+}
+
+/* 2. Charts: Gradient lines (cyan → blue → violet) and soft glow for active data */
+.chart-gradient-bar {
+  background: linear-gradient(90deg, #06B6D4 0%, #3B82F6 50%, #8B5CF6 100%) !important;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.45) !important;
+}
+
+/* 3. Mode Switch: Animated transition with fade and color morph */
+.theme-toggle {
+  position: relative;
+  overflow: hidden;
+  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
 
 .theme-toggle:hover {
   border-color: var(--accent) !important;
   color: var(--accent-strong) !important;
+  box-shadow: 0 0 12px var(--panel-rim) !important;
+  transform: translateY(-1px);
 }
 
-/* Make native controls readable in both themes. */
+.theme-toggle svg {
+  transition: transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 200ms ease;
+}
+
+.theme-toggle:active svg {
+  transform: rotate(360deg) scale(0.9);
+}
+
+/* 4. Logo Area: 3D depth and specular light reflection */
+@keyframes sheen-sweep {
+  0% { transform: translateX(-150%) skewX(-20deg); }
+  50% { transform: translateX(200%) skewX(-20deg); }
+  100% { transform: translateX(200%) skewX(-20deg); }
+}
+
+.emblem-sheen-container {
+  position: relative;
+  overflow: hidden;
+  perspective: 600px;
+}
+
+.emblem-sheen-reflection {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.25) 50%,
+    transparent 100%
+  );
+  pointer-events: none;
+  animation: sheen-sweep 5s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Inputs, Textareas, Selects */
 input, textarea, select {
   color-scheme: inherit;
+  border-radius: 7px !important;
 }
+
+html[data-theme="dark"] input,
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select {
+  background-color: var(--surface-2) !important;
+  border-color: var(--surface-border) !important;
+  color: var(--foreground) !important;
+}
+
+html[data-theme="dark"] input:focus,
+html[data-theme="dark"] textarea:focus,
+html[data-theme="dark"] select:focus {
+  border-color: rgba(255, 204, 112, 0.5) !important;
+  box-shadow: 0 0 0 1px rgba(255, 204, 112, 0.25) !important;
+}
+
 html[data-theme="light"] input,
 html[data-theme="light"] textarea,
 html[data-theme="light"] select {
-  color: var(--foreground);
-  background-color: var(--surface-1);
-  border-color: var(--surface-border);
+  background-color: var(--surface-1) !important;
+  border-color: var(--surface-border) !important;
+  color: var(--foreground) !important;
 }
 
-/* Saffron/green scrollbar pair. */
-html[data-theme="dark"] ::-webkit-scrollbar-track { background: #1b0d04; }
-html[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #6b3a10; border-color: rgba(233, 162, 59, 0.25); }
-html[data-theme="light"] ::-webkit-scrollbar-track { background: #e2efdc; }
-html[data-theme="light"] ::-webkit-scrollbar-thumb { background: #a8c69e; border-color: rgba(60, 125, 74, 0.25); }
-
-.theme-light-glow {
-  box-shadow: 0 18px 55px rgba(60, 125, 74, 0.10);
-}
-
-.theme-dark-glow {
-  box-shadow: 0 18px 55px rgba(233, 162, 59, 0.12);
+html[data-theme="light"] input:focus,
+html[data-theme="light"] textarea:focus,
+html[data-theme="light"] select:focus {
+  border-color: rgba(0, 168, 107, 0.5) !important;
+  box-shadow: 0 0 0 1px rgba(0, 168, 107, 0.25) !important;
 }

@@ -6,7 +6,10 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+.venv*/
 venv/
+venv*/
+env/
 .env
 .env.*
 node_modules/
@@ -20,3 +23,6 @@ data_store/
 packaging/windows/bundle/
 apps/web/out/
 *.spec
+*.bak
+*.bak*
+*.log

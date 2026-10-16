@@ -18,6 +18,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 NETWORK_URL_RE = re.compile(r"https?://[^\s\"']+", re.IGNORECASE)
@@ -63,32 +64,64 @@ def _frontend_candidates(bundle: Path) -> list[Path]:
     ]
 
 
-ALLOWED_URL_PREFIXES = {
-    "http://www.w3.org/",
-    "https://www.w3.org/",
-    "https://react.dev/",
-    "https://reactjs.org/",
-    "https://nextjs.org/",
-    "https://github.com/",
-    "https://fonts.googleapis.com",
-    "https://fonts.gstatic.com",
-    "https://use.typekit.net",
-    "https://tailwindcss.com",
+# Exact, lower-case hostnames that may appear as *text* in a packaged bundle (XML/SVG
+# namespaces, documentation links inside vendored frameworks, ...). Matching is on the
+# parsed hostname only -- never a string prefix or substring -- so "https://a.evil.example"
+# or "https://evil.example/?x=localhost" cannot satisfy an entry. Single-label fragments that
+# minifiers produce (e.g. "http://n") are NOT allowlisted: if a real bundle trips on one,
+# review it and add the exact host here deliberately.
+ALLOWED_EXTERNAL_HOSTS = frozenset({
+    "www.w3.org",
+    "react.dev",
+    "reactjs.org",
+    "nextjs.org",
+    "github.com",
+    "tailwindcss.com",
+})
+
+
+# Inert URL *literals* emitted by Next.js 15.5.x runtime chunks of the static export (verified against a
+# real `npm run build` output): the router parses relative paths with ``new URL(path, "http://n")`` and
+# the URL polyfill feature-tests the parser with the others. They are never fetched. They are matched as
+# WHOLE strings -- "http://n.evil.example" or "https://a/anything-else" are still rejected.
+INERT_URL_LITERALS = frozenset({
     "http://n",
     "http://f",
     "https://a",
     "https://x",
+    "https://a@b",
+    "https://a/c%20d?a=1&c=3",
+    "https://a#\u0431",
     "https://\u0442\u0435\u0441\u0442",
-}
+})
+
+
+def _url_host(url: str) -> str | None:
+    """Return the parsed lower-case hostname of ``url`` (scheme-relative allowed), else None."""
+    candidate = url.strip().strip("\"'")
+    if candidate.startswith("//"):
+        candidate = "https:" + candidate
+    try:
+        return (urlsplit(candidate).hostname or "").lower() or None
+    except ValueError:
+        return None
 
 
 def _is_url_allowed(url: str) -> bool:
-    lower = url.lower()
-    if any(host in lower for host in LOCAL_ALLOWED_HOSTS):
+    if url in INERT_URL_LITERALS:
         return True
-    if any(lower.startswith(pfx) for pfx in ALLOWED_URL_PREFIXES):
-        return True
-    return False
+    host = _url_host(url)
+    if host is None:
+        return False
+    return host in LOCAL_ALLOWED_HOSTS or host in ALLOWED_EXTERNAL_HOSTS
+
+
+def _wheelhouse_state(bundle: Path) -> tuple[Path | None, int]:
+    """Locate the bundled local wheelhouse and count the wheels in it."""
+    for cand in (bundle / "wheelhouse", bundle / "MindedAAOS" / "wheelhouse"):
+        if cand.is_dir():
+            return cand, sum(1 for p in cand.rglob("*.whl") if p.is_file())
+    return None, 0
 
 
 def _find_external_urls(target: Path, base_bundle: Path) -> list[str]:
@@ -127,15 +160,21 @@ def certify(bundle: Path) -> tuple[bool, dict]:
     checks.append(_check("static frontend bundle", frontend is not None and (frontend / "index.html").is_file(), "frontend/index.html present" if frontend and (frontend / "index.html").is_file() else "static frontend/index.html missing"))
     checks.append(_check("offline marker", offline_marker is not None, "OFFLINE_MODE marker present" if offline_marker else "OFFLINE_MODE marker missing"))
 
+    wheelhouse, wheel_count = _wheelhouse_state(bundle)
+    checks.append(_check(
+        "local wheelhouse",
+        wheel_count > 0,
+        f"{wheelhouse.relative_to(bundle)} contains {wheel_count} wheel(s)" if wheel_count else "non-empty wheelhouse/ (*.whl) missing",
+    ))
+
     external_resource_hits: list[str] = []
     if frontend:
         for path in frontend.rglob("*.html"):
             text = _read_text(path)
-            for attr in ("src=", "href="):
-                for match in re.finditer(rf"{re.escape(attr)}[\"'](https?:|//)", text, re.IGNORECASE):
-                    matched_val = match.group(0)
-                    if not _is_url_allowed(matched_val):
-                        external_resource_hits.append(f"{path.relative_to(bundle)} -> {matched_val}")
+            for match in re.finditer(r"(?:src|href)\s*=\s*[\"'](https?:[^\"']*|//[^\"']*)", text, re.IGNORECASE):
+                value = match.group(1)
+                if not _is_url_allowed(value):
+                    external_resource_hits.append(f"{path.relative_to(bundle)} -> {value[:180]}")
         # Rigorously scan all JS, CSS, JSON, and static assets in the frontend bundle
         external_resource_hits.extend(_find_external_urls(frontend, bundle))
     checks.append(_check("frontend external resources", not external_resource_hits, "none found" if not external_resource_hits else f"{len(external_resource_hits)} external resource(s) found"))

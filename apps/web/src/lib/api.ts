@@ -5,6 +5,7 @@ import {
   BusinessMetric,
   Dataset,
   GlossaryTerm,
+  MonitoringStatus,
   Project,
   VerificationDecision,
   VerificationSignoffOutcome,
@@ -77,6 +78,38 @@ export interface Investigation {
   [key: string]: unknown;
 }
 
+export interface AnalysisHistoryRecord {
+  id: string;
+  record_type: "investigation" | "legacy_analysis";
+  project_id: string;
+  project_name: string;
+  question: string;
+  created_at: string | null;
+  updated_at: string | null;
+  status: string;
+  headline: string | null;
+  direct_answer: string | null;
+  analyst_result: Record<string, unknown> | null;
+  saved_result?: Record<string, unknown> | null;
+  verification_status: string;
+  claim_status: string;
+  source_datasets: Array<{
+    dataset_id: string | null;
+    name: string;
+    dataset_version: number | string | null;
+    dataset_version_id: string | null;
+    fingerprint: string | null;
+    available: boolean;
+  }>;
+  evidence_ids: string[];
+  [key: string]: unknown;
+}
+
+export interface AnalysisHistoryResponse {
+  records: AnalysisHistoryRecord[];
+  projects: Array<{ id: string; name: string; description?: string | null }>;
+}
+
 export interface InvestigationEvent {
   id?: string;
   sequence: number;
@@ -123,6 +156,7 @@ export class AAOSApiError extends Error {
 }
 
 let cachedToken: string | null = null;
+let tokenBootstrapPromise: Promise<string> | null = null;
 
 /**
  * Demo authentication is intentionally not an automatic production fallback.
@@ -148,18 +182,26 @@ export async function getValidToken(): Promise<string> {
     // non-local origin. Production authentication remains explicit.
     const localMode = process.env.NEXT_PUBLIC_LOCAL_MODE === "true" || /localhost|127\.0\.0\.1/.test(window.location.hostname);
     if (localMode) {
-      try {
-        const res = await fetch(`${API_BASE}/auth/demo-token`, { method: "POST" });
-        if (res.ok) {
-          const body = await res.json();
-          if (body?.access_token) {
-            setAuthToken(body.access_token);
-            return body.access_token;
+      if (!tokenBootstrapPromise) {
+        tokenBootstrapPromise = (async () => {
+          try {
+            const res = await fetch(`${API_BASE}/auth/demo-token`, { method: "POST" });
+            if (res.ok) {
+              const body = await res.json();
+              if (body?.access_token) {
+                setAuthToken(body.access_token);
+                return body.access_token;
+              }
+            }
+          } catch {
+            // Let the original caller surface the real connectivity error.
+          } finally {
+            tokenBootstrapPromise = null;
           }
-        }
-      } catch {
-        // Let the original caller surface the real connectivity error.
+          return "";
+        })();
       }
+      return tokenBootstrapPromise;
     }
   }
 
@@ -176,6 +218,7 @@ export function setAuthToken(token: string) {
 
 export function clearAuthToken() {
   cachedToken = null;
+  tokenBootstrapPromise = null;
 
   if (typeof window !== "undefined") {
     sessionStorage.removeItem("aa_os_token");
@@ -268,10 +311,15 @@ export async function fetchDatasets(projectId?: string): Promise<Dataset[]> {
 }
 
 export async function fetchDatasetDetails(
-  datasetId: string
+  datasetId: string,
+  version?: number
 ): Promise<Dataset> {
+  const params = new URLSearchParams();
+  if (version !== undefined) params.set("version", String(version));
+  const suffix = params.toString();
   return authFetchJson<Dataset>(
-    `${API_BASE}/datasets/${encodeURIComponent(datasetId)}`
+    `${API_BASE}/datasets/${encodeURIComponent(datasetId)}${suffix ? `?${suffix}` : ""}`,
+    { cache: "no-store" }
   );
 }
 
@@ -313,15 +361,120 @@ export interface CreateInvestigationInput {
   question: string;
   project_id: string;
   dataset_ids?: string[];
+  monitoring_event_id?: string;
+  selected_metric?: string;
+  selected_aggregation?: string;
+  selected_group_dimension?: string;
+  selected_dataset?: string;
+  confirmed_assumptions?: string[] | { add?: string[]; remove?: string[]; replace?: string[] };
+  scope_filter?: string;
+  clarification_response?: string;
+  custom_instruction?: string;
+  intent_patch?: Record<string, unknown>;
+  pending_intent_slot?: string;
+  plan_hash?: string;
+}
+
+export interface PreAnalysisPlan {
+  question: string;
+  task: string;
+  proposed_interpretation: string;
+  planned_calculation: string;
+  target_metric: string | null;
+  group_dimension: string | null;
+  time_period: string | null;
+  scope: string;
+  assumptions: string[];
+  ambiguity_status: "CLEAR" | "AMBIGUOUS_METRIC" | "MISSING_DATA" | "AMBIGUOUS_SCOPE" | "JOIN_FANOUT_RISK" | "CAUSAL_ON_OBSERVATIONAL" | "VERIFICATION_FAILED" | string;
+  clarification_prompt?: string | null;
+  clarification_options: string[];
+  can_auto_proceed: boolean;
+  recommended_action: string;
+  resolution_status?: string;
+  resolution_reason?: string | null;
+  unresolved_instruction?: string | null;
+  suggested_resolutions?: string[];
+  conflict?: Record<string, unknown> | null;
+  plan_hash?: string;
+  canonical_contract?: Record<string, unknown> | null;
+  clarification_option_patches?: Array<{ label: string; patch: Record<string, unknown> }>;
+  pending_intent_slot?: string | null;
 }
 
 export interface CreateInvestigationResponse {
   investigation_id: string;
-  job_id: string;
+  job_id: string | null;
   status: string;
   question: string;
   project_id: string;
-  created_at: string;
+  created_at: string | null;
+  resolution?: {
+    status: string;
+    reason?: string | null;
+    unresolved_instruction?: string | null;
+    suggested_resolutions?: string[];
+    conflict?: Record<string, unknown> | null;
+  };
+  dispatch_error?: string;
+  retry_endpoint?: string;
+}
+
+export interface InterpretGuidance {
+  selected_metric?: string;
+  selected_aggregation?: string;
+  selected_group_dimension?: string;
+  selected_dataset?: string;
+  confirmed_assumptions?: string[] | { add?: string[]; remove?: string[]; replace?: string[] };
+  scope_filter?: string;
+  clarification_response?: string;
+  custom_instruction?: string;
+  intent_patch?: Record<string, unknown>;
+  pending_intent_slot?: string;
+}
+
+export async function interpretQuestion(input: {
+  question: string;
+  project_id: string;
+  dataset_ids?: string[];
+} & InterpretGuidance): Promise<PreAnalysisPlan> {
+  return authFetchJson<PreAnalysisPlan>(`${API_BASE}/investigations/interpret`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      question: input.question.trim(),
+      project_id: input.project_id,
+      dataset_ids: input.dataset_ids,
+      selected_metric: input.selected_metric,
+      selected_aggregation: input.selected_aggregation,
+      selected_group_dimension: input.selected_group_dimension,
+      selected_dataset: input.selected_dataset,
+      confirmed_assumptions: input.confirmed_assumptions,
+      scope_filter: input.scope_filter,
+      clarification_response: input.clarification_response,
+      custom_instruction: input.custom_instruction,
+      intent_patch: input.intent_patch,
+      pending_intent_slot: input.pending_intent_slot,
+    }),
+  });
+}
+
+export async function submitHumanReview(
+  investigationId: string,
+  payload: {
+    action: "ACCEPT" | "REQUEST_CORRECTION" | "REJECT" | "REDO";
+    comments?: string;
+    modified_parameters?: Record<string, unknown>;
+  }
+): Promise<{ status: string; review: Record<string, unknown>; investigation_id: string }> {
+  return authFetchJson(`${API_BASE}/investigations/${encodeURIComponent(investigationId)}/review`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function createInvestigation(
@@ -352,7 +505,39 @@ export async function createInvestigation(
       question: input.question.trim(),
       project_id: input.project_id,
       dataset_ids: input.dataset_ids,
+      monitoring_event_id: input.monitoring_event_id,
+      selected_metric: input.selected_metric,
+      selected_aggregation: input.selected_aggregation,
+      selected_group_dimension: input.selected_group_dimension,
+      selected_dataset: input.selected_dataset,
+      confirmed_assumptions: input.confirmed_assumptions,
+      scope_filter: input.scope_filter,
+      clarification_response: input.clarification_response,
+      custom_instruction: input.custom_instruction,
+      intent_patch: input.intent_patch,
+      pending_intent_slot: input.pending_intent_slot,
+      plan_hash: input.plan_hash,
     }),
+  });
+}
+
+/** Append a correction to a queued investigation without replacing prior guidance. */
+export async function reviseInvestigationGuidance(
+  investigationId: string,
+  guidance: Omit<CreateInvestigationInput, "question" | "project_id" | "dataset_ids" | "monitoring_event_id">
+): Promise<CreateInvestigationResponse> {
+  return authFetchJson(`${API_BASE}/investigations/${encodeURIComponent(investigationId)}/guidance`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(guidance),
+  });
+}
+
+export async function retryInvestigationDispatch(
+  investigationId: string
+): Promise<CreateInvestigationResponse> {
+  return authFetchJson(`${API_BASE}/investigations/${encodeURIComponent(investigationId)}/dispatch`, {
+    method: "POST",
   });
 }
 
@@ -364,6 +549,25 @@ export async function listInvestigations(
     : `${API_BASE}/investigations`;
 
   return authFetchJson<Investigation[]>(url);
+}
+
+export async function fetchAnalysisHistory(limit = 100): Promise<AnalysisHistoryResponse> {
+  return authFetchJson<AnalysisHistoryResponse>(
+    `${API_BASE}/investigations/history?limit=${encodeURIComponent(String(limit))}`,
+    { cache: "no-store" }
+  );
+}
+
+export async function clearAnalysisHistory(): Promise<{
+  status: string;
+  removed_investigations: number;
+  removed_legacy_analyses: number;
+  projects_and_datasets_preserved: boolean;
+}> {
+  return authFetchJson(`${API_BASE}/investigations/history`, {
+    method: "DELETE",
+    cache: "no-store",
+  });
 }
 
 export async function fetchInvestigation(
@@ -405,6 +609,24 @@ export async function fetchInvestigationExplanation(
   mode: "DETERMINISTIC" | "AI_AUGMENTED" = "DETERMINISTIC"
 ): Promise<Investigation["explanation"] & { analysis_id: string; analysis_mode: string }> {
   return authFetchJson(`${API_BASE}/investigations/${encodeURIComponent(investigationId)}/explanation?mode=${mode}`);
+}
+
+export async function downloadInvestigationExport(
+  investigationId: string,
+  format: "pdf" | "docx"
+): Promise<Blob> {
+  const token = await getValidToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(
+    `${API_BASE}/investigations/${encodeURIComponent(investigationId)}/export?format=${format}`,
+    { headers }
+  );
+  if (!res.ok) {
+    throw new Error(`Export failed with HTTP ${res.status}: ${res.statusText}`);
+  }
+  return res.blob();
 }
 
 export async function cancelInvestigation(
@@ -469,59 +691,83 @@ export function streamInvestigationEvents(
   onEvent: (event: InvestigationEvent) => void,
   options?: {
     lastEventId?: number;
-    onError?: (error: Event) => void;
+    onError?: (error: Error) => void;
   }
 ): () => void {
   if (typeof window === "undefined") {
     return () => undefined;
   }
 
-  const tokenPromise = getValidToken();
-  let source: EventSource | null = null;
+  const controller = new AbortController();
   let cancelled = false;
 
   const start = async () => {
-    const token = await tokenPromise;
-
+    try {
+    const token = await getValidToken();
     if (cancelled) return;
-
-    const params = new URLSearchParams();
-
-    if (token) {
-      params.set("token", token);
+    if (!token) {
+      throw new Error("Authentication is unavailable for investigation progress updates.");
     }
-
+    const params = new URLSearchParams();
     if (options?.lastEventId !== undefined) {
       params.set("last_event_id", String(options.lastEventId));
     }
-
     const suffix = params.toString();
     const url =
       `${API_BASE}/investigations/${encodeURIComponent(
         investigationId
       )}/events` + (suffix ? `?${suffix}` : "");
+    const response = await fetch(url, {
+      headers: {
+        Accept: "text/event-stream",
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Investigation progress stream returned HTTP ${response.status}.`);
+    }
+    if (!response.body) {
+      throw new Error("Investigation progress stream returned no response body.");
+    }
 
-    source = new EventSource(url);
-
-    source.onmessage = (message) => {
-      try {
-        const parsed = JSON.parse(message.data) as InvestigationEvent;
-        onEvent(parsed);
-      } catch (error) {
-        console.warn("Invalid investigation SSE event:", error);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (!cancelled) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() || "";
+      for (const block of blocks) {
+        const data = block
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (!data) continue;
+        try {
+          const parsed = JSON.parse(data) as InvestigationEvent;
+          onEvent(parsed);
+        } catch (error) {
+          console.warn("Invalid investigation SSE event:", error);
+        }
       }
-    };
-
-    source.onerror = (error) => {
-      options?.onError?.(error);
-    };
+      if (done) break;
+    }
+    reader.releaseLock();
+    } catch (error) {
+    if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
+      options?.onError?.(error instanceof Error ? error : new Error("Investigation progress stream failed."));
+    }
+    }
   };
 
   void start();
 
   return () => {
     cancelled = true;
-    source?.close();
+    controller.abort();
   };
 }
 
@@ -564,13 +810,54 @@ export async function fetchAlertRules(
 }
 
 export async function fetchAlertEvents(
-  ruleId?: string
+  ruleId?: string,
+  projectId?: string
 ): Promise<AlertEvent[]> {
-  const url = ruleId
-    ? `${API_BASE}/alerts/events?rule_id=${encodeURIComponent(ruleId)}`
-    : `${API_BASE}/alerts/events`;
+  const params = new URLSearchParams();
+  if (ruleId) params.set("rule_id", ruleId);
+  if (projectId) params.set("project_id", projectId);
+  const suffix = params.toString();
+  const url = `${API_BASE}/alerts/events${suffix ? `?${suffix}` : ""}`;
 
   return authFetchJson<AlertEvent[]>(url);
+}
+
+export async function fetchMonitoringStatus(projectId: string): Promise<MonitoringStatus> {
+  return authFetchJson<MonitoringStatus>(
+    `${API_BASE}/alerts/status?project_id=${encodeURIComponent(projectId)}`,
+    { cache: "no-store" }
+  );
+}
+
+export async function evaluateAlertRules(projectId: string) {
+  return authFetchJson<{
+    status: string;
+    project_id: string;
+    trigger: string;
+    evaluated_rule_count: number;
+    triggered_count: number;
+    outcomes: Array<Record<string, unknown>>;
+    scheduler_active: boolean;
+  }>(`${API_BASE}/alerts/evaluate?project_id=${encodeURIComponent(projectId)}`, {
+    method: "POST",
+    cache: "no-store",
+  });
+}
+
+export async function transitionAlertEvent(
+  eventId: string,
+  action: "acknowledge" | "resolve" | "snooze",
+  minutes?: number
+): Promise<AlertEvent> {
+  return authFetchJson<AlertEvent>(
+    `${API_BASE}/alerts/events/${encodeURIComponent(eventId)}/${action}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: action === "snooze" ? JSON.stringify({ minutes: minutes ?? 60 }) : undefined,
+      cache: "no-store",
+    }
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -597,7 +884,14 @@ export async function fetchProjectSummary(projectId: string) {
   );
 }
 
-export async function resetWorkspace(projectId: string) {
+export async function resetWorkspace(projectId: string): Promise<{
+  status: string;
+  message: string;
+  removed_datasets: number;
+  removed_dataset_versions: number;
+  history_preserved: boolean;
+  storage_cleanup_pending: boolean;
+}> {
   if (!projectId) {
     throw new AAOSApiError(
       "Project ID is required.",
@@ -785,4 +1079,3 @@ export async function executeQuery(sql: string, projectId: string): Promise<Quer
     body: JSON.stringify({ sql, project_id: projectId }),
   });
 }
-

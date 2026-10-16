@@ -19,6 +19,7 @@ def build_cross_dataset_review(
     verifications: Iterable[Mapping[str, Any]],
     join_events: Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    experiments = list(experiments)
     requested_scope_ids = [str(value) for value in requested_dataset_ids]
     selected_scope_count = len(requested_scope_ids)
     dataset_id_by_name = {str(name): str(dataset_id) for dataset_id, name in dataset_name_by_id.items()}
@@ -123,8 +124,17 @@ def build_cross_dataset_review(
     else:
         status = "SELECTED_BUT_NOT_USED"
 
+    implicit_scope_names = set()
+    for _experiment in experiments:
+        _args = dict(_experiment.get("arguments_json") or {})
+        for _name in (_args.get("source_datasets") or []):
+            implicit_scope_names.add(str(_name))
+
     review_checks = {
-        "dataset_scope_recorded": bool(requested_scope_ids),
+        # An explicit selection is the strongest record, but a single-dataset analysis whose
+        # experiments each recorded the one dataset they ran on has a recorded scope too;
+        # failing it showed reviewers "scope not recorded" beside a fully profiled dataset.
+        "dataset_scope_recorded": bool(requested_scope_ids) or len(implicit_scope_names) == 1,
         "at_least_two_sources_when_relational": (
             all(len(review["source_tables"]) >= 2 for review in relational_reviews)
             if relational_reviews

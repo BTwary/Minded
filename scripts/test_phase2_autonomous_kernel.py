@@ -52,9 +52,13 @@ def run_phase2_acceptance_tests():
 
     temp_dir = tempfile.mkdtemp(prefix="aaos_phase2_test_")
     db_path = os.path.join(temp_dir, "phase2_test.db")
+    # Mirror apps/api/src/core/database.py: one pinned connection (StaticPool) so the controller's
+    # checkpointer and its main session never deadlock on SQLite's single-writer lock.
+    from sqlalchemy.pool import StaticPool
     test_engine = create_engine(
         f"sqlite:///{db_path}?timeout=30",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         echo=False,
     )
     Base.metadata.create_all(bind=test_engine)
@@ -151,17 +155,34 @@ def run_phase2_acceptance_tests():
         target_dimension="category_a",
         target_metric="val_metric",
     )
-    df_confounded = pd.DataFrame({
-        "category_a": ["A1", "A2"] * 200,
-        "category_b": ["B1", "B1", "B2", "B2"] * 100,
-        "val_metric": [10.0, 20.0, 50.0, 40.0] * 100,
-    })
+    # A genuine Simpson's reversal: A1 beats A2 by ~5 inside EVERY stratum of category_b, yet A1 loses
+    # overall because A1 sits mostly in the low-valued stratum and A2 mostly in the high-valued one.
+    # (The detector deliberately ignores mixed-sign strata: that is effect modification, not a reversal.)
+    _rng = np.random.RandomState(0)
+    _cells = [("A1", "B1", 20, 105.0), ("A1", "B2", 180, 15.0), ("A2", "B1", 180, 100.0), ("A2", "B2", 20, 10.0)]
+    df_confounded = pd.DataFrame(
+        [(a, b, v) for a, b, n, mu in _cells for v in _rng.normal(mu, 1.0, n)],
+        columns=["category_a", "category_b", "val_metric"],
+    )
     attack_res = AdversarialAttacker.execute_adversarial_attack(
         df=df_confounded,
         leading_hypothesis=leading_hyp,
         counter_hypothesis=leading_hyp,
     )
     assert attack_res.simpsons_paradox_detected is True
+
+    # Mixed-sign strata with equal pooled means are effect modification, not a Simpson's reversal.
+    df_modified = pd.DataFrame({
+        "category_a": ["A1", "A2"] * 200,
+        "category_b": ["B1", "B1", "B2", "B2"] * 100,
+        "val_metric": [10.0, 20.0, 50.0, 40.0] * 100,
+    })
+    modified_res = AdversarialAttacker.execute_adversarial_attack(
+        df=df_modified,
+        leading_hypothesis=leading_hyp,
+        counter_hypothesis=leading_hyp,
+    )
+    assert modified_res.simpsons_paradox_detected is False
     # Verify ExperimentSynthesizer dynamically spawns conditional experiment on category_b
     replanned = ExperimentSynthesizer.dynamically_replan_candidates(
         hypotheses=[leading_hyp],
@@ -178,8 +199,15 @@ def run_phase2_acceptance_tests():
     # ------------------------------------------------------------------------
     print("\n[TEST D] Testing Dynamic Hypothesis Rejection...")
     priors = [0.50, 0.50]
-    # In uniform data (eta_sq ~ 0.0), likelihood for H1 is low (~0.15) and H2 is high (~0.85)
-    l_h1, l_h2 = BeliefEngine.compute_evidence_likelihoods(primary_metric=10.0, benchmark_metric=10.0, effect_size_eta_sq=0.5)
+    # Without a sample size the engine refuses to manufacture a likelihood: evidence is neutral and
+    # the posteriors stay at the priors (missing evidence is not evidence for or against an effect).
+    assert BeliefEngine.compute_evidence_likelihoods(primary_metric=10.0, benchmark_metric=10.0, effect_size_eta_sq=0.5) == (1.0, 1.0)
+    neutral, _ = BeliefEngine.compute_bayesian_posteriors(priors, [1.0, 1.0])
+    assert abs(neutral[0] - 0.5) < 1e-9
+    # Flat data with a real sample size (eta_sq is a percentage; 0.0 = no variance explained):
+    # the BIC-based Bayes factor for "there is an effect" is small, so H1 is refuted and H2 promoted.
+    l_h1, l_h2 = BeliefEngine.compute_evidence_likelihoods(
+        primary_metric=10.0, benchmark_metric=10.0, effect_size_eta_sq=0.0, sample_size=200)
     assert l_h1 < 0.30 and l_h2 > 0.70
     posteriors, delta_h = BeliefEngine.compute_bayesian_posteriors(priors, [l_h1, l_h2])
     assert posteriors[0] < 0.30 and posteriors[1] > 0.70

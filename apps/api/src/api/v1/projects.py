@@ -1,6 +1,5 @@
 """Project Management API Endpoints with Strict Tenancy & JWT Enforcement."""
 import os
-import shutil
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -8,8 +7,22 @@ from sqlalchemy.orm import Session
 from apps.api.src.core.config import settings
 from apps.api.src.core.database import get_db
 from apps.api.src.core.security import get_current_user, verify_project_ownership
-from apps.api.src.models.entities import AlertEvent, AlertRule, AnalysisRun, BusinessGlossary, BusinessMetric, Dashboard, Dataset, DatasetVersion, Project, Report, User
-from apps.api.src.services.dataset_service import DatasetService
+from apps.api.src.models.entities import (
+    AlertEvent,
+    AlertRule,
+    AnalysisRun,
+    AuditLog,
+    BusinessGlossary,
+    BusinessMetric,
+    Dashboard,
+    Dataset,
+    DatasetTransformation,
+    DatasetVersion,
+    Project,
+    Report,
+    SemanticModel,
+    User,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -162,69 +175,135 @@ def reset_project(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Reset all workspace data to a clean slate (0 datasets, 0 analyses)."""
+    """Remove active project data while preserving saved analysis history."""
     verify_project_ownership(project_id, current_user, db)
 
     # Delete only objects owned by this project. Never issue an unscoped bulk delete.
     project_dataset_ids = [row[0] for row in db.query(Dataset.id).filter(Dataset.project_id == project_id).all()]
-    project_rule_ids = [row[0] for row in db.query(AlertRule.id).filter(AlertRule.project_id == project_id).all()]
+    storage_records = (
+        db.query(DatasetVersion).filter(DatasetVersion.dataset_id.in_(project_dataset_ids)).all()
+        if project_dataset_ids else []
+    )
+    cleanup_keys = set()
+    for record in storage_records:
+        if record.file_path:
+            cleanup_keys.add(str(record.file_path))
+        transformation = record.transformation_applied or {}
+        raw_key = transformation.get("raw_file_path") if isinstance(transformation, dict) else None
+        if raw_key:
+            cleanup_keys.add(str(raw_key))
 
-    # Capture exact managed storage keys before deleting DB rows. This preserves
-    # project isolation without deleting another project's objects.
-    storage_records = []
-    if project_dataset_ids:
-        storage_records = db.query(DatasetVersion).filter(DatasetVersion.dataset_id.in_(project_dataset_ids)).all()
-        db.query(DatasetVersion).filter(DatasetVersion.dataset_id.in_(project_dataset_ids)).delete(synchronize_session=False)
-    db.query(Dataset).filter(Dataset.project_id == project_id).delete(synchronize_session=False)
-    db.query(AnalysisRun).filter(AnalysisRun.project_id == project_id).delete(synchronize_session=False)
-    if project_rule_ids:
-        db.query(AlertEvent).filter(AlertEvent.rule_id.in_(project_rule_ids), AlertEvent.project_id == project_id).delete(synchronize_session=False)
-    db.query(AlertRule).filter(AlertRule.project_id == project_id).delete(synchronize_session=False)
-    db.query(Dashboard).filter(Dashboard.project_id == project_id).delete()
-    db.query(Report).filter(Report.project_id == project_id).delete()
-    db.query(BusinessMetric).filter(BusinessMetric.project_id == project_id).delete()
-    db.query(BusinessGlossary).filter(BusinessGlossary.project_id == project_id).delete()
-    db.commit()
+    pending_cleanup = (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.project_id == project_id,
+            AuditLog.action == "workspace_reset_storage_cleanup",
+        )
+        .all()
+    )
+    pending_cleanup = [
+        item for item in pending_cleanup
+        if (item.details_json or {}).get("status") == "PENDING"
+    ]
+    cleanup_record = None
 
-    # Remove only storage objects referenced by this project's dataset versions.
-    # Works for local and configured cloud providers through the same abstraction.
     try:
-        from apps.api.src.services.storage_service import StorageService
-        storage = StorageService()
-        for record in storage_records:
-            for key in (record.file_path,):
-                if key:
+        if cleanup_keys:
+            cleanup_record = AuditLog(
+                project_id=project_id,
+                user_id=current_user.id,
+                action="workspace_reset_storage_cleanup",
+                details_json={"status": "PENDING", "keys": sorted(cleanup_keys)},
+            )
+            db.add(cleanup_record)
+            pending_cleanup.append(cleanup_record)
+
+        if project_dataset_ids:
+            db.query(DatasetTransformation).filter(
+                DatasetTransformation.dataset_id.in_(project_dataset_ids)
+            ).delete(synchronize_session=False)
+            db.query(DatasetVersion).filter(
+                DatasetVersion.dataset_id.in_(project_dataset_ids)
+            ).delete(synchronize_session=False)
+        db.query(Dataset).filter(Dataset.project_id == project_id).delete(synchronize_session=False)
+
+        # Semantic models are retained as historical references by investigations,
+        # but are no longer active against a workspace with no source datasets.
+        db.query(SemanticModel).filter(SemanticModel.project_id == project_id).update(
+            {SemanticModel.status: "deprecated"},
+            synchronize_session=False,
+        )
+
+        # Preserve monitoring history while disabling rules whose source
+        # dataset has been removed. Historical event detail remains available
+        # and can report that its source is no longer present.
+        if project_dataset_ids:
+            db.query(AlertRule).filter(
+                AlertRule.project_id == project_id,
+                AlertRule.dataset_id.in_(project_dataset_ids),
+            ).update({AlertRule.is_active: False}, synchronize_session=False)
+        db.query(Dashboard).filter(Dashboard.project_id == project_id).delete(synchronize_session=False)
+        db.query(Report).filter(Report.project_id == project_id).delete(synchronize_session=False)
+        db.query(BusinessMetric).filter(BusinessMetric.project_id == project_id).delete(synchronize_session=False)
+        db.query(BusinessGlossary).filter(BusinessGlossary.project_id == project_id).delete(synchronize_session=False)
+        # AnalysisRun and Investigation records are durable history and are
+        # intentionally not removed by Reset Data.
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Reset could not commit its project-scoped database changes: {exc}") from exc
+
+    if pending_cleanup:
+        try:
+            from packages.analytics_core.src.providers.manager import InfrastructureManager
+
+            provider = InfrastructureManager.get_storage_provider()
+            managed_root = os.path.abspath(settings.DATA_STORAGE_DIR)
+            cleanup_errors = []
+            for item in pending_cleanup:
+                details = dict(item.details_json or {})
+                remaining = []
+                for key in details.get("keys", []):
+                    key = str(key)
                     try:
                         if os.path.isabs(key):
-                            managed_root = os.path.abspath(settings.DATA_STORAGE_DIR)
                             candidate = os.path.abspath(key)
-                            if candidate == managed_root or candidate.startswith(managed_root + os.sep):
-                                if os.path.isfile(candidate):
-                                    os.remove(candidate)
-                        elif storage.provider.file_exists(key):
-                            storage.provider.delete_file(key)
-                    except Exception:
-                        # DB reset remains authoritative; a storage cleanup failure
-                        # must not expand deletion scope or delete unrelated data.
-                        pass
-            transformation = record.transformation_applied or {}
-            raw_key = transformation.get("raw_file_path") if isinstance(transformation, dict) else None
-            if raw_key and raw_key != record.file_path:
-                try:
-                    if os.path.isabs(raw_key):
-                        managed_root = os.path.abspath(settings.DATA_STORAGE_DIR)
-                        candidate = os.path.abspath(raw_key)
-                        if candidate == managed_root or candidate.startswith(managed_root + os.sep):
+                            if candidate == managed_root or not candidate.startswith(managed_root + os.sep):
+                                raise ValueError("Absolute storage path is outside the managed dataset store.")
                             if os.path.isfile(candidate):
                                 os.remove(candidate)
-                    elif storage.provider.file_exists(raw_key):
-                        storage.provider.delete_file(raw_key)
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                        elif provider.file_exists(key):
+                            provider.delete_file(key)
+                    except Exception as exc:
+                        remaining.append(key)
+                        cleanup_errors.append(f"{key}: {type(exc).__name__}")
+                details["keys"] = remaining
+                details["status"] = "PENDING" if remaining else "COMPLETE"
+                details["last_error"] = "; ".join(cleanup_errors) if remaining else None
+                item.details_json = details
+            db.commit()
+            if cleanup_errors:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Active dataset records were removed, but managed storage cleanup is incomplete. Retry Reset Data; the cleanup is recorded and no successful reset is reported.",
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=503,
+                detail=f"Active dataset records were removed, but storage cleanup could not be confirmed. Retry Reset Data. ({type(exc).__name__})",
+            ) from exc
 
-    return {"status": "success", "message": "Project reset complete; only this project's datasets, alerts, and artifacts were removed."}
+    return {
+        "status": "success",
+        "message": "Project data reset complete. Saved analysis history and application preferences were preserved.",
+        "removed_datasets": len(project_dataset_ids),
+        "removed_dataset_versions": len(storage_records),
+        "history_preserved": True,
+        "storage_cleanup_pending": False,
+    }
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)

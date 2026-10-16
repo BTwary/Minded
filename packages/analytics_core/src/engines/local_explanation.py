@@ -35,6 +35,14 @@ class LocalExplanation:
         }
 
 
+def _status_text(value: Any) -> str:
+    """Normalise a status that may be a plain string or a (str, Enum) member.
+
+    `str(ValidationStatus.PASSED)` is "ValidationStatus.PASSED", which never matches a
+    bare "PASSED"; reading `.value` first keeps both spellings equivalent."""
+    return str(getattr(value, "value", value) or "").upper()
+
+
 class LocalExplanationEngine:
     """Build a human-readable explanation from persisted AA-OS facts."""
 
@@ -65,8 +73,8 @@ class LocalExplanationEngine:
 
         supported = [h for h in hyps if str(getattr(h, "status", "")).lower() == "supported"]
         refuted = [h for h in hyps if str(getattr(h, "status", "")).lower() in {"refuted", "weakened"}]
-        verified = [e for e in evid if str(getattr(e, "validation_status", "")).upper() in {"VERIFIED", "PASSED"}]
-        failed_verification = [e for e in evid if str(getattr(e, "validation_status", "")).upper() in {"FAILED", "UNVERIFIED"}]
+        verified = [e for e in evid if _status_text(getattr(e, "validation_status", "")) in {"VERIFIED", "PASSED"}]
+        failed_verification = [e for e in evid if _status_text(getattr(e, "validation_status", "")) in {"FAILED", "UNVERIFIED"}]
 
         class_name = (method_selection or {}).get("problem_class") or "analysis"
         objective = (method_selection or {}).get("objective") or ""

@@ -39,6 +39,7 @@ precision and low false-positive):
 from __future__ import annotations
 
 import re
+import pandas as pd
 from typing import Iterable, List
 
 # A "physical-identifier-style" token: starts with a letter, contains at
@@ -180,6 +181,59 @@ def detect_aggregate_metric_not_found(question: str, columns: Iterable[str]) -> 
     return True
 
 
+
+def infer_binary_rate_indicator(question: str, df) -> str | None:
+    """Resolve a rate/proportion noun to one uniquely named binary indicator.
+
+    This is deliberately conservative: the question must contain rate/proportion
+    language, the indicator's name must share a meaningful concept token with the
+    noun immediately describing the rate, and exactly one binary-like column may
+    match. It returns a physical column name; it does not calculate a rate.
+    """
+    if df is None or not _RATE_PROPORTION_RE.search(question or ""):
+        return None
+    q = (question or "").lower()
+    match = re.search(r"\b([a-z][a-z0-9_-]*)\s+(?:rate|proportion|percentage|percent)\b", q)
+    # Typical phrasing: "defect rate", "conversion rate", "failure rate".
+    if not match:
+        return None
+    concept = match.group(1).replace("-", "_").rstrip("s")
+    stop = {"the", "a", "an", "overall", "average", "total", "of", "by", "for"}
+    if concept in stop or len(concept) < 3:
+        return None
+
+    def stem(token: str) -> str:
+        token = token.lower().strip("_")
+        for suffix in ("ed", "ing", "ive", "tion", "s"):
+            if len(token) > len(suffix) + 3 and token.endswith(suffix):
+                token = token[:-len(suffix)]
+                break
+        return token
+
+    concept_stem = stem(concept)
+    candidates = []
+    for col in getattr(df, "columns", []):
+        series = df[col].dropna()
+        if series.empty or series.nunique() > 2:
+            continue
+        # Downstream execution computes the mean of this indicator. Only native
+        # bool and numeric 0/1 series are compatible; categorical labels need an
+        # explicit typed transform and must not be approved as executable inputs.
+        if pd.api.types.is_bool_dtype(df[col]):
+            binary = True
+        elif pd.api.types.is_numeric_dtype(df[col]):
+            values = set(series.unique().tolist())
+            binary = values <= {0, 1, 0.0, 1.0}
+        else:
+            binary = False
+        if not binary:
+            continue
+        parts = {stem(x) for x in re.findall(r"[a-z0-9]+", str(col).lower())}
+        # Require a concept match, not merely a generic flag suffix.
+        if concept_stem in parts or any(len(concept_stem) >= 4 and (concept_stem.startswith(x) or x.startswith(concept_stem)) for x in parts if len(x) >= 4):
+            candidates.append(str(col))
+    return candidates[0] if len(candidates) == 1 else None
+
 def detect_unresolved_requested_variables(question: str, columns: Iterable[str]) -> List[str]:
     """Return the distinct identifier-style tokens named in `question` that
     do not correspond to any column in `columns` (case/separator-insensitive).
@@ -199,3 +253,34 @@ def detect_unresolved_requested_variables(question: str, columns: Iterable[str])
         if tok not in found:
             found.append(tok)
     return found
+
+
+# Business measures that must never be silently replaced by a different column.
+# concept word in the question -> substrings that make a column an acceptable binding.
+_NAMED_MEASURES = {
+    "profit": ("profit", "margin", "earning", "income"),
+    "profits": ("profit", "margin", "earning", "income"),
+    "margin": ("margin", "profit"),
+    "cost": ("cost", "expense", "spend"),
+    "costs": ("cost", "expense", "spend"),
+    "expense": ("expense", "cost", "spend"),
+    "expenses": ("expense", "cost", "spend"),
+    "revenue": ("revenue", "sales", "amount", "total", "income", "gmv", "turnover"),
+    "salary": ("salary", "wage", "pay", "compensation"),
+}
+
+
+def detect_named_measure_absent(question: str, columns: Iterable[str]) -> str | None:
+    """Return the measure word (e.g. ``"profit"``) when the question names a business
+    measure that no column plausibly carries, else ``None``.
+
+    Fail-closed guard: the direct controller path must refuse such a question rather than
+    bind it to an unrelated column (e.g. profit -> row COUNT).
+    """
+    ql = (question or "").lower()
+    cols = [str(c).lower() for c in columns]
+    for word in re.findall(r"\b[a-z]+\b", ql):
+        accepted = _NAMED_MEASURES.get(word)
+        if accepted and not any(sub in col for col in cols for sub in accepted):
+            return word
+    return None

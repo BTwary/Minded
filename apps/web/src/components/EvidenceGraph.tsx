@@ -13,6 +13,8 @@ export default function EvidenceGraph({ nodes = [] }: EvidenceGraphProps) {
 
   if (!nodes || nodes.length === 0) return null;
 
+  const validationLabel = (node: EvidenceGraphNode) => String(node.validation_status || "UNVERIFIED").toUpperCase();
+
   return (
     <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
       <div
@@ -26,12 +28,9 @@ export default function EvidenceGraph({ nodes = [] }: EvidenceGraphProps) {
           <div>
             <h3 className="text-sm font-bold text-white flex items-center space-x-2">
               <span>Auditable Evidence Graph &amp; Provenance Lineage</span>
-              <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                VERIFIED (0% HALLUCINATED)
-              </span>
             </h3>
             <p className="text-[11px] text-slate-400">
-              Deterministic lineage trace linking high-level claims to raw DuckDB queries and immutable Parquet storage.
+              Recorded evidence and provenance details. Validation status is shown for each evidence item.
             </p>
           </div>
         </div>
@@ -66,9 +65,17 @@ export default function EvidenceGraph({ nodes = [] }: EvidenceGraphProps) {
                   <Database className="w-3 h-3 text-cyan-400" />
                   <span>{node.table_name}.parquet (v{node.dataset_version})</span>
                 </span>
-                <span className="ml-auto inline-flex items-center space-x-1 text-emerald-400 text-[11px] font-semibold">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Tolerance Verified (≤ 0.01%)</span>
+                <span className={`ml-auto inline-flex items-center space-x-1 text-[11px] font-semibold ${
+                  node.tolerance_verified && ["PASSED", "VERIFIED"].includes(validationLabel(node))
+                    ? "text-emerald-400"
+                    : validationLabel(node) === "FAILED"
+                      ? "text-rose-300"
+                      : "text-amber-200"
+                }`}>
+                  {node.tolerance_verified && ["PASSED", "VERIFIED"].includes(validationLabel(node))
+                    ? <CheckCircle2 className="w-3.5 h-3.5" />
+                    : <ShieldCheck className="w-3.5 h-3.5" />}
+                  <span>{validationLabel(node)}{node.tolerance_verified ? " · tolerance verified" : ""}</span>
                 </span>
               </div>
 

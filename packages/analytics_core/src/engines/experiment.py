@@ -1,6 +1,6 @@
 """ExperimentEngine: Generates executable experiment specifications and analytical plans."""
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from packages.analytics_core.src.engines.hypothesis import CandidateHypothesis
 from packages.analytics_core.src.engines.semantic import SemanticResolution
 
@@ -14,6 +14,9 @@ class ExperimentSpecification:
     query_sql: str
     description: str
     aggregation_type: str  # SUM, AVG, COUNT, VARIANCE
+    # The result column that carries the observed metric. The execution provider refuses to guess it
+    # from column order, so a query that returns several numeric columns must declare which one.
+    primary_result_column: Optional[str] = None
 
 
 class ExperimentEngine:
@@ -32,10 +35,12 @@ class ExperimentEngine:
             if not hyp.is_counter_hypothesis:
                 sql = f"SELECT SUM({metric}) AS total_val, COUNT(*) AS row_cnt FROM data_table"
                 agg = "SUM"
+                primary_col = "total_val"
                 desc = f"Dimensional volume concentration of {metric} under {hyp.code}."
             else:
                 sql = f"SELECT AVG({metric}) AS mean_val, COUNT(*) AS row_cnt FROM data_table"
                 agg = "AVG"
+                primary_col = "mean_val"
                 desc = f"Uniform distribution baseline verification on {metric} under {hyp.code}."
 
             specs.append(
@@ -46,6 +51,7 @@ class ExperimentEngine:
                     query_sql=sql,
                     description=desc,
                     aggregation_type=agg,
+                    primary_result_column=primary_col,
                 )
             )
 

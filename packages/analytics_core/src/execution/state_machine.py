@@ -32,6 +32,8 @@ class AnalyticalPhase:
 
 class InvestigationState:
     PLANNED = "PLANNED"
+    NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION"
+    READY = "READY"
     QUEUED = "QUEUED"
     CLAIMED = "CLAIMED"
     RUNNING = "RUNNING"
@@ -184,8 +186,21 @@ class InvestigationStateMachine:
 
     _VALID_TRANSITIONS: Dict[str, Set[str]] = {
         InvestigationState.PLANNED: {
+            InvestigationState.NEEDS_CLARIFICATION,
+            InvestigationState.READY,
             InvestigationState.QUEUED,
             InvestigationState.CANCELLED,
+        },
+        InvestigationState.NEEDS_CLARIFICATION: {
+            InvestigationState.READY,
+            InvestigationState.CANCELLED,
+            InvestigationState.FAILED,
+        },
+        InvestigationState.READY: {
+            InvestigationState.NEEDS_CLARIFICATION,
+            InvestigationState.QUEUED,
+            InvestigationState.CANCELLED,
+            InvestigationState.FAILED,
         },
         InvestigationState.QUEUED: {
             InvestigationState.CLAIMED,

@@ -8,7 +8,7 @@ This document outlines the architecture, environment variables, local developmen
 
 ```
                                ┌────────────────────────────────┐
-                               │   Next.js 14 Frontend / UI     │
+                               │   Next.js 15 Frontend / UI     │
                                │   (DataLens + Mining Cockpit)   │
                                └───────────────┬────────────────┘
                                                │ HTTP / WebSockets / SSE

@@ -95,8 +95,10 @@ class TestGoldenDeterministicInvestigation(unittest.TestCase):
         self.assertGreaterEqual(len(hyps), 2)
         h1 = hyps[0]  # H1: Concentration in specific partition
         h2 = hyps[1]  # H2: Uniform systemic macro drift
-        self.assertAlmostEqual(h1.prior_probability, 0.50, places=2)
-        self.assertAlmostEqual(h2.prior_probability, 0.30, places=2)
+        # The synthesizer now emits an uninformative (uniform) prior over all competing
+        # hypotheses (3 today) instead of the legacy hand-set 0.5/0.3 split.
+        self.assertAlmostEqual(h1.prior_probability, 1.0 / len(hyps), places=2)
+        self.assertAlmostEqual(h2.prior_probability, 1.0 / len(hyps), places=2)
         self.assertAlmostEqual(sum(h.prior_probability for h in hyps), 1.0, places=2)
 
         # ---------------------------------------------------------------------
@@ -151,6 +153,7 @@ class TestGoldenDeterministicInvestigation(unittest.TestCase):
             df=df,
             table_name="cloud_costs",
             query_sql=best_exp["query_sql"],
+            primary_result_column="val",  # multi-row results must name the primary metric
         )
         res_df = exec_result.result_df
         self.assertIsNotNone(res_df)
@@ -211,9 +214,12 @@ class TestGoldenDeterministicInvestigation(unittest.TestCase):
             primary_metric=top_val,
             benchmark_metric=total_cost / 4.0,
             effect_size_eta_sq=eta_sq,
+            sample_size=len(df),  # required: without it the API returns neutral evidence
         )
-        self.assertGreater(l_h1, 0.90)
-        self.assertLess(l_h2, 0.10)
+        # Likelihoods are now a Bayes factor for H1 against a neutral H2 (1.0), not
+        # two probabilities: decisive evidence is l_h1 >> l_h2.
+        self.assertGreater(l_h1, 100.0)
+        self.assertEqual(l_h2, 1.0)
 
         posteriors, entropy_delta = BeliefEngine.compute_bayesian_posteriors(
             priors=[h1.prior_probability, h2.prior_probability],

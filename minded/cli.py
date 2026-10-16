@@ -11,6 +11,12 @@ from typing import Iterable, List, Optional, Set
 from minded.analyze import SUPPORTED_SUFFIXES, run_analysis
 
 
+# Exit codes: 0 answered, 1 bad input, 2 no supported files, 3 analysis failed,
+# 4 completed but inconclusive (no verdict could be admitted).
+EXIT_ANALYSIS_FAILED = 3
+EXIT_INCONCLUSIVE = 4
+
+
 def _print_result(result: dict) -> None:
     print(json.dumps(result, indent=2, default=str))
 
@@ -37,14 +43,25 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if not files:
         print("No supported data files found.", file=sys.stderr)
         return 2
-    result = run_analysis(
-        files,
-        question=args.question,
-        project_id=args.project_id,
-        out_dir=Path(args.out),
-        analysis_mode="AI_AUGMENTED" if args.ai else "DETERMINISTIC",
-    )
+    try:
+        result = run_analysis(
+            files,
+            question=args.question,
+            project_id=args.project_id,
+            out_dir=Path(args.out),
+            analysis_mode="AI_AUGMENTED" if args.ai else "DETERMINISTIC",
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        # Bad input (missing/empty/unparseable file) is a user-facing error, not a crash.
+        print(f"minded: error: {exc}", file=sys.stderr)
+        return 1
     _print_result(result)
+    # Exit non-zero when the analysis did not complete so scripts/CI can detect it.
+    if "FAILED" in str(result.get("status", "")).upper():
+        return EXIT_ANALYSIS_FAILED
+    # A completed run that could not reach a conclusion is not the same as an answer.
+    if any(tag in str(result.get("verdict", "")).upper() for tag in ("INCONCLUSIVE", "INSUFFICIENT_DATA")):
+        return EXIT_INCONCLUSIVE
     return 0
 
 
@@ -86,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="minded",
         description="Fully autonomous data analyzer: ingest, profile, investigate, report.",
+        epilog="Exit codes: 0 answered; 1 bad input; 2 no supported files; 3 analysis failed; 4 completed but inconclusive.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

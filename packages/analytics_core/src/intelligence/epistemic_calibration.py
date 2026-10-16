@@ -97,7 +97,7 @@ class EpistemicCalibrationEngine:
         cls,
         df: pd.DataFrame,
         posterior_probability: float,
-        verification_delta_pct: float,
+        verification_delta_pct: Optional[float],
         variance_explained_pct: Optional[float],
         multiverse_robustness_pct: Optional[float],
         calibration_profile: Optional[CalibrationProfile] = None,
@@ -114,7 +114,17 @@ class EpistemicCalibrationEngine:
             ev_strength = 0.0
         # Verification agreement is a binary admissibility gate, not a confidence
         # score. Model uncertainty measures only disagreement magnitude.
-        model_uncertainty = float(np.clip(verification_delta_pct / 100.0, 0.0, 1.0))
+        #
+        # Fail closed: ``verification_delta_pct`` is legitimately None whenever
+        # independent verification produced no comparable secondary value
+        # (secondary engine failure, no result relation, scalar reduction
+        # failure -- see VerificationEngine.verify_secondary). The absence of a
+        # measured delta is not evidence of agreement, so uncertainty is
+        # maximal. No numeric delta is substituted.
+        if verification_delta_pct is None or not np.isfinite(float(verification_delta_pct)):
+            model_uncertainty = 1.0
+        else:
+            model_uncertainty = float(np.clip(float(verification_delta_pct) / 100.0, 0.0, 1.0))
         n = max(1, len(df))
         stat_uncertainty = float(np.clip(1.0 / np.sqrt(n), 0.0, 1.0))
         pred_uncertainty = float(np.clip(1.0 - posterior_probability, 0.0, 1.0))

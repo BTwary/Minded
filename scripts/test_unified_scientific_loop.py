@@ -180,14 +180,25 @@ class TestUnifiedScientificLoop(unittest.TestCase):
         self.assertEqual(conc_expl.pattern_name, "concentration")
 
         # 2. Segment Difference Pattern
+        # Segment differences need row-level observations (>= 3 per group) so an ANOVA can be run.
+        _rng = np.random.RandomState(7)
         diff_df = pd.DataFrame({
-            "segment": ["Electronics", "Apparel", "Home", "Beauty"],
-            "revenue": [1000.0, 20.0, 15.0, 10.0],
+            "segment": np.repeat(["Electronics", "Apparel", "Home", "Beauty"], 12),
+            "revenue": np.concatenate([_rng.normal(m, 8.0, 12) for m in (1000.0, 20.0, 15.0, 10.0)]),
         })
         diff_det = SegmentDifferenceDetector()
         diff_expl = diff_det.detect(diff_df, {})
         self.assertIsNotNone(diff_expl)
         self.assertEqual(diff_expl.pattern_name, "segment_difference")
+        self.assertEqual(diff_expl.dominant_value, "Electronics")
+        self.assertLess(diff_expl.triggering_evidence["p_value"], 0.05)
+
+        # One-row-per-group aggregates carry no within-group variance: descriptive, never a finding.
+        aggregates = pd.DataFrame({
+            "segment": ["Electronics", "Apparel", "Home", "Beauty", "Toys", "Garden"],
+            "revenue": [1000.0, 20.0, 15.0, 10.0, 12.0, 11.0],
+        })
+        self.assertIsNone(diff_det.detect(aggregates, {}))
 
         # 3. Temporal Change Pattern
         temp_df = pd.DataFrame({

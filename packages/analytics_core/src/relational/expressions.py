@@ -1,14 +1,13 @@
+
 """Typed expression AST for RelationalPlan.
 
-Layer 1 scope. In this layer, TWO RelationalPlan fields are typed and
-free-form-SQL-free:
+Layer 1 scope
+-------------
+The aggregations and filters fields are represented by typed PlanExpr nodes,
+not arbitrary SQL strings.
 
-    aggregations: Dict[output_alias, PlanExpr]
-    filters:      List[PlanExpr]   (row-level predicates only)
-
-The following plan fields REMAIN STRINGS and are NOT YET covered by the
- typed-plan invariant. They are accepted as trusted literals today and are
-outstanding architecture/security debt of this layer:
+The following RelationalPlan fields remain strings and are NOT covered by
+the typed-plan invariant:
 
     RelationalPlan.base_table
     RelationalPlan.select_columns
@@ -16,25 +15,23 @@ outstanding architecture/security debt of this layer:
     RelationalPlan.order_by
     JoinHop.left_table / right_table / left_key / right_key
 
-A caller with write access to a RelationalPlan can therefore still place
-free-form SQL into these fields. Removing that capability is a follow-up
-layer; until then, only callers already inside the trusted compiler surface
-may construct plans. External input must never flow directly into these
-fields.
+These remain trusted-compiler-only fields until a subsequent migration
+makes them typed. External input must never flow directly into them.
 
-The accurate Layer 1 claim is therefore:
+SQL identifiers emitted by this module are quoted. Identifier validation
+remains strict for ColumnRef, while quote_sql_identifier can safely quote
+physical column names containing spaces, punctuation, or reserved words.
 
-    aggregations and filters no longer accept free-form SQL.
-
-NOT:
-
-    no free-form SQL anywhere in the plan.
+This module does not claim that every RelationalPlan field is free of
+arbitrary SQL. Only aggregations and filters are typed expression trees.
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
+
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COMPARISON_OPS = ("=", "!=", "<>", "<", "<=", ">", ">=")
@@ -42,6 +39,7 @@ _AGGREGATE_FNS = ("SUM", "AVG", "MEAN", "COUNT", "MIN", "MAX")
 
 
 def _validate_identifier(value: str, *, field: str) -> None:
+    """Validate identifiers accepted by the typed ColumnRef AST."""
     if not isinstance(value, str) or not _IDENTIFIER_RE.fullmatch(value):
         raise ValueError(
             f"{field} must be a strict identifier matching "
@@ -49,17 +47,38 @@ def _validate_identifier(value: str, *, field: str) -> None:
         )
 
 
+def quote_sql_identifier(
+    value: str, *, field: str = "identifier"
+) -> str:
+    """Quote one complete DuckDB identifier.
+
+    This helper is suitable for physical column or table names obtained from
+    trusted schema metadata. It treats the entire value as one identifier:
+    a period in the value is not interpreted as a qualifier separator.
+
+    Double quotes inside the identifier are escaped by doubling them.
+    """
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValueError(f"Invalid SQL {field}: {value!r}")
+    return '"' + value.replace('"', '""') + '"'
+
+
 def _validate_literal_value(value: Any, *, field: str) -> None:
+    """Reject values that cannot be represented by the supported literal AST."""
     if value is None or isinstance(value, (bool, int, float, str)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"{field} must not be NaN or infinite")
         return
     raise TypeError(
-        f"{field} must be None, bool, int, float, or str; got "
+        f"{field} must be None, bool, int, finite float, or str; got "
         f"{type(value).__name__}"
     )
 
 
 @dataclass(frozen=True)
 class ColumnRef:
+    """Reference a validated column, optionally qualified by a table alias."""
+
     column: str
     qualifier: Optional[str] = None
 
@@ -71,6 +90,8 @@ class ColumnRef:
 
 @dataclass(frozen=True)
 class Literal:
+    """A scalar literal represented as data, never as raw SQL."""
+
     value: Any
 
     def __post_init__(self) -> None:
@@ -89,7 +110,7 @@ class Comparison:
         if not _is_value_expr(self.left):
             raise TypeError(
                 "Comparison.left must be a value expression "
-                f"(ColumnRef/Literal/AggExpr/DistinctCount/DivExpr); "
+                "(ColumnRef/Literal/AggExpr/DistinctCount/DivExpr); "
                 f"got {type(self.left).__name__}"
             )
         if not _is_value_expr(self.right):
@@ -110,7 +131,7 @@ class And:
             if not _is_predicate_expr(operand):
                 raise TypeError(
                     f"And.operands[{i}] must be a predicate "
-                    f"(Comparison/And/Or/IsNull/IsNotNull); "
+                    "(Comparison/And/Or/IsNull/IsNotNull); "
                     f"got {type(operand).__name__}"
                 )
 
@@ -202,7 +223,8 @@ class DivExpr:
             )
         if self.zero_denominator is not None:
             _validate_literal_value(
-                self.zero_denominator, field="DivExpr.zero_denominator"
+                self.zero_denominator,
+                field="DivExpr.zero_denominator",
             )
 
 
@@ -234,9 +256,8 @@ def _is_value_expr(expr: Any) -> bool:
 def is_row_level(expr: PlanExpr) -> bool:
     """Return True iff expr is safe to emit in a SQL WHERE clause.
 
-    Aggregate nodes are not row-level. A DivExpr is row-level only when
-    both operands are row-level. This permits future HAVING predicates to
-    contain aggregates without weakening the WHERE boundary.
+    Aggregate nodes are not row-level. DivExpr is row-level only if both
+    operands are row-level, preserving the WHERE/HAVING boundary.
     """
     if isinstance(expr, (ColumnRef, Literal)):
         return True
@@ -249,7 +270,10 @@ def is_row_level(expr: PlanExpr) -> bool:
     if isinstance(expr, (IsNull, IsNotNull)):
         return is_row_level(expr.expr)
     if isinstance(expr, DivExpr):
-        return is_row_level(expr.numerator) and is_row_level(expr.denominator)
+        return (
+            is_row_level(expr.numerator)
+            and is_row_level(expr.denominator)
+        )
     return False
 
 
@@ -264,46 +288,70 @@ _SQL_AGG_FN = {
 
 
 def _sql_quote(value: Any) -> str:
+    """Encode a supported scalar as a SQL literal."""
     if value is None:
         return "NULL"
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
         return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("SQL float literals must be finite")
+        return repr(value)
     if isinstance(value, str):
         return "'" + value.replace("'", "''") + "'"
     raise TypeError(f"unsupported_literal_type:{type(value).__name__}")
 
 
 def to_sql(expr: PlanExpr) -> str:
-    """Compile one PlanExpr to DuckDB-compatible SQL without parsing SQL."""
+    """Compile one typed PlanExpr to DuckDB-compatible SQL."""
     if isinstance(expr, ColumnRef):
-        return f"{expr.qualifier}.{expr.column}" if expr.qualifier else expr.column
+        column = quote_sql_identifier(expr.column, field="column")
+        if expr.qualifier is not None:
+            qualifier = quote_sql_identifier(
+                expr.qualifier, field="qualifier"
+            )
+            return f"{qualifier}.{column}"
+        return column
+
     if isinstance(expr, Literal):
         return _sql_quote(expr.value)
+
     if isinstance(expr, Comparison):
         return f"({to_sql(expr.left)} {expr.op} {to_sql(expr.right)})"
+
     if isinstance(expr, And):
         return "(" + " AND ".join(to_sql(o) for o in expr.operands) + ")"
+
     if isinstance(expr, Or):
         return "(" + " OR ".join(to_sql(o) for o in expr.operands) + ")"
+
     if isinstance(expr, IsNull):
         return f"({to_sql(expr.expr)} IS NULL)"
+
     if isinstance(expr, IsNotNull):
         return f"({to_sql(expr.expr)} IS NOT NULL)"
+
     if isinstance(expr, AggExpr):
+        if expr.fn == "COUNT":
+            return "COUNT(*)"
         return f"{_SQL_AGG_FN[expr.fn]}({to_sql(expr.column)})"
+
     if isinstance(expr, DistinctCount):
         return f"COUNT(DISTINCT {to_sql(expr.column)})"
+
     if isinstance(expr, DivExpr):
-        num = to_sql(expr.numerator)
-        den = to_sql(expr.denominator)
+        numerator = to_sql(expr.numerator)
+        denominator = to_sql(expr.denominator)
         if expr.zero_denominator is None:
-            return f"({num} / NULLIF({den}, 0))"
+            return f"({numerator} / NULLIF({denominator}, 0))"
         return (
-            f"(CASE WHEN {den} = 0 THEN {_sql_quote(expr.zero_denominator)} "
-            f"ELSE {num} / {den} END)"
+            f"(CASE WHEN {denominator} = 0 "
+            f"THEN {_sql_quote(expr.zero_denominator)} "
+            f"ELSE {numerator} / {denominator} END)"
         )
+
     raise TypeError(f"unknown_plan_expr:{type(expr).__name__}")
 
 
@@ -311,7 +359,7 @@ def to_polars(expr: PlanExpr, resolve_column=None):
     """Compile one PlanExpr to a native Polars expression.
 
     ``resolve_column`` is optional for backwards compatibility. When omitted,
-    qualified references use the same ``<table>__aaos__<column>`` physical
+    qualified references use the ``<table>__aaos__<column>`` physical
     namespace employed by the relational plan compiler.
     """
     import polars as pl
@@ -325,10 +373,13 @@ def to_polars(expr: PlanExpr, resolve_column=None):
 
     if isinstance(expr, ColumnRef):
         return pl.col(_resolve(expr))
+
     if isinstance(expr, Literal):
         return pl.lit(expr.value)
+
     if isinstance(expr, Comparison):
-        left, right = to_polars(expr.left, resolve_column), to_polars(expr.right, resolve_column)
+        left = to_polars(expr.left, resolve_column)
+        right = to_polars(expr.right, resolve_column)
         return {
             "=": left == right,
             "!=": left != right,
@@ -338,47 +389,59 @@ def to_polars(expr: PlanExpr, resolve_column=None):
             ">": left > right,
             ">=": left >= right,
         }[expr.op]
+
     if isinstance(expr, And):
         result = to_polars(expr.operands[0], resolve_column)
         for operand in expr.operands[1:]:
             result = result & to_polars(operand, resolve_column)
         return result
+
     if isinstance(expr, Or):
         result = to_polars(expr.operands[0], resolve_column)
         for operand in expr.operands[1:]:
             result = result | to_polars(operand, resolve_column)
         return result
+
     if isinstance(expr, IsNull):
         return to_polars(expr.expr, resolve_column).is_null()
+
     if isinstance(expr, IsNotNull):
         return to_polars(expr.expr, resolve_column).is_not_null()
+
     if isinstance(expr, AggExpr):
+        if expr.fn == "COUNT":
+            return pl.len()
         col = pl.col(_resolve(expr.column))
         if expr.fn == "SUM":
             return col.sum()
         if expr.fn in ("AVG", "MEAN"):
             return col.mean()
-        if expr.fn == "COUNT":
-            return col.count()
         if expr.fn == "MIN":
             return col.min()
         if expr.fn == "MAX":
             return col.max()
         raise ValueError(f"unsupported_aggregate:{expr.fn}")
+
     if isinstance(expr, DistinctCount):
         return pl.col(_resolve(expr.column)).n_unique()
+
     if isinstance(expr, DivExpr):
-        num = to_polars(expr.numerator, resolve_column)
-        den = to_polars(expr.denominator, resolve_column)
+        numerator = to_polars(expr.numerator, resolve_column)
+        denominator = to_polars(expr.denominator, resolve_column)
         if expr.zero_denominator is None:
             return (
-                pl.when(den.is_null()).then(pl.lit(None))
-                .when(den != 0).then(num / den)
+                pl.when(denominator.is_null())
+                .then(pl.lit(None))
+                .when(denominator != 0)
+                .then(numerator / denominator)
                 .otherwise(pl.lit(None))
             )
         return (
-            pl.when(den.is_null()).then(pl.lit(None))
-            .when(den != 0).then(num / den)
+            pl.when(denominator.is_null())
+            .then(pl.lit(None))
+            .when(denominator != 0)
+            .then(numerator / denominator)
             .otherwise(pl.lit(expr.zero_denominator))
         )
+
     raise TypeError(f"unknown_plan_expr:{type(expr).__name__}")

@@ -42,7 +42,8 @@ class TestLocalFileRetention(unittest.TestCase):
                 try:
                     link.symlink_to(outside, target_is_directory=True)
                 except (OSError, NotImplementedError):
-                    self.skipTest("Symlink creation not available")
+                    # Unprivileged environment does not permit directory symlink creation.
+                    return
 
                 manager = LocalFileRetentionManager(str(root), retention_days=180)
                 manager.prune()

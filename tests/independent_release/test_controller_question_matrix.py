@@ -160,14 +160,9 @@ class TestCorrelationFamily(unittest.TestCase):
 
 class TestRateFamily(unittest.TestCase):
     def test_genuine_null_should_reach_a_no_effect_verdict_like_correlation_does(self):
-        """EXPOSES a current defect (expected to FAIL today). Structurally
-        identical epistemic situation to the correlation genuine-null case
-        above (adequately powered, n=300/300, real chi-square p=0.30, real
-        CI reported in the text) -- but the top-level verdict_type comes
-        back INCONCLUSIVE instead of NO_DETECTABLE_EFFECT. Same evidence
-        quality, different estimand family, different verdict label: this
-        is the concrete instance of the question-invariance problem living
-        in verdict *propagation*, not just NL parsing."""
+        """PINS remediated behavior: adequately powered (n=300/300), genuine null
+        conversion rate comparison reaches NO_DETECTABLE_EFFECT with a real 95% CI,
+        matching the correlation family's epistemic contract."""
         rng = _rng(2)
         n = 300
         df = pd.DataFrame({

@@ -171,6 +171,9 @@ class UniversalAnalysisPlan:
     unresolved_questions: List[str] = field(default_factory=list)
     limitations: List[str] = field(default_factory=list)
     visualization_candidates: List[str] = field(default_factory=list)
+    # Structural review is advisory only; runtime authorization remains separate.
+    plan_validation: Dict[str, Any] = field(default_factory=dict)
+    typed_investigation: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -187,6 +190,8 @@ class UniversalAnalysisPlan:
             "unresolved_questions": list(self.unresolved_questions),
             "limitations": list(self.limitations),
             "visualization_candidates": list(self.visualization_candidates),
+            "plan_validation": dict(self.plan_validation),
+            "typed_investigation": dict(self.typed_investigation),
         }
 
 
@@ -261,6 +266,13 @@ class UniversalQuestionCompiler:
         interpreted = interpret_question(q)
         semantic_proposal = interpret_with_schema(q, [str(c) for c in df.columns], ai_provider=ai_provider)
         c_contract = compile_canonical_question_contract(q, df, semantic)
+        # Authority firewall: an enforced family (COUNT / simple aggregate) the contract attempted but
+        # could not complete is REFUSED. A refusal is non-authoritative AND final for this plan:
+        # nothing downstream (seed, interpreter proposal, binding set) may re-supply its roles.
+        enforced_refused = (
+            getattr(c_contract, "family", "NONE") != "NONE"
+            and getattr(c_contract, "completeness", "NOT_ENFORCED") in ("INCOMPLETE", "AMBIGUOUS")
+        )
         task = cls._classify(ql)
         if c_contract.resolution_confidence >= 0.70 and c_contract.task_family != "GENERAL_EXPLORATION":
             if c_contract.task_family == "RANKING":
@@ -285,13 +297,14 @@ class UniversalQuestionCompiler:
                 task = "PREDICTION"
             elif c_contract.task_family in TASKS:
                 task = c_contract.task_family
-        elif task == "GENERAL_EXPLORATION" and semantic_proposal.task != "GENERAL_EXPLORATION":
+        elif task == "GENERAL_EXPLORATION" and semantic_proposal.task != "GENERAL_EXPLORATION" and not enforced_refused:
             task = semantic_proposal.task
         # Broad language interpretation is a proposal layer only. The deterministic
         # classifier remains authoritative; use the interpreter to enrich unresolved
         # context and compound-question traceability without allowing it to execute SQL.
         business = cls._business_context(q, task)
-        semantics = cls._semantic_contract(semantic, df, ql, semantic_proposal, task=task)
+        # A refused enforced contract must not take roles from the interpreter proposal.
+        semantics = cls._semantic_contract(semantic, df, ql, None if enforced_refused else semantic_proposal, task=task)
         # Canonical-role authority: once the canonical contract is confident and
         # names a task family, its role assignments are authoritative INCLUDING
         # explicit absence. ``grouping=()`` / ``time=None`` / ``explanatory=()``
@@ -341,6 +354,32 @@ class UniversalQuestionCompiler:
             semantics.canonical_roles_authoritative = bool(canonical_authoritative)
             semantics.semantic_evidence["canonical_question_contract"] = c_contract.to_dict()
 
+        if enforced_refused:
+            # Invalidate (not merely omit) every role whose authority depended on the refused contract:
+            # the semantic-layer seed, interpreter proposal and any role the legacy path derived. The
+            # rejected contract and the superseded role evidence stay on the plan for the controller.
+            rejected_roles = {
+                "target": semantics.target_column,
+                "grouping": list(semantics.grouping_columns),
+                "explanatory": list(semantics.explanatory_columns),
+                "time": semantics.time_column,
+            }
+            semantics.target_column = None
+            semantics.grouping_columns = []
+            semantics.explanatory_columns = []
+            semantics.time_column = None
+            semantics.ranking_direction = None
+            semantics.resolution_confidence = min(semantics.resolution_confidence, 0.2)
+            semantics.canonical_roles_authoritative = False
+            semantics.semantic_evidence["canonical_question_contract"] = c_contract.to_dict()
+            semantics.semantic_evidence["authority_veto"] = {
+                "family": c_contract.family,
+                "completeness": c_contract.completeness,
+                "unresolved_semantics": list(c_contract.unresolved_semantics),
+                "rejected_roles": rejected_roles,
+                "rejected_role_resolution": semantics.semantic_evidence.pop("role_resolution", None),
+            }
+
         hypotheses = cls._hypotheses(task, semantics, q)
         evidence = cls._evidence(task, semantics)
         experiments = cls._experiments(task, semantics)
@@ -356,6 +395,16 @@ class UniversalQuestionCompiler:
         unresolved = cls._unresolved(task, semantics, business, quality_assessment)
         if not c_contract.unresolved_roles and c_contract.target_column and c_contract.resolution_confidence >= 0.7:
             unresolved = [u for u in unresolved if not u.startswith("Could not uniquely resolve") and not u.startswith("Target variable could not be resolved")]
+
+        if enforced_refused:
+            for _item in (c_contract.unresolved_semantics or ("unspecified",)):
+                _msg = (
+                    f"Enforced {c_contract.family} question was not resolved by the canonical contract "
+                    f"({_item}); refusing to substitute a semantic-layer or interpreter target."
+                )
+                if _msg not in unresolved:
+                    unresolved.append(_msg)
+                semantics.notes.append(_msg)
 
         # "Worth"/"valuable" have no authoritative meaning until a business
         # definition (lifetime value, total revenue, margin, ...) is named or
@@ -381,12 +430,63 @@ class UniversalQuestionCompiler:
         semantics.notes.extend([f"Universal NL interpreter: {n}" for n in interpreted.notes])
         semantics.notes.extend([f"Schema-grounded semantic proposal: {n}" for n in semantic_proposal.limitations])
         semantics.semantic_evidence["nl_proposal"] = {"source": semantic_proposal.source, "confidence": semantic_proposal.confidence, "task": semantic_proposal.task}
+        objective_plan = None
+        try:
+            from packages.analytics_core.src.intelligence.complex_objective_planner import plan_compound_question
+            objective_plan = plan_compound_question(q)
+            semantics.semantic_evidence["compound_objective_plan"] = objective_plan.to_dict()
+        except Exception as planning_exc:
+            semantics.semantic_evidence["compound_objective_plan_error"] = type(planning_exc).__name__
         if interpreted.compound_clauses:
             semantics.semantic_evidence["compound_clauses"] = list(interpreted.compound_clauses)
-            if len(interpreted.compound_clauses) > 1 and "compound_question_requires_clause_preserving_analysis" not in unresolved:
+            # A validated, clause-preserving proposal is not itself an ambiguity.
+            # Only unresolved/dependent objectives require clarification or blocking.
+            has_preserving_plan = bool(
+                objective_plan and objective_plan.is_compound
+                and not objective_plan.validation_issues
+            )
+            if (len(interpreted.compound_clauses) > 1 and not has_preserving_plan
+                    and "compound_question_requires_clause_preserving_analysis" not in unresolved):
                 unresolved.append("compound_question_requires_clause_preserving_analysis")
+        # Type-aware investigation planning is additive to the canonical contract.
+        # It exposes task family, inferred schema types, unresolved semantic roles,
+        # and explicit conditional branches; it never grants execution authority.
+        try:
+            from packages.analytics_core.src.intelligence.typed_investigation_planner import compile_typed_investigation
+            typed_investigation = compile_typed_investigation(q, task, df=df, semantics=semantics)
+            semantics.semantic_evidence["typed_investigation_plan"] = typed_investigation
+            if typed_investigation.get("unresolved_roles"):
+                semantics.notes.append(
+                    "Typed investigation roles remain unresolved: "
+                    + ", ".join(typed_investigation["unresolved_roles"])
+                )
+        except Exception as typed_plan_exc:
+            typed_investigation = {
+                "plan_version": "2.0", "task_type": "UNRESOLVED",
+                "readiness": "VALIDATION_UNAVAILABLE", "execution_authorized": False,
+                "runtime_authorization_required": True,
+                "error_type": type(typed_plan_exc).__name__,
+            }
+
         limitations = cls._limitations(task, semantics, quality_assessment)
         viz = cls._visualizations(task)
+        try:
+            from packages.analytics_core.src.intelligence.investigation_plan_contract import audit_investigation_plan
+            plan_validation = audit_investigation_plan(
+                task=task, experiments=experiments, stages=[],
+                unresolved_questions=unresolved, required_evidence=evidence,
+            )
+            semantics.semantic_evidence["investigation_plan_validation"] = plan_validation
+            if plan_validation.get("issues"):
+                limitations.append("Investigation plan structural validation reported issues; runtime authorization must be withheld.")
+        except Exception as plan_exc:
+            plan_validation = {
+                "readiness": "VALIDATION_UNAVAILABLE", "execution_authorized": False,
+                "runtime_authorization_required": True,
+                "warnings": [f"Plan validation unavailable ({type(plan_exc).__name__}); runtime authorization remains mandatory."],
+            }
+            semantics.semantic_evidence["investigation_plan_validation"] = plan_validation
+            limitations.append("Investigation plan validation unavailable; runtime authorization remains mandatory.")
         decision_status = "RESOLVED" if not unresolved else "PARTIALLY_RESOLVED"
         stopping = cls._stopping_rule(task)
         return UniversalAnalysisPlan(
@@ -403,6 +503,8 @@ class UniversalQuestionCompiler:
             unresolved_questions=unresolved,
             limitations=limitations,
             visualization_candidates=viz,
+            plan_validation=plan_validation,
+            typed_investigation=typed_investigation,
         )
 
     @classmethod

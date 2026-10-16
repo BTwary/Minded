@@ -34,9 +34,9 @@ export default function PlotlyChart({ spec, height = 300 }: Props) {
         <div>
           <h4 className="text-sm font-semibold text-white flex items-center space-x-2">
             {chartType === "line" ? (
-              <LineChart className="w-4 h-4 text-sky-400" />
+              <LineChart className="w-4 h-4 text-cyan-400 drop-shadow-[0_0_6px_rgba(6,182,212,0.5)]" />
             ) : (
-              <BarChart3 className="w-4 h-4 text-indigo-400" />
+              <BarChart3 className="w-4 h-4 text-violet-400 drop-shadow-[0_0_6px_rgba(139,92,246,0.5)]" />
             )}
             <span>{title}</span>
           </h4>
@@ -61,16 +61,16 @@ export default function PlotlyChart({ spec, height = 300 }: Props) {
                   <span className="text-slate-300 font-sans">{String(label)}</span>
                   <span className="text-white font-semibold">${rawVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
-                <div className="w-full h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
-                  <div
-                    className={`h-full rounded-full transition-all duration-700 ${
-                      chartType === "line"
-                        ? "bg-gradient-to-r from-sky-500 to-indigo-500"
-                        : "bg-gradient-to-r from-indigo-500 to-purple-500"
-                    }`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
+                  <div className="w-full h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-800 p-0.5">
+                    <div
+                      className={`h-full rounded-full transition-all duration-700 bg-gradient-to-r from-cyan-400 via-blue-500 to-violet-500 ${
+                        idx === 0
+                          ? "shadow-[0_0_12px_rgba(59,130,246,0.55)] brightness-110"
+                          : "shadow-[0_0_6px_rgba(6,182,212,0.35)]"
+                      }`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
               </div>
             );
           })}

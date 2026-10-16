@@ -8,7 +8,9 @@ pinned: false
 ---
 
 # Minded — Autonomous Analytical Intelligence OS
-### Real Human Data Analyst Level AI — Local-First, Zero-Cloud, Relational & Deterministic
+### Real Human Data Analyst Level AI — Relational & Deterministic (hosted demo)
+
+> **Hosted demonstration — not private.** Files you upload are processed on the Hugging Face Space infrastructure. Do **not** upload confidential or sensitive data. For private data, use the local Windows application, which runs fully on your machine. This demo calls no external AI API.
 
 This Space provides an interactive live demonstration of **Minded (AA-OS)**, an enterprise-grade autonomous data analyst operating with mathematical and statistical rigor.
 
@@ -44,10 +46,10 @@ Click any scenario button at the top of the interface:
   - Question: *"Which customer segment generated the highest revenue from the premium product category?"*
 - **📊 Scenario 2: Messy Financials & Dirty Types**
   - Table: `quarterly_financials_messy.csv` (contains dirty numbers, currencies, accounting parentheses)
-  - Question: *"What is the total revenue by division and which division had negative net profit?"*
+  - Question: *"What is the total net profit by division?"*
 - **📈 Scenario 3: SaaS Retention & Churn Cohorts**
   - Table: `user_retention_cohorts.csv`
-  - Question: *"Which tier has the lowest retention rate, and what is the average monthly spend for that tier?"*
+  - Question: *"What is the average monthly spend by tier?"*
 
 Or upload your own CSV / Parquet files!
 
@@ -55,6 +57,7 @@ Or upload your own CSV / Parquet files!
 
 ## 🔒 Security & Privacy Policy
 
-- **100% Deterministic & Air-Gapped Capable:** External AI is completely disabled in the core scientific loop. Zero data leaves the environment.
-- **Ephemeral Processing:** Uploaded files are processed in-memory for the current investigation and are not retained or uploaded to external clouds.
+- **Hosted demo, not a private environment:** Uploaded files are processed on the Hugging Face Space, so the Space host can technically access them. Do not upload confidential or sensitive enterprise data; use the local Windows application for private data.
+- **No external AI:** This demo uses the deterministic analytical engine only and calls no external AI API or telemetry endpoint.
+- **Temporary processing:** Uploads are handled in temporary storage for the current investigation and are not deliberately retained by the app.
 - **Resource Limits:** Up to 4 datasets, 50 MB per file, 500,000 rows, 250 columns.

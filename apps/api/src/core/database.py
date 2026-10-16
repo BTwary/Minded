@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import SingletonThreadPool, StaticPool
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
 from apps.api.src.core.config import settings
@@ -38,12 +38,32 @@ if is_sqlite:
     #    collision retry for a bounded window instead of failing
     #    immediately, which is what real concurrent controller/test
     #    access needs.
-    engine = create_engine(
-        db_url,
-        connect_args=connect_args,
-        poolclass=StaticPool,
-        echo=False,
-    )
+    # CONCURRENCY FIX (found with the real 4-CSV workspace): StaticPool shares ONE DBAPI connection
+    # between every session AND every thread.  Any session's close() issues a rollback on that shared
+    # connection, so the UI polling investigation status from the API thread silently rolled back the
+    # worker thread's uncommitted rows ("Contract <id> not found" at finalize_contract).
+    #
+    # For a FILE database we therefore use one connection PER THREAD: sessions on the same thread still
+    # share a connection (exactly the semantics the controller/tests were written against), but a
+    # different thread's close()/rollback() can no longer touch this thread's open transaction.
+    # WAL + busy_timeout (below) let the per-thread connections read while another writes.
+    # In-memory databases must keep StaticPool (a second connection would be a different, empty DB).
+    _in_memory = db_url in {"sqlite://", "sqlite:///:memory:"} or ":memory:" in db_url or "mode=memory" in db_url
+    if _in_memory:
+        engine = create_engine(
+            db_url,
+            connect_args=connect_args,
+            poolclass=StaticPool,
+            echo=False,
+        )
+    else:
+        engine = create_engine(
+            db_url,
+            connect_args=connect_args,
+            poolclass=SingletonThreadPool,
+            pool_size=256,  # max distinct threads holding a live connection; must exceed worker+API threads
+            echo=False,
+        )
 
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragmas(dbapi_connection, connection_record):  # noqa: ARG001
@@ -83,6 +103,26 @@ def init_db():
         return
     if auto_create:
         Base.metadata.create_all(bind=engine)
+        if engine.dialect.name == "sqlite":
+            _auto_sync_sqlite_columns(engine)
+
+
+def _auto_sync_sqlite_columns(bind) -> None:
+    """Ensure existing SQLite tables receive newly added ORM columns in local dev/desktop."""
+    try:
+        inspector = inspect(bind)
+        existing_tables = set(inspector.get_table_names())
+        with bind.connect() as conn:
+            for table_name, table in Base.metadata.tables.items():
+                if table_name in existing_tables:
+                    existing_cols = {col["name"] for col in inspector.get_columns(table_name)}
+                    for col in table.columns:
+                        if col.name not in existing_cols:
+                            col_type = col.type.compile(bind.dialect)
+                            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col.name} {col_type}"))
+            conn.commit()
+    except Exception:
+        pass
 
 
 def _assert_production_schema_current() -> None:

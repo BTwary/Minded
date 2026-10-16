@@ -44,6 +44,10 @@ from scripts.adversarial.harness import run_investigation
 
 RESULTS = []
 
+# The verdict tiers that assert an effect exists. Tests assert SAFETY PROPERTIES (an effect is or is not
+# claimed; a pooled claim is withheld when it would mislead), not a frozen choice between these tiers.
+POSITIVE_TIERS = ("DIAGNOSED", "STATISTICALLY_SIGNIFICANT")
+
 
 def record(scenario: str, classification: str, note: str = ""):
     RESULTS.append({"scenario": scenario, "classification": classification, "note": note})
@@ -96,12 +100,16 @@ def test_scenario_02_schema_drift_rename():
     res_b.print_trace("Scenario 2b: renamed/synonym column names")
 
     assert res_a.ok and res_b.ok
-    assert res_a.verdict_type == res_b.verdict_type == "DIAGNOSED"
+    # Safety property: renaming columns must not change the conclusion (tier, confidence, or who leads).
+    assert res_a.verdict_type == res_b.verdict_type
+    assert res_a.verdict_type in POSITIVE_TIERS
     assert abs(res_a.confidence - res_b.confidence) < 1e-6, "Renamed schema should reach an equivalent conclusion"
+    assert "Enterprise" in res_a.direct_answer and "Enterprise" in res_b.direct_answer
     assert abs(gt_top_share - 0.890) < 0.05
     record("02_schema_drift_rename", "CORRECT",
-           "renamed/synonym schema (client_key/plan_class/net_sales) reached the identical 95% posterior "
-           "conclusion as the original column names -- genuine schema-agnostic semantic resolution")
+           "renamed/synonym schema (client_key/plan_class/net_sales) reached the identical verdict tier and "
+           "confidence as the original column names, naming the same leading segment -- schema-agnostic "
+           "semantic resolution")
 
 
 # ---------------------------------------------------------------------------
@@ -127,13 +135,19 @@ def test_scenario_03_join_fanout():
     )
     res.print_trace("Scenario 3: Join Fanout (multi-table input)")
 
-    assert not res.ok, "Controller has no cross-table join execution path; it cannot resolve this question at all"
-    record("03_join_fanout", "ARCHITECTURAL_GAP",
-          f"controller never executes a JOIN anywhere in the autonomous path -- it only ever operates on a single "
-          f"'primary' table (chosen via world-model heuristics) and fails outright when the requested columns span "
-          f"tables. It fails SAFE (no fabricated number; true total is {true_total_revenue:.2f}), but for an "
-          f"unrelated generic schema-resolution reason, not because fanout risk was detected. Cross-table "
-          f"aggregation -- safe or unsafe -- is not implemented in the on-demand controller path at all.")
+    # Cross-table questions are now answered. The safety property is that the join does NOT fan out:
+    # per-region counts must sum to the number of item rows, and the means must equal an independent join.
+    assert res.ok, "controller must resolve a question whose columns span tables"
+    truth = (order_items.merge(orders, on="order_id").merge(customers, on="customer_id")
+             .groupby("region")["item_revenue"].agg(["mean", "count"]))
+    assert int(truth["count"].sum()) == len(order_items), "independent join itself must not fan out"
+    for region_name, row in truth.iterrows():
+        assert f"{row['mean']:.2f}" in res.direct_answer, f"{region_name} mean must match the independent join"
+        assert f"n={int(row['count'])}" in res.direct_answer, f"{region_name} row count must match (no fan-out)"
+    record("03_join_fanout", "CORRECT",
+           f"cross-table question resolved via the orders->customers join; per-region means and row counts equal "
+           f"an independent pandas join and sum to the {len(order_items)} item rows, so no join fan-out inflated "
+           f"the figures (true total revenue {true_total_revenue:.2f}).")
 
 
 # ---------------------------------------------------------------------------
@@ -183,20 +197,16 @@ def test_scenario_05_timezone_boundary():
     res = run_investigation({"events": df}, "Why did value vary across region?", "s05")
     res.print_trace("Scenario 5: Timezone Boundary Semantics")
 
-    # This scenario is graded on capability presence, not on the outcome of this one run.
-    import subprocess
-    grep = subprocess.run(
-        ["grep", "-rl", "-i", "tz_convert\\|tzinfo\\|pytz\\|zoneinfo",
-         os.path.join(os.path.dirname(__file__), "..", "packages"),
-         os.path.join(os.path.dirname(__file__), "..", "apps")],
-        capture_output=True, text=True,
-    )
-    has_tz_handling = bool(grep.stdout.strip())
-    assert not has_tz_handling, "expected no timezone-aware business-day handling to exist yet"
+    # Safety property: tz-aware timestamps must not break the run or manufacture an effect. The region
+    # difference is pure noise, so no positive verdict may be issued.
+    assert res.ok
+    assert res.verdict_type not in POSITIVE_TIERS, "noise must not become a finding because of tz-aware timestamps"
     record("05_timezone_boundary", "ARCHITECTURAL_GAP",
-           "no timezone-aware business-day/period localization exists anywhere in the codebase (confirmed by "
-           "source grep). Any period-based aggregation implicitly assumes the raw timestamp values are already "
-           "in the correct reporting period, and this assumption is never disclosed in the verdict or provenance.")
+           "tz-aware UTC timestamps are handled without error and no effect is invented. Business-day / "
+           "reporting-period localization is still absent: the only tz code is the freshness check in the "
+           "data-quality gate and evidence-identity normalisation, so a period-based aggregation would still "
+           "assume timestamps are already in the reporting period. This question does not aggregate by period, "
+           "so that gap is not exercised here.")
 
 
 # ---------------------------------------------------------------------------
@@ -350,12 +360,14 @@ def test_scenario_09_no_signal():
     res = run_investigation({"records": df}, "Why did metric vary across segment?", "s09")
     res.print_trace("Scenario 9: No Signal / Insufficient Evidence")
 
-    assert res.verdict_type == "INCONCLUSIVE"
-    assert res.confidence < 0.85
-    assert "insufficient evidence" in res.direct_answer.lower()
+    # Safety property: pure noise is never reported as an effect. A powered null (NO_DETECTABLE_EFFECT,
+    # with an interval) and an honest INCONCLUSIVE are both acceptable.
+    assert res.ok
+    assert res.verdict_type in ("NO_DETECTABLE_EFFECT", "INCONCLUSIVE")
+    assert res.verdict_type not in POSITIVE_TIERS
     record("09_no_signal", "CORRECT",
-           f"pure-noise dataset correctly resolved to INCONCLUSIVE (confidence={res.confidence:.2f}, "
-           f"stopping reason MAX_ITERATIONS_REACHED) rather than manufacturing a hypothesis")
+           f"pure-noise dataset resolved to {res.verdict_type} (confidence={res.confidence:.2f}) rather than "
+           f"manufacturing a hypothesis")
 
 
 # ---------------------------------------------------------------------------
@@ -377,15 +389,20 @@ def test_scenario_10_simpsons_paradox():
     res = run_investigation({"records": df}, "Why did score vary across treatment?", "s10")
     res.print_trace("Scenario 10: Simpson's Paradox / Confounding")
 
-    spawned_conditional_test = any("EXP-COND" in e.test_code for e in res.experiments)
+    # Safety properties: the confound is tested, the pooled effect is NOT presented as one effect, and
+    # the answer says why (opposite signs across regions).
+    spawned_conditional_test = any(("COND" in e.test_code or "CONF" in e.test_code) for e in res.experiments)
     assert spawned_conditional_test, "expected a conditional/stratified experiment to be spawned on the confound"
-    assert res.verdict_type == "INCONCLUSIVE" or res.confidence < 0.85
+    assert res.verdict_type == "INCONCLUSIVE"
+    assert res.confidence < 0.85
+    answer = res.direct_answer
+    assert "region" in answer and ("reverses sign" in answer or "opposite signs" in answer)
+    assert "persists independently" not in answer and "Scale proven practices" not in answer
     record("10_simpsons_paradox", "CORRECTLY_INCONCLUSIVE",
-           f"the region confound was detected, a targeted conditional experiment "
-           f"({[e.test_code for e in res.experiments if 'EXP-COND' in e.test_code]}) was spawned, and the "
-           f"investigation correctly avoided a decisive stop (confidence={res.confidence:.2f}, "
-           f"verification failed on the conditional check) rather than confidently crediting the treatment "
-           f"with more SUM-share than the confound actually supports")
+           f"the region confound was detected, a targeted experiment "
+           f"({[e.test_code for e in res.experiments]}) was spawned, the per-region effect was found to reverse "
+           f"sign (East negative, West positive), and the verdict was withheld as INCONCLUSIVE "
+           f"(confidence={res.confidence:.2f}) instead of reporting a pooled treatment effect")
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +420,9 @@ def test_scenario_11_survivorship_bias():
     res = run_investigation({"stores": df}, "Why did revenue vary across strategy?", "s11")
     res.print_trace("Scenario 11: Survivorship / Selection Bias")
 
-    assert res.ok and res.verdict_type == "DIAGNOSED"
+    # Safety property for a KNOWN GAP: with no selection-bias detector, the system must at least not
+    # issue its top-tier decisive diagnosis on survivor-only data.
+    assert res.ok and res.verdict_type != "DIAGNOSED"
     record("11_survivorship_bias", "ARCHITECTURAL_GAP",
            "no selection-bias/survivorship detection exists in the codebase. The verdict's boilerplate caveat "
            "('Findings apply to observed reporting period and population coverage') is a static string on every "
@@ -428,7 +447,9 @@ def test_scenario_12_temporal_leakage():
     res = run_investigation({"stores": df}, "Why did july_growth_rate_feature vary across region?", "s12")
     res.print_trace("Scenario 12: Temporal / Future-Information Leakage")
 
-    assert res.ok and res.verdict_type == "DIAGNOSED" and res.confidence >= 0.9
+    # Safety property for a KNOWN GAP: no decisive causal diagnosis may be issued for a future-dated
+    # column. (A descriptive STATISTICALLY_SIGNIFICANT group difference is true of the data as given.)
+    assert res.ok and res.verdict_type != "DIAGNOSED"
     record("12_temporal_leakage", "ARCHITECTURAL_GAP",
            "a column named to make its future-relative-to-June provenance explicit "
            "('july_growth_rate_feature') is treated identically to any other numeric metric. There is no "
@@ -497,14 +518,19 @@ def test_scenario_14_high_dimensional_stress():
     res_blind = run_investigation({"wide_table": df}, "Why did the total change so much?", "s14b")
     res_blind.print_trace("Scenario 14b: 119 columns, fully ambiguous question")
 
-    for res in (res_named, res_blind):
-        assert res.ok and res.verdict_type in ("DIAGNOSED", "STATISTICALLY_SIGNIFICANT")
-        assert "Zeta" in res.direct_answer
-        assert res.confidence >= 0.9
+    # Named columns: the right signal is found among 119 columns.
+    assert res_named.ok and res_named.verdict_type in POSITIVE_TIERS
+    assert "Zeta" in res_named.direct_answer
+    assert res_named.confidence >= 0.9
+    # Ambiguous question: the system never guesses a grouping column. It must say so and tell the person
+    # what to do, instead of issuing a confident finding about a column nobody named.
+    assert res_blind.ok and res_blind.verdict_type == "INCONCLUSIVE"
+    assert res_blind.verdict_type not in POSITIVE_TIERS
+    assert "none was guessed" in res_blind.direct_answer
+    assert "entity_ref_9f2" not in res_blind.direct_answer.split("e.g.")[1].split(")")[0]
     record("14_high_dimensional_stress", "CORRECT",
-           f"found the correct 2-of-119-column signal (Zeta, ~74% share) with 95% confidence in both the "
-           f"explicit-column-name framing and the fully ambiguous 'why did the total change' framing -- genuine "
-           f"schema-agnostic discovery, not reliance on being told the answer's shape")
+           "named-column framing found the correct 2-of-119-column signal (Zeta) with >=90% confidence; the "
+           "fully ambiguous framing correctly refused to guess a grouping column and told the person to name one")
 
 
 if __name__ == "__main__":

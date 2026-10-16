@@ -95,11 +95,15 @@ class TestResolvePinnedTargetAllowsSafeEndpoints:
         assert target.host_header == "93.184.216.34"
         assert target.sni_hostname == "93.184.216.34"
 
-    def test_pinned_url_uses_ip_not_hostname_after_dns_resolution(self):
-        # api.anthropic.com resolves to a real public IP (not asserting which
-        # one, since that can change) -- what matters for the fix is that the
-        # returned url's host component is an IP literal, not the original
-        # hostname, while the original hostname is preserved for Host/SNI.
+    def test_pinned_url_uses_ip_not_hostname_after_dns_resolution(self, monkeypatch):
+        # Deterministic: DNS is mocked so this passes with the network fully disabled. What matters
+        # for the fix is that the returned url's host component is the validated IP literal, not the
+        # original hostname, while the original hostname is preserved for Host/SNI.
+        def _fake_getaddrinfo(host, port, *args, **kwargs):
+            assert host == "api.anthropic.com"
+            return [(socket_mod.AF_INET, socket_mod.SOCK_STREAM, 6, "", ("93.184.216.34", port or 443))]
+
+        monkeypatch.setattr(socket_mod, "getaddrinfo", _fake_getaddrinfo)
         target = resolve_pinned_target("https://api.anthropic.com/v1", label="Test endpoint")
         assert target.sni_hostname == "api.anthropic.com"
         assert target.host_header == "api.anthropic.com"
@@ -107,7 +111,15 @@ class TestResolvePinnedTargetAllowsSafeEndpoints:
         pinned_host = target.url.split("://", 1)[1].split("/", 1)[0]
         # Must parse as a bare IPv4/IPv6 literal, not a hostname.
         import ipaddress
-        ipaddress.ip_address(pinned_host.strip("[]"))
+        assert ipaddress.ip_address(pinned_host.strip("[]")) == ipaddress.ip_address("93.184.216.34")
+
+    def test_hostname_resolving_to_private_ip_is_refused_with_mocked_dns(self, monkeypatch):
+        def _rebound(host, port, *args, **kwargs):
+            return [(socket_mod.AF_INET, socket_mod.SOCK_STREAM, 6, "", ("10.0.0.5", port or 443))]
+
+        monkeypatch.setattr(socket_mod, "getaddrinfo", _rebound)
+        with pytest.raises(SSRFSecurityError):
+            resolve_pinned_target("https://api.anthropic.com/v1", label="Test endpoint")
 
     def test_no_url_provided_is_a_noop_for_validate_network_endpoint(self):
         # validate_network_endpoint (the pre-flight/settings-save check) keeps

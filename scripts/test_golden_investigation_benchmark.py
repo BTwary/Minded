@@ -33,9 +33,13 @@ def run_golden_investigation_benchmark():
 
     temp_dir = tempfile.mkdtemp(prefix="aaos_golden_bench_")
     db_path = os.path.join(temp_dir, "golden_test.db")
+    # Mirror apps/api/src/core/database.py: one pinned connection (StaticPool) so the controller's
+    # checkpointer and its main session never deadlock on SQLite's single-writer lock.
+    from sqlalchemy.pool import StaticPool
     test_engine = create_engine(
         f"sqlite:///{db_path}?timeout=30",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         echo=False,
     )
     Base.metadata.create_all(bind=test_engine)

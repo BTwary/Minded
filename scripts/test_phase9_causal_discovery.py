@@ -71,26 +71,39 @@ class TestPhase9CausalDiscovery(unittest.TestCase):
         self.assertTrue(dag.is_directed("X", "Y"))
 
     def test_04_autonomous_causal_identifiability_gate(self):
-        """Invariant: Confounder C -> T and C -> Y is auto-discovered, and Backdoor adjustment set is [C]."""
-        np.random.seed(42)
-        n = 1000
-        c = np.random.normal(10, 2, n)  # Confounder
-        t = 1.5 * c + np.random.normal(0, 0.5, n)  # Treatment
-        y = 2.0 * t + 3.0 * c + np.random.normal(0, 0.5, n)  # Outcome
-        df = pd.DataFrame({"confounder": c, "treatment": t, "outcome": y})
+        """Invariant: identification is claimed only when the discovered graph is fully oriented."""
+        # (a) Orientable graph: S->T<-C is a v-structure, C->Y<-D another, so PC orients every edge
+        # (Meek rule 1 orients T->Y). The confounder C is then found in the backdoor adjustment set.
+        rng = np.random.RandomState(42)
+        n = 3000
+        s, c, d = rng.normal(0, 1, n), rng.normal(0, 1, n), rng.normal(0, 1, n)
+        t = 1.0 * s + 1.0 * c + rng.normal(0, 0.5, n)
+        y = 2.0 * t + 1.5 * c + 1.0 * d + rng.normal(0, 0.5, n)
+        df = pd.DataFrame({"S": s, "C": c, "D": d, "T": t, "Y": y})
+        res = CausalIdentifiabilityGate().discover_and_evaluate(
+            df=df, treatment="T", outcome="Y", feature_columns=["S", "C", "D", "T", "Y"],
+        )
+        self.assertTrue(res.is_identifiable)
+        self.assertIn("C", res.backdoor_adjustment_set)
+        self.assertGreater(res.sensitivity_e_value, 1.0)
 
-        gate = CausalIdentifiabilityGate()
-        res = gate.discover_and_evaluate(
-            df=df,
-            treatment="df.treatment",
-            outcome="df.outcome",
+        # (b) Fully connected triangle (confounder -> treatment -> outcome, confounder -> outcome) has
+        # no v-structure, so every orientation is Markov-equivalent and observational data cannot
+        # identify the effect. The gate must refuse rather than invent an adjustment set or e-value.
+        np.random.seed(42)
+        m = 1000
+        c2 = np.random.normal(10, 2, m)
+        t2 = 1.5 * c2 + np.random.normal(0, 0.5, m)
+        y2 = 2.0 * t2 + 3.0 * c2 + np.random.normal(0, 0.5, m)
+        tri = pd.DataFrame({"confounder": c2, "treatment": t2, "outcome": y2})
+        res2 = CausalIdentifiabilityGate().discover_and_evaluate(
+            df=tri, treatment="df.treatment", outcome="df.outcome",
             feature_columns=["confounder", "treatment", "outcome"],
         )
-
-        # Invariant: Discovered adjustment set blocks backdoor path
-        self.assertTrue(res.is_identifiable)
-        self.assertIn("confounder", res.backdoor_adjustment_set)
-        self.assertGreater(res.sensitivity_e_value, 1.0)
+        self.assertFalse(res2.is_identifiable)
+        self.assertEqual(res2.status.name, "OBSERVATIONAL_ONLY")
+        self.assertEqual(list(res2.backdoor_adjustment_set), [])
+        self.assertIsNone(res2.sensitivity_e_value)
 
     def test_05_universal_ai_fingerprint_miap_generation(self):
         """Invariant: UniversalFingerprintEngine emits valid machine-readable MIAP schema."""

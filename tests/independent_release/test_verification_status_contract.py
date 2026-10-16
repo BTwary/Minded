@@ -1,4 +1,4 @@
-"""P0 epistemic-integrity fix: verification-status contract acceptance tests.
+﻿"""P0 epistemic-integrity fix: verification-status contract acceptance tests.
 
 Covers the required cases from the task brief:
   - Controller -> InvestigationState -> Database -> AnalysisService -> API
@@ -186,9 +186,10 @@ class TestStateReconstructionAgreesWithLiveRun(unittest.TestCase):
         self.assertEqual(classify_evidence_for_hypothesis("verified", None), "supporting")
         self.assertEqual(classify_evidence_for_hypothesis("failed", None), "contradicting")
 
-    def test_nonzero_effect_size_counts_as_supporting_regardless_of_status(self):
-        self.assertEqual(classify_evidence_for_hypothesis(None, 3.2), "supporting")
+    def test_unknown_status_and_nonzero_effect_do_not_infer_support(self):
+        self.assertIsNone(classify_evidence_for_hypothesis(None, 3.2))
 
 
 if __name__ == "__main__":
     unittest.main()
+

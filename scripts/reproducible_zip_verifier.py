@@ -60,7 +60,12 @@ def main():
     lock_path = os.path.join(EXTRACT_DIR, "requirements-lock.txt")
     req_path = lock_path if os.path.isfile(lock_path) else os.path.join(EXTRACT_DIR, "requirements.txt")
     print(f"==> Step 4: Installing dependencies from authoritative source {req_path} into isolated venv...", flush=True)
-    pip_install_proc = subprocess.run([venv_python, "-m", "pip", "install", "-r", req_path], text=True)
+    install_cmd = [venv_python, "-m", "pip", "install"]
+    if req_path == lock_path:
+        # The lockfile is hash-locked; enforce it so a tampered or substituted wheel cannot install.
+        install_cmd.append("--require-hashes")
+    install_cmd += ["-r", req_path]
+    pip_install_proc = subprocess.run(install_cmd, text=True)
     if pip_install_proc.returncode != 0:
         print(f"FAILED: Dependency installation failed with exit code {pip_install_proc.returncode}", flush=True)
         sys.exit(1)

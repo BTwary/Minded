@@ -1,17 +1,17 @@
 division,quarter,gross_revenue,operating_expenses,net_profit,margin_pct,audit_notes
-Cloud Services,2025-Q1,,,,43.5%,#N/A
-Cloud Services,2025-Q2,,,,23.3%,#N/A
-Cloud Services,2025-Q3,,,,22.0%,nil
-Cloud Services,2025-Q4,,,,8.9%,#N/A
-Hardware Solutions,2025-Q1,,,,16.3%,nil
-Hardware Solutions,2025-Q2,,,,38.6%,nil
-Hardware Solutions,2025-Q3,,,"(34,130.00)",-16.6%,#N/A
-Hardware Solutions,2025-Q4,,,"(33,542.00)",-17.9%,#N/A
-Digital Media,2025-Q1,,,,10.3%,nil
-Digital Media,2025-Q2,,,,41.5%,#N/A
-Digital Media,2025-Q3,,,,28.4%,nil
-Digital Media,2025-Q4,,,,22.6%,nil
-Consulting & Advisory,2025-Q1,,,,26.0%,#N/A
-Consulting & Advisory,2025-Q2,,,,14.4%,nil
-Consulting & Advisory,2025-Q3,,,,22.2%,#N/A
-Consulting & Advisory,2025-Q4,,,,15.4%,#N/A
+Cloud Services,2025-Q1,"$621,328.00","$351,050.32","$270,277.68",43.5%,#N/A
+Cloud Services,2025-Q2,"$639,306.00","490,347.70","$148,958.30",23.3%,#N/A
+Cloud Services,2025-Q3,"$700,313.00","$546,244.14","$154,068.86",22.0%,nil
+Cloud Services,2025-Q4,"$623,550.00","568,054.05","$55,495.95",8.9%,#N/A
+Hardware Solutions,2025-Q1,"$213,595.00","$178,779.01","$34,815.99",16.3%,nil
+Hardware Solutions,2025-Q2,"$218,105.00",#N/A,"$84,188.53",38.6%,nil
+Hardware Solutions,2025-Q3,"$205,602.00","$239,732.00","(34,130.00)",-16.6%,#N/A
+Hardware Solutions,2025-Q4,"$187,385.00","220,927.00","(33,542.00)",-17.9%,#N/A
+Digital Media,2025-Q1,"$357,023.00","$320,249.63","$36,773.37",10.3%,nil
+Digital Media,2025-Q2,"$371,995.00","217,617.08","$154,377.92",41.5%,#N/A
+Digital Media,2025-Q3,"$307,841.00","$220,414.16","$87,426.84",28.4%,nil
+Digital Media,2025-Q4,"$327,052.00","253,138.25","$73,913.75",22.6%,nil
+Consulting & Advisory,2025-Q1,"$248,732.00","$184,061.68","$64,670.32",26.0%,#N/A
+Consulting & Advisory,2025-Q2,"$302,116.00","258,611.30","$43,504.70",14.4%,nil
+Consulting & Advisory,2025-Q3,"$293,488.00","$228,333.66","$65,154.34",22.2%,#N/A
+Consulting & Advisory,2025-Q4,"$245,110.00","207,363.06","$37,746.94",15.4%,#N/A

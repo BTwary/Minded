@@ -7,7 +7,6 @@ import {
   AlertCircle,
   ArrowRight,
   Bot,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -33,7 +32,17 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import { createInvestigation, fetchDatasets, fetchInvestigation, streamInvestigationEvents, fetchProjects } from "../../lib/api";
+import {
+  createInvestigation,
+  fetchDatasets,
+  fetchInvestigation,
+  streamInvestigationEvents,
+  fetchProjects,
+  interpretQuestion,
+  PreAnalysisPlan,
+  reviseInvestigationGuidance,
+  retryInvestigationDispatch,
+} from "../../lib/api";
 import { AnalysisResponse, Dataset } from "../../types";
 import StepTracker from "../../components/StepTracker";
 import EvidenceViewer from "../../components/EvidenceViewer";
@@ -43,10 +52,24 @@ import InvestigationGraphView from "../../components/InvestigationGraphView";
 import QuickAnalysisCenter from "../../components/QuickAnalysisCenter";
 import ReportGeneratorModal from "../../components/ReportGeneratorModal";
 import VerificationPanel from "../../components/VerificationPanel";
+import StructuredAnalysisAnswer from "../../components/StructuredAnalysisAnswer";
+import ProposedAnalysisPanel from "../../components/ProposedAnalysisPanel";
+import RecordLevelInspector from "../../components/RecordLevelInspector";
 
 export default function AnalystPage() {
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isPlanning, setIsPlanning] = useState(false);
+  const [proposedPlan, setProposedPlan] = useState<PreAnalysisPlan | null>(null);
+  // Fingerprint of the guidance the current proposedPlan.plan_hash was computed for. The hash the
+  // analyst approves must belong to the plan they were shown, so edited guidance is re-previewed
+  // (via /interpret) before it can be executed.
+  const [previewedGuidanceKey, setPreviewedGuidanceKey] = useState<string>("");
+  const [clarificationInvestigationId, setClarificationInvestigationId] = useState<string | null>(null);
+  const [dispatchRetryId, setDispatchRetryId] = useState<string | null>(null);
+  const [recordSampleRows, setRecordSampleRows] = useState<any[]>([]);
+  const [recordSampleCols, setRecordSampleCols] = useState<string[]>([]);
+  const [totalRecordCount, setTotalRecordCount] = useState<number>(0);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
   const [interpretation, setInterpretation] = useState<any>(null);
@@ -58,13 +81,20 @@ export default function AnalystPage() {
   const [projectId, setProjectId] = useState<string>("");
   const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([]);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"findings" | "graph" | "evidence" | "steps" | "scenarios" | "review">("findings");
+  const [activeTab, setActiveTab] = useState<"findings" | "records" | "graph" | "evidence" | "steps" | "scenarios" | "review">("findings");
 
   useEffect(() => {
     async function loadProjects() {
       try {
         const projects = await fetchProjects();
         setProjectId(projects[0]?.id || "");
+        if (typeof window !== "undefined") {
+          const params = new URLSearchParams(window.location.search);
+          const initialQ = params.get("q");
+          if (initialQ) {
+            setQuestion(initialQ);
+          }
+        }
       } catch (e) {
         console.error("Failed to load projects:", e);
       }
@@ -92,7 +122,69 @@ export default function AnalystPage() {
     loadProjectDatasets();
   }, [projectId]);
 
-  const handleAsk = async (q: string) => {
+  useEffect(() => {
+    if (!datasets.length) return;
+    const targetId = selectedDatasetIds[0] || datasets[0]?.id;
+    if (!targetId) return;
+    fetch(`/api/v1/datasets/${encodeURIComponent(targetId)}/data?limit=50`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && Array.isArray(data.rows)) {
+          setRecordSampleRows(data.rows);
+          setRecordSampleCols(data.columns || (data.rows[0] ? Object.keys(data.rows[0]) : []));
+          setTotalRecordCount(data.total_rows || data.row_count || data.rows.length);
+        }
+      })
+      .catch(() => {});
+  }, [datasets, selectedDatasetIds]);
+
+  const handlePlanQuestion = async (q: string) => {
+    if (!q.trim()) return;
+    setClarificationInvestigationId(null);
+    setDispatchRetryId(null);
+    setIsPlanning(true);
+    setError(null);
+    setQuestion(q);
+    try {
+      if (!projectId) {
+        throw new Error("No local analytical workspace is available yet.");
+      }
+      const plan = await interpretQuestion({
+        question: q,
+        project_id: projectId,
+        dataset_ids: selectedDatasetIds.length > 0 ? selectedDatasetIds : undefined,
+      });
+      setProposedPlan(plan);
+      setPreviewedGuidanceKey("");
+    } catch (err: any) {
+      console.error("Pre-analysis plan interpretation failed:", err);
+      // Invariant: An interpretation service failure must NOT silently bypass human-guidance review
+      // or execute the unreviewed request. Expose the error transparently for human recovery.
+      setError(
+        `Pre-analysis interpretation could not compile a safe plan for this question: ${err?.message || err}. Please inspect your dataset columns or rephrase the question.`
+      );
+    } finally {
+      setIsPlanning(false);
+    }
+  };
+
+  const handleExecuteInvestigation = async (
+    q: string,
+    guidance: {
+      selected_metric?: string;
+      selected_aggregation?: string;
+      selected_group_dimension?: string;
+      selected_dataset?: string;
+      confirmed_assumptions?: string[] | { add?: string[]; remove?: string[]; replace?: string[] };
+      scope_filter?: string;
+      clarification_response?: string;
+      custom_instruction?: string;
+      intent_patch?: Record<string, unknown>;
+      pending_intent_slot?: string;
+      plan_hash?: string;
+    } = {},
+    retryId?: string
+  ) => {
     if (!q.trim()) return;
     setIsLoading(true);
     setError(null);
@@ -106,11 +198,103 @@ export default function AnalystPage() {
       // Use the durable investigation plane rather than the synchronous chat
       // endpoint. The worker executes independently, while SSE events provide
       // live progress and the UI remains responsive for long-running analyses.
-      const investigation = await createInvestigation({
-        question: q,
-        project_id: projectId,
-        dataset_ids: selectedDatasetIds.length > 0 ? selectedDatasetIds : undefined,
-      });
+      const guidanceFields = {
+        selected_metric: guidance.selected_metric,
+        selected_aggregation: guidance.selected_aggregation,
+        selected_group_dimension: guidance.selected_group_dimension,
+        selected_dataset: guidance.selected_dataset,
+        confirmed_assumptions: guidance.confirmed_assumptions,
+        scope_filter: guidance.scope_filter,
+        clarification_response: guidance.clarification_response,
+        custom_instruction: guidance.custom_instruction,
+        intent_patch: guidance.intent_patch,
+        pending_intent_slot: guidance.pending_intent_slot,
+      };
+      const hasGuidance = Object.values(guidanceFields).some(
+        (v) => v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && v.length === 0)
+      );
+      const guidanceKey = hasGuidance ? JSON.stringify(guidanceFields) : "";
+      if (!retryId && !clarificationInvestigationId && guidanceKey !== previewedGuidanceKey) {
+        // The preview on screen was computed without this guidance. Re-preview it so the analyst
+        // approves the plan that will actually run, then stop; they confirm again.
+        const refreshed = await interpretQuestion({
+          question: q,
+          project_id: projectId,
+          dataset_ids: selectedDatasetIds.length > 0 ? selectedDatasetIds : undefined,
+          ...guidanceFields,
+        });
+        setProposedPlan(refreshed);
+        setPreviewedGuidanceKey(guidanceKey);
+        setProgressText(null);
+        setError("The plan was refreshed to reflect your changes. Review it and confirm to run.");
+        return;
+      }
+      const requestGuidance = {
+        selected_metric: guidance.selected_metric,
+        selected_aggregation: guidance.selected_aggregation,
+        selected_group_dimension: guidance.selected_group_dimension,
+        selected_dataset: guidance.selected_dataset,
+        confirmed_assumptions: guidance.confirmed_assumptions,
+        scope_filter: guidance.scope_filter,
+        clarification_response: guidance.clarification_response,
+        custom_instruction: guidance.custom_instruction,
+        intent_patch: guidance.intent_patch,
+        pending_intent_slot: guidance.pending_intent_slot,
+        plan_hash: guidance.plan_hash || proposedPlan?.plan_hash,
+      };
+      const investigation = retryId
+        ? await retryInvestigationDispatch(retryId)
+        : clarificationInvestigationId
+          ? await reviseInvestigationGuidance(clarificationInvestigationId, requestGuidance)
+          : await createInvestigation({
+              question: q,
+              project_id: projectId,
+              dataset_ids: selectedDatasetIds.length > 0 ? selectedDatasetIds : undefined,
+              ...requestGuidance,
+            });
+
+      if (investigation.status === "NEEDS_CLARIFICATION") {
+        setClarificationInvestigationId(investigation.investigation_id);
+        setDispatchRetryId(null);
+        setError(null);
+        setProposedPlan((current) => current ? {
+          ...current,
+          ambiguity_status: "AMBIGUOUS_SCOPE",
+          clarification_prompt:
+            investigation.resolution?.reason ||
+            "More detail is needed before this analysis can be executed.",
+          clarification_options: investigation.resolution?.suggested_resolutions || [],
+          resolution_status: investigation.resolution?.status,
+          resolution_reason: investigation.resolution?.reason,
+          unresolved_instruction: investigation.resolution?.unresolved_instruction,
+          suggested_resolutions: investigation.resolution?.suggested_resolutions || [],
+          conflict: investigation.resolution?.conflict || null,
+          can_auto_proceed: false,
+        } : current);
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "user", text: q },
+          {
+            role: "assistant",
+            text: investigation.resolution?.reason || "Please clarify the request before execution.",
+          },
+        ]);
+        return;
+      }
+
+      if (investigation.status === "READY") {
+        setDispatchRetryId(investigation.investigation_id);
+        setError(
+          investigation.dispatch_error ||
+          "The canonical contract is locked, but dispatch failed. Retry dispatch without resubmitting the analysis."
+        );
+        return;
+      }
+
+      setClarificationInvestigationId(null);
+      setDispatchRetryId(null);
+      setProposedPlan(null);
+      setPreviewedGuidanceKey("");
 
       setConversationId(undefined);
       setChatMessages((prev) => [
@@ -147,6 +331,9 @@ export default function AnalystPage() {
           direct_answer: inv.direct_answer || "",
           claim_gate: inv.claim_gate,
           main_finding: inv.main_finding || inv.direct_answer || "",
+          analyst_result: inv.analyst_result || null,
+          provenance: inv.provenance || undefined,
+          evidence_verifications: inv.evidence_verifications || [],
           confidence,
           hypotheses: (inv.hypotheses || []).map((h: any, i: number) => ({
             id: h.id || h.hypothesis_code || `H-${i + 1}`,
@@ -172,14 +359,20 @@ export default function AnalystPage() {
           evidence: (inv.evidence || []).map((e: any) => ({
             id: e.id,
             statement: e.statement || "",
-            calculation_summary: "",
-            dataset_version: "1",
-            row_count_analyzed: 0,
-            sql_executed: undefined,
+            calculation_summary: e.calculation_summary || "",
+            dataset_version: e.source_dataset
+              ? JSON.stringify(e.source_dataset)
+              : undefined,
+            row_count_analyzed: Number.isFinite(e.row_count_analyzed)
+              ? Number(e.row_count_analyzed)
+              : undefined,
+            sql_executed: e.sql_executed || undefined,
             p_value: e.p_value,
-            validation_status: e.validation_status || "SKIPPED",
+            validation_status: e.validation_status || "UNVERIFIED",
             raw_metrics: {},
-            verified_at: new Date().toISOString(),
+            verified_at: e.verified_at,
+            effect_size: e.effect_size,
+            calculation_trace: e.calculation_trace,
           })),
           suggested_followups: [],
           executive_bullets: [],
@@ -201,13 +394,16 @@ export default function AnalystPage() {
           setProgressText(`${String(phase).replaceAll("_", " ")}${experiment}`);
         },
         {
-          onError: () => {
-            // SSE is supplemental; polling below remains authoritative.
+          onError: (streamError) => {
+            console.warn("Live investigation progress is unavailable; status polling continues.", streamError);
+            setProgressText("Live progress is unavailable; checking the investigation status directly…");
           },
         }
       );
 
       try {
+        const queuedAt = Date.now();
+        let queueNoticeShown = false;
         while (!stopped) {
           const current = await fetchInvestigation(investigation.investigation_id);
           const status = String(current.status || "").toUpperCase();
@@ -220,7 +416,19 @@ export default function AnalystPage() {
             }
             break;
           }
-          setProgressText(`AA-OS is investigating • ${status || "RUNNING"}`);
+          const queuedForSeconds = Math.floor((Date.now() - queuedAt) / 1000);
+          if (status === "QUEUED" && queuedForSeconds >= 30) {
+            queueNoticeShown = true;
+            setProgressText(
+              `Still queued after ${queuedForSeconds}s. The local worker has not claimed this request yet; keep this page open and do not submit it again.`
+            );
+          } else {
+            setProgressText(
+              queueNoticeShown && status !== "QUEUED"
+                ? `Worker claimed the request • ${status || "RUNNING"}`
+                : `AA-OS is investigating • ${status || "RUNNING"}`
+            );
+          }
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       } finally {
@@ -232,53 +440,6 @@ export default function AnalystPage() {
     } finally {
       setProgressText(null);
       setIsLoading(false);
-    }
-  };
-
-  const getVerdictBadge = (verdict?: string) => {
-    switch (verdict) {
-      case "DIAGNOSED":
-        return {
-          label: "DIAGNOSED (Variance Driver Proven)",
-          color: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
-          icon: <ShieldCheck className="w-4 h-4 text-emerald-400" />,
-        };
-      case "STATISTICALLY_SIGNIFICANT":
-        return {
-          label: "STATISTICALLY SIGNIFICANT (p < 0.05)",
-          color: "bg-cyan-500/10 text-cyan-400 border-cyan-500/30",
-          icon: <Activity className="w-4 h-4 text-cyan-400" />,
-        };
-      case "REFUTED":
-        return {
-          label: "REFUTED (Comparison Reverses Within Groups)",
-          color: "bg-rose-500/10 text-rose-400 border-rose-500/30",
-          icon: <ShieldAlert className="w-4 h-4 text-rose-400" />,
-        };
-      case "PREDICTED":
-        return {
-          label: "PREDICTED (Fitted Model with Backtest)",
-          color: "bg-indigo-500/10 text-indigo-400 border-indigo-500/30",
-          icon: <Sparkles className="w-4 h-4 text-indigo-400" />,
-        };
-      case "OBSERVED":
-        return {
-          label: "OBSERVED (Descriptive / Recomputed)",
-          color: "bg-amber-500/10 text-amber-400 border-amber-500/30",
-          icon: <Database className="w-4 h-4 text-amber-400" />,
-        };
-      case "NO_DETECTABLE_EFFECT":
-        return {
-          label: "NO DETECTABLE EFFECT (Null Supported with CI)",
-          color: "bg-blue-500/10 text-blue-400 border-blue-500/30",
-          icon: <FileCheck className="w-4 h-4 text-blue-400" />,
-        };
-      default:
-        return {
-          label: verdict || "CONFIRMED",
-          color: "bg-cyan-500/10 text-cyan-400 border-cyan-500/30",
-          icon: <CheckCircle2 className="w-4 h-4 text-cyan-400" />,
-        };
     }
   };
 
@@ -353,27 +514,32 @@ export default function AnalystPage() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            handleAsk(question);
+            handlePlanQuestion(question);
           }}
           className="flex items-center gap-3"
         >
           <div className="relative flex-1">
             <input
               type="text"
-              placeholder="Ask an analytical question (e.g. 'Why did revenue fall in March?', 'Forecast trajectory', 'Find churn risk')..."
+              placeholder="Ask an analytical question (e.g. 'Which region has the highest revenue?', 'Does discount_pct affect quantity?', 'Why did revenue change?')..."
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              disabled={isLoading}
+              disabled={isLoading || isPlanning}
               className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 font-sans"
             />
           </div>
 
           <button
             type="submit"
-            disabled={isLoading || !question.trim()}
+            disabled={isLoading || isPlanning || !question.trim()}
             className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-semibold px-6 py-3 rounded-xl flex items-center space-x-2 shadow-lg shadow-cyan-600/30 transition-all flex-shrink-0"
           >
-            {isLoading ? (
+            {isPlanning ? (
+              <>
+                <Cpu className="w-4 h-4 animate-spin" />
+                <span>Interpreting...</span>
+              </>
+            ) : isLoading ? (
               <>
                 <Cpu className="w-4 h-4 animate-spin" />
                 <span>Investigating...</span>
@@ -381,12 +547,37 @@ export default function AnalystPage() {
             ) : (
               <>
                 <Send className="w-4 h-4" />
-                <span>Run Investigation</span>
+                <span>Plan & Investigate</span>
               </>
             )}
           </button>
         </form>
       </div>
+
+      {/* Pre-Analysis Planning Progress */}
+      {isPlanning && (
+        <div className="flex items-center gap-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-xs text-cyan-200 animate-pulse">
+          <Cpu className="w-4 h-4 animate-spin text-cyan-400" />
+          <span>Analyzing question structure, resolving physical columns, and compiling analytical contract…</span>
+        </div>
+      )}
+
+      {/* Proposed Analysis Panel (Pre-execution confirmation) */}
+      {proposedPlan && (
+        <ProposedAnalysisPanel
+          key={`${clarificationInvestigationId || "new"}-${proposedPlan.resolution_reason || ""}`}
+          plan={proposedPlan}
+          availableDatasets={datasets.map((dataset) => ({ id: dataset.id, name: dataset.name }))}
+          availableNumericCols={recordSampleCols.filter((c) => recordSampleRows[0] && typeof recordSampleRows[0][c] === "number")}
+          availableCategoricalCols={recordSampleCols.filter((c) => recordSampleRows[0] && typeof recordSampleRows[0][c] !== "number")}
+          onConfirmAndRun={(customized) => handleExecuteInvestigation(proposedPlan.question, customized)}
+          onCancel={() => {
+            setProposedPlan(null);
+            setClarificationInvestigationId(null);
+          }}
+          isRunning={isLoading}
+        />
+      )}
 
       {isLoading && progressText && (
         <div className="flex items-center gap-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-xs text-cyan-200">
@@ -424,7 +615,7 @@ export default function AnalystPage() {
               {followUps.slice(0, 3).map((item) => (
                 <button
                   key={item}
-                  onClick={() => handleAsk(item)}
+                  onClick={() => handlePlanQuestion(item)}
                   className="text-[11px] px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white"
                 >
                   {item}
@@ -436,10 +627,10 @@ export default function AnalystPage() {
       )}
 
       {/* Quick Analysis Center */}
-      {!analysis && !isLoading && (
+      {!analysis && !isLoading && !proposedPlan && (
         <QuickAnalysisCenter
-          isLoading={isLoading}
-          onSelectQuestion={(q) => handleAsk(q)}
+          isLoading={isLoading || isPlanning}
+          onSelectQuestion={(q) => handlePlanQuestion(q)}
         />
       )}
 
@@ -450,6 +641,16 @@ export default function AnalystPage() {
           <div>
             <span className="font-bold block mb-1">Investigation Execution Error</span>
             <p>{error}</p>
+            {dispatchRetryId && (
+              <button
+                type="button"
+                onClick={() => handleExecuteInvestigation(question, {}, dispatchRetryId)}
+                disabled={isLoading}
+                className="mt-3 rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 font-semibold text-rose-100 hover:bg-rose-500/20 disabled:opacity-50"
+              >
+                Retry dispatch
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -472,125 +673,27 @@ export default function AnalystPage() {
       {/* Full Analysis Results */}
       {analysis && !isLoading && (
         <div className="space-y-6">
-          {/* Executive Direct Answer & Verdict Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
-            <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2">
-                  {(() => {
-                    const vb = getVerdictBadge(analysis.verdict);
-                    return (
-                      <span className={`text-xs font-mono font-bold px-3 py-1 rounded-full border flex items-center space-x-1.5 ${vb.color}`}>
-                        {vb.icon}
-                        <span>{vb.label}</span>
-                      </span>
-                    );
-                  })()}
-                  <span className="text-xs font-mono text-slate-500 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
-                    Confidence: {analysis.confidence}
-                  </span>
-                </div>
-                <h2 className="text-xl font-bold text-white tracking-tight mt-2">
-                  {analysis.direct_answer}
-                </h2>
-                {Array.isArray((analysis as any).dataset_scope) && (analysis as any).dataset_scope.length > 0 && (
-                  <div className="mt-2 text-[10px] text-slate-500">
-                    Investigation scope: {(analysis as any).dataset_scope.length} selected dataset(s)
-                  </div>
-                )}
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setIsReportModalOpen(true)}
-                  className="text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 px-3.5 py-2 rounded-xl flex items-center space-x-2 transition-all shadow-lg shadow-indigo-600/10"
-                >
-                  <FileCheck className="w-4 h-4" />
-                  <span>Generate Report</span>
-                </button>
-              </div>
-            </div>
-
-            {analysis.claim_gate && (
-              <div className={`mt-4 rounded-xl border p-4 ${
-                analysis.claim_gate.outcome === "ANSWER"
-                  ? "border-emerald-500/30 bg-emerald-500/5"
-                  : analysis.claim_gate.outcome === "QUALIFIED_ANSWER"
-                    ? "border-amber-500/30 bg-amber-500/5"
-                    : "border-red-500/30 bg-red-500/5"
-              }`}>
-                <div className="flex items-center justify-between gap-3 mb-3">
-                  <span className="text-xs font-mono font-bold tracking-wider text-white">
-                    CLAIM GATE: {analysis.claim_gate.outcome}
-                  </span>
-                  <span className="text-[10px] font-mono text-slate-400">
-                    Evidence L{analysis.claim_gate.evidence_level} · Design {analysis.claim_gate.design_status}
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-emerald-300 mb-1">Claim supported</div>
-                    <p className="text-xs text-slate-200 leading-relaxed">{analysis.claim_gate.allowed_claim}</p>
-                  </div>
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-red-300 mb-1">Claim not supported</div>
-                    <p className="text-xs text-slate-200 leading-relaxed">{analysis.claim_gate.blocked_claim || "None at the current evidence level."}</p>
-                  </div>
-                </div>
-                <div className="mt-3 text-xs text-slate-300">
-                  <span className="font-semibold text-white">Why:</span> {analysis.claim_gate.reason}
-                </div>
-                {analysis.claim_gate.recovery_actions?.length > 0 && (
-                  <div className="mt-3">
-                    <div className="text-[10px] uppercase tracking-wider text-cyan-300 mb-2">To strengthen the claim</div>
-                    <div className="space-y-2">
-                      {analysis.claim_gate.recovery_actions.map((action) => (
-                        <button
-                          key={action}
-                          type="button"
-                          onClick={() => handleAsk(`For the current finding, pursue this recovery action and return only evidence supported by the available data: ${action}`)}
-                          disabled={isLoading}
-                          className="w-full text-left rounded-lg border border-cyan-500/20 bg-cyan-500/5 hover:bg-cyan-500/10 disabled:opacity-50 px-3 py-2 text-xs text-slate-200 transition-colors"
-                        >
-                          <span className="text-cyan-300 mr-2">↗</span>{action}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-[10px] text-slate-500 mt-2">Running a recovery action starts a fresh deterministic investigation. It does not raise the evidence level by assertion.</p>
-                  </div>
-                )}
-                {analysis.claim_gate.computed_evidence && (
-                  <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-mono text-slate-400">
-                    {typeof analysis.claim_gate.computed_evidence.verified_evidence_count === "number" && (
-                      <span className="rounded-md border border-slate-800 bg-slate-950 px-2 py-1">Verified evidence: {analysis.claim_gate.computed_evidence.verified_evidence_count}</span>
-                    )}
-                    {Array.isArray(analysis.claim_gate.computed_evidence.evidence_ids) && (
-                      <span className="rounded-md border border-slate-800 bg-slate-950 px-2 py-1">Evidence records: {analysis.claim_gate.computed_evidence.evidence_ids.length}</span>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Core Finding Callout */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 text-xs text-slate-300 leading-relaxed font-sans">
-              <span className="font-semibold text-cyan-300 block mb-1">Key Empirical Finding:</span>
-              {analysis.main_finding}
-            </div>
-
-            {/* Executive Bullets */}
-            {analysis.executive_bullets && analysis.executive_bullets.length > 0 && (
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                {analysis.executive_bullets.map((bullet, bIdx) => (
-                  <div key={bIdx} className="flex items-start space-x-2 text-xs text-slate-300 bg-slate-950/50 p-2.5 rounded-lg border border-slate-800/80">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
-                    <span>{bullet}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+          <div className="flex justify-end">
+            <button
+              onClick={() => setIsReportModalOpen(true)}
+              className="text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 px-3.5 py-2 rounded-xl flex items-center space-x-2 transition-all shadow-lg shadow-indigo-600/10"
+            >
+              <FileCheck className="w-4 h-4" />
+              <span>Generate Report</span>
+            </button>
           </div>
+          <StructuredAnalysisAnswer
+            analysis={analysis}
+            onRedo={() => {
+              if (analysis.question) {
+                handlePlanQuestion(analysis.question);
+              }
+            }}
+            onRequestCorrection={(correction) => {
+              const revised = `${analysis.question || "Analysis"} [Correction: ${correction}]`;
+              handlePlanQuestion(revised);
+            }}
+          />
 
           {analysis.analysis_plan && (
             <div className="bg-slate-900 border border-cyan-500/20 rounded-2xl p-5 space-y-4">
@@ -630,6 +733,12 @@ export default function AnalystPage() {
                   </div>
                 </div>
               )}
+              {Array.isArray(analysis.analysis_plan.executed_experiments) && analysis.analysis_plan.executed_experiments.length > 0 && (
+                <div className="text-[11px] text-slate-400">
+                  <span className="text-slate-500">Executed: </span>
+                  {analysis.analysis_plan.executed_experiments.map((e: any) => `${String(e.code)} (${Number(e.rows_analyzed || 0).toLocaleString()} rows, ${String(e.status)})`).join("; ")}
+                </div>
+              )}
               <div className="text-[11px] text-slate-400">
                 <span className="text-slate-500">Stopping rule: </span>{String(analysis.analysis_plan.stopping_rule || "Not specified")}
               </div>
@@ -665,8 +774,9 @@ export default function AnalystPage() {
           <div className="flex items-center space-x-2 border-b border-slate-800 pb-2">
             {[
               { id: "findings", label: "Findings & Actions", icon: <Lightbulb className="w-4 h-4" /> },
+              { id: "records", label: "Record Inspector", icon: <Database className="w-4 h-4" /> },
               { id: "graph", label: "Investigation DAG", icon: <Network className="w-4 h-4" /> },
-              { id: "evidence", label: `Verified Evidence (${analysis.evidence?.length || 0})`, icon: <ShieldCheck className="w-4 h-4" /> },
+              { id: "evidence", label: `Evidence (${analysis.evidence?.length || 0})`, icon: <ShieldCheck className="w-4 h-4" /> },
               { id: "steps", label: `Reasoning Steps (${analysis.steps?.length || 0})`, icon: <Clock className="w-4 h-4" /> },
               { id: "scenarios", label: "Policy Scenarios", icon: <Compass className="w-4 h-4" /> },
               { id: "review", label: "Human Review", icon: <FileCheck className="w-4 h-4" /> },
@@ -685,6 +795,35 @@ export default function AnalystPage() {
               </button>
             ))}
           </div>
+
+          {/* TAB: Record Inspector */}
+          {activeTab === "records" && (
+            <RecordLevelInspector
+              rows={
+                recordSampleRows.length > 0
+                  ? recordSampleRows
+                  : Array.isArray(analysis.analyst_result?.records)
+                  ? (analysis.analyst_result.records as Record<string, any>[])
+                  : (analysis.evidence?.map(e => ({ id: e.id, statement: e.statement, rows: e.row_count_analyzed, status: e.validation_status })) || [])
+              }
+              columns={
+                recordSampleCols.length > 0
+                  ? recordSampleCols
+                  : Array.isArray(analysis.analyst_result?.records) && analysis.analyst_result.records.length > 0
+                  ? Object.keys(analysis.analyst_result.records[0] as object)
+                  : ["id", "statement", "rows", "status"]
+              }
+              totalRowCount={
+                totalRecordCount ||
+                (Array.isArray(analysis.analyst_result?.records) ? analysis.analyst_result.records.length : 0) ||
+                analysis.evidence?.length ||
+                0
+              }
+              onScopeChange={(selectedRows, scopeDescription) => {
+                console.log("Inspector focused subset:", selectedRows.length, scopeDescription);
+              }}
+            />
+          )}
 
           {/* TAB 1: Findings & Recommended Actions */}
           {activeTab === "findings" && (
@@ -733,7 +872,7 @@ export default function AnalystPage() {
                   ))
                 ) : (
                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-400">
-                    Zero raw findings extracted.
+                  No separate investigation findings were recorded. See the canonical answer above.
                   </div>
                 )}
               </div>
@@ -814,7 +953,8 @@ export default function AnalystPage() {
             <InvestigationGraphView
               hypotheses={analysis.hypotheses}
               objective={analysis.question.toLowerCase().includes("why") ? "Diagnostic" : "Analytical"}
-              targetMetric="Revenue"
+              targetMetric={String(analysis.hypotheses?.[0]?.target_metric || analysis.analysis_plan?.estimand?.target_metric || "Target metric")}
+              descriptiveAnswer={String(analysis.verdict || "").toUpperCase().includes("OBSERVED")}
             />
           )}
 

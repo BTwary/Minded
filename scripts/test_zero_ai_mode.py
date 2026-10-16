@@ -144,10 +144,16 @@ class TestZeroAIMode(unittest.TestCase):
         exec_provider = DuckDBExecutionProvider()
         
         sql = "SELECT region, SUM(revenue) AS total_rev FROM sales GROUP BY region ORDER BY total_rev DESC"
-        primary_val, row_count, dur, res_df = exec_provider.execute_query(
+        # A multi-row result must declare which column carries the metric (no column-order guessing).
+        exec_res = exec_provider.execute_query(
             df=self.df_sales,
             table_name="sales",
             query_sql=sql,
+            aggregation_type="SUM",
+            primary_result_column="total_rev",
+        )
+        primary_val, row_count, dur, res_df = (
+            exec_res.primary_value, exec_res.row_count, exec_res.execution_time_ms, exec_res.result_df,
         )
         
         self.assertEqual(row_count, 500)
@@ -207,7 +213,12 @@ class TestZeroAIMode(unittest.TestCase):
         )
         
         self.assertEqual(resp.status.value, "COMPLETED")
-        self.assertIn(resp.verdict.value, ["DIAGNOSED", "OBSERVED", "STATISTICALLY_SIGNIFICANT", "CONFIRMED"])
+        # This dataset is uniform random noise (revenue is drawn independently of region), so there is
+        # no contraction to find. The correct deterministic outcome is a null/inconclusive verdict;
+        # a positive verdict on noise would be the failure.
+        self.assertIn(resp.verdict.value, ["NO_DETECTABLE_EFFECT", "INCONCLUSIVE"])
+        self.assertNotIn(resp.verdict.value, ["DIAGNOSED", "OBSERVED", "STATISTICALLY_SIGNIFICANT", "CONFIRMED"])
+        self.assertIn("no statistically detectable", resp.direct_answer.lower())
         self.assertIsNotNone(resp.direct_answer)
         self.assertIsNotNone(resp.main_finding)
         self.assertGreater(len(resp.steps), 0)

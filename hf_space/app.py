@@ -3,11 +3,12 @@
 Enterprise-Grade Autonomous Data Analyst.
 Hosted as a thin adapter over the canonical Minded analytical kernel
 (apps.api.src.ai.runtime.InvestigationRuntime -> InvestigationController).
-100% deterministic, local-first, zero-cloud API dependency.
+Deterministic engine, no external AI/cloud API dependency. Hosted demo: uploads are processed on the Space.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Dict, List
@@ -15,6 +16,14 @@ from typing import Any, Dict, List
 import gradio as gr
 import pandas as pd
 import plotly.express as px
+
+# Hosted Space: ephemeral writable state, no external AI, no telemetry. Must be set before
+# the Minded modules are imported (they create their working directories at import time).
+os.environ.setdefault("AAOS_DATA_ROOT", "/tmp/aaos")
+os.environ.setdefault("AI_ENABLED", "false")
+os.environ.setdefault("AI_PROVIDER", "none")
+os.environ.setdefault("TELEMETRY_ENABLED", "false")
+os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -231,7 +240,7 @@ def load_scenario_financials():
     paths = [
         str(SAMPLE_DIR / "financials" / "quarterly_financials_messy.csv"),
     ]
-    question = "What is the total revenue by division and which division had negative net profit?"
+    question = "What is the total net profit by division?"
     return paths, question
 
 
@@ -239,16 +248,31 @@ def load_scenario_cohorts():
     paths = [
         str(SAMPLE_DIR / "cohorts" / "user_retention_cohorts.csv"),
     ]
-    question = "Which tier has the lowest retention rate, and what is the average monthly spend for that tier?"
+    question = "What is the average monthly spend by tier?"
     return paths, question
 
 
+CUSTOM_CSS = """
+button.primary, .primary-btn {
+    background: linear-gradient(135deg, #F5A623 0%, #FFCC70 100%) !important;
+    color: #0E0E0E !important;
+    font-weight: 600 !important;
+    border-radius: 7px !important;
+}
+button {
+    border-radius: 7px !important;
+    transition: all 180ms ease !important;
+}
+"""
+
 custom_theme = gr.themes.Default(primary_hue="amber", secondary_hue="emerald", neutral_hue="slate")
 
-with gr.Blocks(title="Minded — Autonomous Analytical Intelligence OS") as demo:
+with gr.Blocks(title="Minded — Autonomous Analytical Intelligence OS", css=CUSTOM_CSS) as demo:
     gr.Markdown("""
     # ⚡ MINDED: Autonomous Analytical Intelligence OS
-    ### Real Human Data Analyst Level AI — Local-First, Zero-Cloud, Relational & Deterministic
+    ### Real Human Data Analyst Level AI — Relational & Deterministic (hosted demo)
+
+    > **Hosted demonstration — not private.** Files you upload are processed on the Hugging Face Space. Do not upload confidential or sensitive data; use the local Windows application for private data. No external AI API is used.
 
     Upload your own CSV / Parquet data across multiple tables, or click a demo scenario below to test multi-table relational joins, messy enterprise types, and compound questions.
     """)

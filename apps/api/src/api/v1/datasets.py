@@ -1,6 +1,6 @@
 """Dataset Ingestion, Profiling, and Versioning Endpoints with Tenancy Enforcement."""
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from apps.api.src.core.database import get_db
@@ -59,6 +59,14 @@ async def upload_dataset(
             description=description,
             business_timezone=business_timezone,
         )
+        from apps.api.src.api.v1.alerts import _evaluate
+
+        monitoring_evaluation = _evaluate(
+            dataset.project_id,
+            "import",
+            db,
+            dataset_id=dataset.id,
+        )
         version = (db.query(DatasetVersion)
                    .filter(DatasetVersion.dataset_id == dataset.id, DatasetVersion.version_number == dataset.current_version)
                    .first())
@@ -75,6 +83,7 @@ async def upload_dataset(
             "source_sha256": lineage.get("source_sha256"),
             "raw_file_path": lineage.get("raw_file_path"),
             "profile": dataset.profile_json,
+            "monitoring_evaluation": monitoring_evaluation,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process dataset: {str(e)}")
@@ -123,15 +132,29 @@ def list_datasets(
 @router.get("/{dataset_id}")
 def get_dataset(
     dataset_id: str,
+    version: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Retrieve full dataset metadata and profile."""
+    if version is not None and version < 1:
+        raise HTTPException(status_code=422, detail="Dataset version must be a positive integer.")
     dataset = verify_dataset_ownership(dataset_id, current_user, db)
-    version = (db.query(DatasetVersion)
-               .filter(DatasetVersion.dataset_id == dataset.id, DatasetVersion.version_number == dataset.current_version)
-               .first())
-    lineage = (version.transformation_applied or {}) if version else {}
+    selected_version = version if version is not None else dataset.current_version
+    version_record = (db.query(DatasetVersion)
+                      .filter(DatasetVersion.dataset_id == dataset.id, DatasetVersion.version_number == selected_version)
+                      .first())
+    if version_record is None:
+        raise HTTPException(status_code=404, detail=f"Dataset version {selected_version} is unavailable.")
+    lineage = (version_record.transformation_applied or {})
+    version_profile = version_record.profile_json or (
+        dataset.profile_json if selected_version == dataset.current_version else None
+    )
+    version_quality = (
+        version_profile.get("data_quality", {}).get("overall_score")
+        if isinstance(version_profile, dict)
+        else None
+    )
     return {
         "id": dataset.id,
         "project_id": dataset.project_id,
@@ -140,12 +163,19 @@ def get_dataset(
         "format": dataset.format,
         "row_count": dataset.row_count,
         "column_count": dataset.column_count,
-        "data_quality_score": dataset.data_quality_score,
+        "data_quality_score": version_quality if version_quality is not None else (
+            dataset.data_quality_score if selected_version == dataset.current_version else None
+        ),
         "current_version": dataset.current_version,
+        "profile_version": selected_version,
+        "row_count": version_record.row_count,
+        "column_count": version_record.column_count,
         "source_filename": lineage.get("filename"),
         "source_sha256": lineage.get("source_sha256"),
         "raw_file_path": lineage.get("raw_file_path"),
-        "profile": dataset.profile_json,
+        "profile": version_profile,
+        "dataset_fingerprint": version_record.content_hash,
+        "dataset_version_id": version_record.id,
         "created_at": dataset.created_at.isoformat() if dataset.created_at else None,
         "updated_at": dataset.updated_at.isoformat() if dataset.updated_at else None,
     }
@@ -154,17 +184,38 @@ def get_dataset(
 @router.get("/{dataset_id}/data")
 def get_dataset_data(
     dataset_id: str,
-    limit: int = 100,
+    limit: int = Query(default=100, ge=0, le=1000),
     version: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Retrieve preview sample rows from dataset version with ownership check."""
-    verify_dataset_ownership(dataset_id, current_user, db)
+    dataset = verify_dataset_ownership(dataset_id, current_user, db)
     service = DatasetService(db)
     try:
         rows = service.get_dataset_sample(dataset_id, limit=limit, version=version)
-        return {"dataset_id": dataset_id, "row_count": len(rows), "rows": rows}
+        version_record = db.query(DatasetVersion).filter(
+            DatasetVersion.dataset_id == dataset_id,
+            DatasetVersion.version_number == version,
+        ).first()
+        profile = (
+            version_record.profile_json
+            if version_record and version_record.profile_json
+            else dataset.profile_json if version == dataset.current_version else {}
+        ) or {}
+        profile_columns = profile.get("columns", []) if isinstance(profile, dict) else []
+        columns = [
+            str(column["name"])
+            for column in profile_columns
+            if isinstance(column, dict) and column.get("name") is not None
+        ]
+        return {
+            "dataset_id": dataset_id,
+            "row_count": len(rows),
+            "total_rows": version_record.row_count if version_record else dataset.row_count,
+            "columns": columns,
+            "rows": rows,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch data preview: {str(e)}")
 
@@ -180,10 +231,21 @@ def clean_dataset(
     verify_dataset_ownership(dataset_id, current_user, db)
     service = DatasetService(db)
     try:
-        updated_dataset, new_version = service.clean_dataset(
+        new_version = service.clean_and_create_version(
             dataset_id=dataset_id,
-            recipe=payload.recipe,
+            cleaning_recipe=payload.recipe,
             description=payload.description or "Automated data cleaning transformation.",
+        )
+        updated_dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if updated_dataset is None:
+            raise ValueError(f"Dataset '{dataset_id}' was removed during cleaning.")
+        from apps.api.src.api.v1.alerts import _evaluate
+
+        monitoring_evaluation = _evaluate(
+            updated_dataset.project_id,
+            "import",
+            db,
+            dataset_id=updated_dataset.id,
         )
         return {
             "message": f"Successfully created dataset version v{new_version.version_number}.",
@@ -191,7 +253,8 @@ def clean_dataset(
             "row_count": new_version.row_count,
             "column_count": new_version.column_count,
             "data_quality_score": updated_dataset.data_quality_score,
-            "applied_recipe": new_version.applied_recipe,
+            "applied_recipe": (new_version.transformation_applied or {}).get("recipe", []),
+            "monitoring_evaluation": monitoring_evaluation,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to clean dataset: {str(e)}")

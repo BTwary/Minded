@@ -344,6 +344,11 @@ METHOD_REGISTRY: Dict[str, MethodCapability] = {
 }
 
 
+def _is_row_count_aggregation(value: Any) -> bool:
+    """Return True for normalized aggregations that count rows, not outcomes."""
+    return str(value or "").strip().upper() in {"COUNT", "ROW_COUNT", "COUNT_ROWS", "RECORD_COUNT"}
+
+
 def _is_finite_entity_population(semantic: Any, df: Any) -> bool:
     """Return True only when semantic grain proves an observed entity/catalog table.
 
@@ -445,7 +450,17 @@ class MethodRegistry:
         elif code == "comparison_group_effect":
             grouping = list(getattr(semantic, "grouping_columns", []) or [])
             grouping = grouping or ([getattr(semantic, "group_dimension_col", None)] if getattr(semantic, "group_dimension_col", None) else [])
-            if not grouping or not target or grouping[0] not in df.columns or target not in df.columns:
+            requested_aggregation = str(
+                (getattr(plan, "estimand", {}) or {}).get("requested_aggregation") or ""
+            ).strip().upper()
+            if _is_row_count_aggregation(requested_aggregation):
+                # Grouped row counts are exact descriptive operations. There is
+                # no outcome column and no inferential sample-size requirement.
+                if not grouping or grouping[0] not in df.columns:
+                    reasons.append("grouping_missing")
+                elif df[grouping[0]].dropna().empty:
+                    reasons.append("grouping_has_no_observed_values")
+            elif not grouping or not target or grouping[0] not in df.columns or target not in df.columns:
                 reasons.append("grouping_or_outcome_missing")
             else:
                 if is_descriptive_or_ranking and (grouping[0] == target or not pd.api.types.is_numeric_dtype(df[target])):
@@ -631,6 +646,14 @@ class MethodRegistry:
                     roles.add("numeric_fields")
             except Exception:
                 pass
+        requested_aggregation = str(
+            (getattr(plan, "estimand", {}) or {}).get("requested_aggregation") or ""
+        ).upper()
+        # Grouped COUNT is an exact descriptive row-count operation, not an
+        # inferential comparison. It needs a grouping dimension, but no numeric
+        # outcome and no minimum sample threshold for a statistical test.
+        is_grouped_row_count = code == "comparison_group_effect" and _is_row_count_aggregation(requested_aggregation)
+
         blocked: List[str] = []
         if quality is not None:
             blocked.extend(str(x) for x in (getattr(quality, "critical_issues", []) or []))
@@ -642,7 +665,11 @@ class MethodRegistry:
         # different estimand: describe the observed entities exactly rather than
         # pretending the catalog is a random sample.  The downstream transition
         # and belief layers separately suppress inferential p-values for this case.
-        if code == "comparison_group_effect" and _is_finite_entity_population(semantic, df):
+        if is_grouped_row_count:
+            errors = list(blocked)
+            if "grouping" not in roles:
+                errors.append("missing_role:grouping")
+        elif code == "comparison_group_effect" and _is_finite_entity_population(semantic, df):
             cap = cls.get(code)
             errors = list(blocked)
             missing_roles = set(cap.required_roles) - set(roles)
@@ -655,13 +682,18 @@ class MethodRegistry:
             task in {"DESCRIPTIVE", "RANKING", "COMPARISON", "TREND", "COUNT"}
             or (getattr(semantic, "ranking_direction", None) is not None)
             or (getattr(getattr(plan, "semantics", None), "ranking_direction", None) is not None)
-            or (getattr(plan, "estimand", {}).get("requested_aggregation") in {"COUNT", "RATE", "MEAN"})
+            or _is_row_count_aggregation((getattr(plan, "estimand", {}) or {}).get("requested_aggregation"))
+            or (str((getattr(plan, "estimand", {}) or {}).get("requested_aggregation") or "").upper() in {"RATE", "MEAN"})
             or _is_finite_entity_population(semantic, df)
         )
         if is_descriptive_or_ranking:
+            ignored_descriptive_reasons = {"group_contains_fewer_than_two_observations"}
+            if is_grouped_row_count:
+                ignored_descriptive_reasons.add("grouping_or_outcome_missing")
+                ignored_descriptive_reasons.add("grouping_missing")
             preflight_reasons = [
                 r for r in preflight_reasons
-                if r not in {"group_contains_fewer_than_two_observations"}
+                if r not in ignored_descriptive_reasons
             ]
         if code == "comparison_group_effect" and _is_finite_entity_population(semantic, df):
             preflight_reasons = [

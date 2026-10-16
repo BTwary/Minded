@@ -124,6 +124,7 @@ class DatasetService:
             row_count=len(df),
             column_count=len(df.columns),
             content_hash=canonical_hash,
+            profile_json=profile_data,
             transformation_applied={
                 "action": "initial_upload",
                 "filename": filename,
@@ -223,6 +224,7 @@ class DatasetService:
             row_count=len(cleaned_df),
             column_count=len(cleaned_df.columns),
             content_hash=output_hash,
+            profile_json=new_profile.model_dump(mode="json"),
             transformation_applied={
                 "operation": "clean_and_create_version",
                 "recipe": cleaning_recipe,
@@ -320,3 +322,16 @@ class DatasetService:
             raise ValueError(f"Dataset version {target_ver} not found.")
 
         return self.storage.load_dataframe(version_rec.file_path)
+
+    def get_dataset_sample(
+        self,
+        dataset_id: str,
+        limit: int = 100,
+        version: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return JSON-safe preview rows from one persisted dataset version."""
+        if limit < 0:
+            raise ValueError("Dataset preview limit cannot be negative.")
+        sample = self.get_dataset_dataframe(dataset_id, version=version).head(limit).astype(object)
+        sample = sample.where(pd.notna(sample), None)
+        return sample.to_dict(orient="records")

@@ -375,19 +375,22 @@ class SemanticEngine:
                     if tok in part or part in tok:
                         substring_match_count += 1
                         break
-        if substring_match_count > 0:
-            return min(7.9, 7.0 + 0.2 * (substring_match_count - 1))
+        substring_score = min(7.9, 7.0 + 0.2 * (substring_match_count - 1)) if substring_match_count > 0 else 0.0
 
-        # 3. Synonym match
+        # 3. Synonym match. A weak substring hit must not pre-empt this tier: "ratio" occurs inside
+        # "deterioration", which used to cap a conversion-ratio column at 7.0 and let an unrelated
+        # column win through a different concept. As in the tiers above, several distinct question
+        # tokens agreeing on one concept earn a small specificity bonus (kept below the 9.0 stem tier).
         score = 0.0
         for concept, syns in SEMANTIC_SYNONYMS.items():
+            matching_tokens = [q_tok for q_tok in meaningful_tokens if q_tok in syns or q_tok == concept]
             # If a question token relates to this concept
-            if any(q_tok in syns or q_tok == concept for q_tok in meaningful_tokens):
+            if matching_tokens:
                 # And the column name has synonyms in this concept
                 if any(cp in syns or cp == concept for cp in col_parts) or any(s in col_clean for s in syns):
-                    score = max(score, 8.5)
+                    score = max(score, min(8.9, 8.5 + 0.1 * (len(matching_tokens) - 1)))
 
-        return score
+        return max(score, substring_score)
 
     @staticmethod
     def _do_resolve(
@@ -466,7 +469,21 @@ class SemanticEngine:
             else []
         )
 
-        if relation_target:
+        # Generic derived-rate resolution: when a question names a rate whose
+        # uniquely matching physical outcome is a binary indicator (e.g. defect
+        # rate -> is_defective), use that indicator as the estimand's outcome.
+        # Ambiguous or non-binary candidates remain unresolved/fail-closed.
+        derived_rate_col = None
+        if re.search(r"\b(rate|proportion|percentage|percent)\b", q_lower):
+            try:
+                from packages.analytics_core.src.engines.variable_resolution_gate import infer_binary_rate_indicator
+                derived_rate_col = infer_binary_rate_indicator(intent.raw_question, primary_df)
+            except Exception:
+                derived_rate_col = None
+
+        if derived_rate_col and getattr(intent, "intent_type", None) != "CORRELATION":
+            target_col = derived_rate_col
+        elif relation_target:
             target_col = relation_target
         elif correlation_named_pair:
             target_col = correlation_named_pair[0]
@@ -474,20 +491,6 @@ class SemanticEngine:
             target_col = None
         elif scored_metrics and scored_metrics[0][0] > 0 and (len(scored_metrics) == 1 or scored_metrics[0][0] > scored_metrics[1][0]):
             target_col = scored_metrics[0][1]
-        elif [m for m in world_model.metrics if m.table_name == primary_table]:
-            # BUGFIX (DEFECT-005): this previously read world_model.metrics[0]
-            # unconditionally -- a *global*, table-unscoped list. When no
-            # column in the primary table scored above 0 (e.g. a table whose
-            # columns just don't relate to the question), it would silently
-            # hand back a metric column belonging to a DIFFERENT table
-            # entirely (observed: primary_table="inventory" but
-            # target_col="quantity", a sales-table-only column), which then
-            # fails IR validation with "column does not exist in table" and
-            # the investigation dies before hypothesis generation ever runs.
-            # Scoping this fallback to metrics whose table_name matches the
-            # already-chosen primary_table keeps target_col guaranteed valid
-            # for that table.
-            target_col = next(m for m in world_model.metrics if m.table_name == primary_table).column_name
         else:
             # BUGFIX (DEFECT-005): this previously fell back to the literal
             # string "value" -- not a real column in ANY table -- whenever

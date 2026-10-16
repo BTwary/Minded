@@ -18,6 +18,7 @@ import textwrap
 DB_PATH = os.path.join(tempfile.gettempdir(), "item1_restart_test.sqlite3")
 if os.path.exists(DB_PATH):
     os.remove(DB_PATH)
+DB_URI = f"sqlite:///{DB_PATH.replace('\\', '/')}"
 
 REPO_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 
@@ -31,7 +32,7 @@ WRITER = textwrap.dedent(f"""
     from packages.analytics_core.src.intelligence.predictive_hypothesis import PredictiveHypothesis
     from packages.analytics_core.src.runtime.state import InvestigationStateManager
 
-    engine = create_engine("sqlite:///{DB_PATH}")
+    engine = create_engine({DB_URI!r})
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
@@ -108,7 +109,7 @@ READER = textwrap.dedent(f"""
     from apps.api.src.models.entities import Base
     from packages.analytics_core.src.runtime.state_reconstruction import reconstruct_investigation_state
 
-    engine = create_engine("sqlite:///{DB_PATH}")
+    engine = create_engine({DB_URI!r})
     Session = sessionmaker(bind=engine)
     session = Session()
 

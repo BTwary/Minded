@@ -68,6 +68,30 @@ _POSITIVE_ATTACK_FAILURES = {"REFUTED", "CONTRADICTED"}
 
 
 # --- small helpers ---------------------------------------------------------
+
+_IDENT_RE = __import__("re").compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _repro_sql(ev: Mapping[str, Any]) -> Optional[str]:
+    """SQL a human can compare against the headline figure.
+
+    Raw-row experiments (`SELECT region, revenue FROM ...`) cannot be compared to a
+    per-group total by eye, so when the evidence names its dimension and metric and the
+    recorded SQL does not aggregate, offer the per-group total instead."""
+    sql = ev.get("sql_executed")
+    raw = ev.get("raw_metrics") if isinstance(ev.get("raw_metrics"), Mapping) else {}
+    dim, metric = raw.get("dimension"), raw.get("metric")
+    if (
+        sql and "GROUP BY" not in str(sql).upper()
+        and isinstance(dim, str) and isinstance(metric, str)
+        and _IDENT_RE.match(dim) and _IDENT_RE.match(metric)
+    ):
+        return (
+            f"SELECT {dim}, SUM({metric}) AS total, COUNT(*) AS n_rows FROM data_table "
+            f"WHERE {metric} IS NOT NULL GROUP BY {dim} ORDER BY total DESC"
+        )
+    return sql
+
 def _canon(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, default=str, separators=(",", ":"))
 
@@ -307,7 +331,7 @@ def _evidence_items(inv: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "evidence_id": eid,
             "statement": ev.get("statement"),
             "rows_analyzed": ev.get("row_count_analyzed"),
-            "sql": ev.get("sql_executed"),
+            "sql": _repro_sql(ev),
             "verification": [
                 {"primary": v.get("primary_tool"), "secondary": v.get("secondary_tool"),
                  "delta_pct": v.get("observed_delta_pct"), "tolerance": v.get("tolerance_threshold"),
@@ -324,7 +348,7 @@ def _evidence_items(inv: Mapping[str, Any]) -> List[Dict[str, Any]]:
                 "Recompute this number yourself and decide whether to trust the claims that rest on it.",
                 "An unverified number can carry an arithmetic or query error into the conclusion.",
                 evidence={**row, "validation_status": ev.get("validation_status")},
-                reproduce={"dataset": dataset, "table_alias": "data_table", "sql": ev.get("sql_executed")},
+                reproduce={"dataset": dataset, "table_alias": "data_table", "sql": _repro_sql(ev)},
             ))
     if verified:
         first_sql = next((r["sql"] for r in verified if r.get("sql")), None)

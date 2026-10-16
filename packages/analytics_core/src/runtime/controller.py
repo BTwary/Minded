@@ -10,23 +10,16 @@ import pandas as pd
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from packages.analytics_core.src.runtime.controller_serialization import _json_safe
+from packages.analytics_core.src.runtime.controller_scope import validate_scope_filter_expression
+from packages.analytics_core.src.runtime.controller_planning import (
+    compute_task_compatible_candidates,
+    build_simpsons_conditional_candidate,
+    _multiverse_pinned_aggregations,
+)
+from packages.analytics_core.src.runtime.controller_hypotheses import _is_binary_mirror_hypothesis
 
-def _json_safe(obj: Any) -> Any:
-    if isinstance(obj, dict):
-        return {str(k): _json_safe(v) for k, v in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        return [_json_safe(v) for v in obj]
-    elif hasattr(obj, "isoformat"):
-        return obj.isoformat()
-    elif isinstance(obj, (np.integer, int)):
-        return int(obj)
-    elif isinstance(obj, (np.floating, float)):
-        return float(obj)
-    elif isinstance(obj, (bool, np.bool_)):
-        return bool(obj)
-    elif pd.isna(obj):
-        return None
-    return str(obj) if type(obj).__module__ != "builtins" else obj
+
 
 
 from apps.api.src.core.database import SessionLocal
@@ -46,13 +39,16 @@ from apps.api.src.models.entities import (
     Prediction,
     InvestigationContract,
     InvestigationDataReadiness,
+    InvestigationEvent,
     ClaimGateDecision,
     gen_uuid,
 )
 from packages.analytics_core.src.engines.variable_resolution_gate import (
     detect_unresolved_requested_variables,
     detect_rate_question_with_no_column_reference,
+    infer_binary_rate_indicator,
     detect_aggregate_metric_not_found,
+    detect_named_measure_absent,
 )
 from packages.analytics_core.src.intelligence.hypothesis_identity import compute_semantic_identity
 from packages.analytics_core.src.runtime.hypothesis_persistence import get_or_create_hypothesis_row
@@ -78,7 +74,7 @@ from packages.analytics_core.src.engines.intent import IntentEngine
 from packages.analytics_core.src.engines.method_selection import (
     MethodSelectionEngine, MethodRegistry, ProblemClass, CANONICAL_TASK_AUTHORITY,
 )
-from packages.analytics_core.src.engines.temporal import TemporalResolver
+from packages.analytics_core.src.engines.temporal import ResolvedTemporalScope, TemporalResolver
 from packages.analytics_core.src.engines.semantic import SemanticEngine, SemanticResolution
 from packages.analytics_core.src.engines.execution_provider import (
     BaseExecutionProvider,
@@ -119,6 +115,7 @@ from packages.analytics_core.src.runtime.state import InvestigationStateManager
 from packages.analytics_core.src.runtime.state_reconstruction import (
     reconstruct_investigation_state,
     classify_evidence_for_hypothesis,
+    classify_inferential_evidence,
 )
 
 from packages.schemas.src.analysis import (
@@ -160,12 +157,13 @@ from packages.analytics_core.src.intelligence.prediction_engine import (
     StructuredPrediction,
 )
 from packages.analytics_core.src.intelligence.hypothesis_revision import HypothesisRevisionEngine
-from packages.analytics_core.src.intelligence.adversarial_attacker import AdversarialAttacker
+from packages.analytics_core.src.intelligence.adversarial_attacker import AdversarialAttacker, assess_outlier_robustness
 from packages.analytics_core.src.intelligence.multiverse_engine import MultiverseEngine
 from packages.analytics_core.src.intelligence.epistemic_calibration import EpistemicCalibrationEngine
 from packages.analytics_core.src.statistics.probability_calibration import load_calibration_profile
 from packages.analytics_core.src.intelligence.universal_question_planner import UniversalQuestionCompiler, EvidenceRequirement
 from packages.analytics_core.src.intelligence.complex_objective_planner import plan_compound_question
+from packages.analytics_core.src.intelligence.followup_grounding import ground_entity_reference
 from packages.schemas.src.semantic_resolution_contract import QuestionRoleProposal
 from packages.analytics_core.src.intelligence.universal_specialized import run_specialized_analysis, run_predictive_risk_analysis, run_forecast_analysis
 from packages.analytics_core.src.intelligence.transition import ScientificTransitionService
@@ -191,177 +189,15 @@ from packages.analytics_core.src.statistics.churn_estimands import analyze_churn
 from packages.shared.src.constants import MAX_INVESTIGATION_RUNTIME_SECONDS, MAX_INVESTIGATION_EXPERIMENTS
 
 
-def _is_binary_mirror_hypothesis(counter_hyp: Any, tested_hyp: Any) -> bool:
-    """True only when counter_hyp is the direct binary mirror of tested_hyp
-    (same target metric/dimension/value) -- e.g. "no material association"
-    vs "revenue and cost are correlated". Structurally distinct alternative
-    hypotheses (a different mechanism, a different confound entirely, such
-    as churn's stratification-confound or exposure-imbalance hypotheses)
-    must NOT be auto-credited with evidence they were never actually tested
-    by -- each needs its own dedicated experiment. Without this scoping, a
-    single verified experiment against one hypothesis could prematurely
-    satisfy the "every counter hypothesis has direct evidence" stopping
-    gate for unrelated counter hypotheses, skipping real confound-check
-    experiments the investigation still needed to run.
-    """
-    if counter_hyp is None or tested_hyp is None:
-        return False
-    return (
-        getattr(counter_hyp, "target_metric", None) == getattr(tested_hyp, "target_metric", None)
-        and getattr(counter_hyp, "target_dimension", None) == getattr(tested_hyp, "target_dimension", None)
-    )
 
 
-def compute_task_compatible_candidates(
-    candidates: List["CandidateExperiment"],
-    task: str,
-    semantic: "SemanticResolution",
-) -> Tuple[List["CandidateExperiment"], Optional[Dict[str, Any]]]:
-    """P0-B (controller hardening): the single authoritative rule for
-    filtering candidate experiments down to the ones compatible with the
-    selected analytical task.
-
-    Returns (filtered_candidates, diagnostic). filtered_candidates is NEVER
-    silently widened back to the full input when filtering eliminates
-    everything -- an analytically incompatible candidate (e.g. a
-    correlation candidate for a FORECAST task) must never be restored and
-    executed merely because nothing matched. When filtering does eliminate
-    every candidate, diagnostic is a NO_COMPATIBLE_EXPERIMENT_CANDIDATE
-    payload the caller should record to provenance before replanning or
-    stopping; otherwise diagnostic is None.
-
-    Extracted as a standalone, independently-testable function (rather than
-    the previous in-loop closure) so this invariant can be unit tested
-    without running a full investigation.
-    """
-    if not candidates:
-        return [], None
-    keep_prefixes = None
-    if task == "ASSOCIATION":
-        # For a churn association question, do not spend the first
-        # experiment on baseline uniformity/censoring diagnostics.
-        # EXP-COND-* (the Simpson's-paradox conditional adversarial
-        # candidate built by build_simpsons_conditional_candidate) is always
-        # allowed once it exists -- its own construction is already gated on
-        # a genuinely resolved primary dimension and a detected paradox, so
-        # it must not be silently stripped out by this task-family filter
-        # the way "filtered or candidates" used to accidentally preserve it.
-        # EXP-CORR is the general (non-churn-specific) Pearson/Spearman
-        # correlation candidate ExperimentSynthesizer.synthesize_correlation_experiment
-        # emits for any ASSOCIATION hypothesis -- it is a legitimate member
-        # of this task family and was previously only reachable through the
-        # same "filtered or candidates" fallback bug fixed here; excluding
-        # it would silently break non-churn association questions once that
-        # bug was fixed, so it is included explicitly instead.
-        keep_prefixes = ("EXP-CHURN-CRUDE", "EXP-CHURN-STRAT", "EXP-CHURN-EXPOSURE", "EXP-COND", "EXP-CORR")
-        if not getattr(semantic, "churn_confounder_cols", None):
-            keep_prefixes = ("EXP-CHURN-CRUDE", "EXP-CHURN-EXPOSURE", "EXP-COND", "EXP-CORR")
-        if not getattr(semantic, "churn_exposure_col", None):
-            keep_prefixes = tuple(x for x in keep_prefixes if x != "EXP-CHURN-EXPOSURE")
-    elif task == "FORECAST":
-        keep_prefixes = ("EXP-FORECAST",)
-    elif task == "CAUSAL":
-        keep_prefixes = ("EXP-CAUSAL", "EXP-IV", "EXP-DID", "EXP-RDD")
-    if keep_prefixes is None:
-        return candidates, None
-    filtered = [c for c in candidates if any(str(c.code).startswith(prefix) for prefix in keep_prefixes)]
-    if filtered:
-        return filtered, None
-    diagnostic = {
-        "diagnostic": "NO_COMPATIBLE_EXPERIMENT_CANDIDATE",
-        "analytical_task": task,
-        "allowed_prefixes": list(keep_prefixes),
-        "candidate_codes": [str(c.code) for c in candidates],
-        "rejected_candidate_codes": [str(c.code) for c in candidates],
-        "reason": (
-            f"No candidate experiment code matched the compatible method-family "
-            f"prefixes {list(keep_prefixes)} for task {task}; incompatible candidates "
-            f"were not restored/executed."
-        ),
-        "replanning_status": "CALLER_MUST_REPLAN_OR_STOP",
-    }
-    return [], diagnostic
 
 
-def build_simpsons_conditional_candidate(
-    semantic: "SemanticResolution",
-    conf_dim: str,
-    leading_hypothesis_code: str,
-    target_metric_col_label: Optional[str] = None,
-) -> Tuple[Optional["CandidateExperiment"], Optional[Dict[str, Any]]]:
-    """P0-B (controller hardening): construct the conditional adversarial
-    (Simpson's-paradox) experiment ONLY from a genuinely resolved primary
-    grouping dimension and resolved metric aggregation semantics.
 
-    Returns (candidate_or_None, diagnostic_or_None). Exactly one of the two
-    is non-None:
-      - metric aggregation unresolved -> (None, {"status": "UNRESOLVED_METRIC_SEMANTICS", ...})
-      - primary dimension UNRESOLVED  -> (None, {"status": "UNRESOLVED_PRIMARY_DIMENSION", ...})
-      - primary dimension AMBIGUOUS   -> (None, {"status": "AMBIGUOUS_PRIMARY_DIMENSION", ...})
-      - both resolved                 -> (CandidateExperiment(...), None)
 
-    Never falls back to a literal placeholder dimension (e.g. "segment")
-    and never silently picks one of several ambiguous candidates.
-    Extracted as a standalone function so this invariant is independently
-    unit-testable without running a full investigation loop.
-    """
-    primary_dim, primary_dim_status, primary_dim_candidates = resolve_group_dimension(semantic)
-    _metric_def = semantic.metric_definition
-    if _metric_def is None or getattr(_metric_def, "aggregation_type", None) is None:
-        return None, {
-            "confounding_dimension": conf_dim,
-            "type": "simpsons_paradox",
-            "status": "UNRESOLVED_METRIC_SEMANTICS",
-            "reason": "Conditional adversarial test could not be constructed without a resolved metric aggregation.",
-        }
-    if primary_dim_status != "RESOLVED":
-        return None, {
-            "confounding_dimension": conf_dim,
-            "type": "simpsons_paradox",
-            "status": f"{primary_dim_status}_PRIMARY_DIMENSION",
-            "candidate_dimensions": primary_dim_candidates,
-            "reason": (
-                "Conditional adversarial test could not be constructed: the primary "
-                f"grouping dimension is {primary_dim_status} (candidates: "
-                f"{primary_dim_candidates}); the controller does not choose one "
-                "implicitly and did not execute a conditional grouping query."
-            ),
-        }
-    _metric_expr = MetricSemanticsResolver.sql_aggregation_expression(_metric_def, "total_metric")
-    _agg_str = _metric_def.aggregation_type.value.upper()
-    candidate = CandidateExperiment(
-        code=f"EXP-COND-{conf_dim.upper()}",
-        target_hypothesis_code=leading_hypothesis_code,
-        hypothesis_ids=[leading_hypothesis_code],
-        tool_name="duckdb_sql",
-        # Session 8 (DEFECT-023): the multi-row-result guard in execution_provider
-        # rejects any grouped result without an ORDER BY, so this experiment
-        # failed on every run (invisibly to the analyst). Same deterministic
-        # ordering the synthesizer's EXP-COND variant already uses.
-        query_sql=f"SELECT {primary_dim}, {conf_dim}, {_metric_expr} FROM data_table GROUP BY {primary_dim}, {conf_dim} ORDER BY total_metric DESC, {primary_dim}, {conf_dim}",
-        description=f"Conditional test on {conf_dim} to address adversarial Simpson's paradox ({target_metric_col_label or semantic.target_metric_col} aggregated as {_agg_str}).",
-        aggregation_type=_agg_str,
-        discriminating_power=0.99,
-        discrimination_value=0.99,
-        estimated_cost=1.4,
-        reliability_weight=0.96,
-        decision_relevance=0.95,
-        target_dimension=f"{primary_dim}_{conf_dim}",
-        target_metric=semantic.target_metric_col,
-        metrics=[semantic.target_metric_col],
-        dimensions=[primary_dim, conf_dim],
-        adversarial_value=0.95,
-        # v20-B1: this is a Simpson's-paradox counter-hypothesis challenge by
-        # construction -- always ADVERSARIAL in intent, regardless of
-        # prediction linkage. Tag it explicitly here rather than relying on
-        # the gate-time UNASSIGNED backfill (which had no way to distinguish
-        # this from an ordinary PRIMARY/SUPPORTING candidate and would
-        # mis-tag it as PRIMARY).
-        experiment_role=ExperimentRole.ADVERSARIAL.value,
-        target_uncertainty=f"Simpson's paradox challenge on {conf_dim}",
-        provenance={"attack_type": "simpsons_paradox", "confounding_dimension": conf_dim},
-    )
-    return candidate, None
+
+
+
 
 
 class InvestigationController:
@@ -462,6 +298,10 @@ class InvestigationController:
             worker_id=worker_id,
             attempt=attempt,
         )
+        locked_contract_payload: Optional[Dict[str, Any]] = None
+        locked_dataset_name: Optional[str] = None
+        locked_dataset_fingerprint: Optional[str] = None
+        locked_contract: Optional[Any] = None
         investigation_started_monotonic = time.monotonic()
         max_runtime_seconds = int(os.getenv("AAOS_MAX_INVESTIGATION_RUNTIME_SECONDS", str(MAX_INVESTIGATION_RUNTIME_SECONDS)))
 
@@ -542,6 +382,41 @@ class InvestigationController:
                 session.commit()
                 return False
 
+            if inv.status in (InvestigationState.NEEDS_CLARIFICATION, InvestigationState.READY):
+                session.add(InvestigationEvent(
+                    id=f"EVT-{gen_uuid()[:8]}",
+                    investigation_id=investigation_id,
+                    event_type="investigation.execution_refused_unresolved",
+                    event_payload_json={"status": inv.status},
+                    timestamp=datetime.now(timezone.utc),
+                ))
+                session.commit()
+                return False
+
+            locked_event = (
+                session.query(InvestigationEvent)
+                .filter(
+                    InvestigationEvent.investigation_id == investigation_id,
+                    InvestigationEvent.event_type == "investigation.canonical_contract_locked",
+                )
+                .order_by(InvestigationEvent.timestamp.desc(), InvestigationEvent.id.desc())
+                .first()
+            )
+            if locked_event:
+                locked_contract_payload = dict(locked_event.event_payload_json or {})
+                contract_payload = locked_contract_payload.get("contract")
+                if not isinstance(contract_payload, dict):
+                    raise ValueError(f"Investigation {investigation_id} has a malformed locked contract.")
+                from packages.analytics_core.src.intelligence.canonical_question_contract import (
+                    canonical_question_contract_from_dict,
+                )
+                locked_contract = canonical_question_contract_from_dict(contract_payload)
+                expected_contract_hash = locked_contract_payload.get("contract_hash")
+                if expected_contract_hash and locked_contract.contract_hash() != expected_contract_hash:
+                    raise ValueError(f"Investigation {investigation_id} locked contract hash mismatch.")
+                locked_dataset_name = locked_contract_payload.get("dataset_name")
+                locked_dataset_fingerprint = locked_contract_payload.get("dataset_fingerprint")
+
             if inv.status == InvestigationState.PLANNED:
                 transition_investigation(db=session, investigation_id=investigation_id, to_state=InvestigationState.QUEUED, actor=worker_id)
             if inv.status in (InvestigationState.QUEUED, InvestigationState.CLAIMED, InvestigationState.PLANNED):
@@ -582,6 +457,27 @@ class InvestigationController:
                     f"No datasets available for project {project_id}. "
                     "Investigation aborted under AA-OS Zero-Synthetic-Data Invariant."
                 )
+            if locked_contract is not None:
+                if not locked_dataset_name or locked_dataset_name not in data_context.datasets_map:
+                    raise DatasetUnavailableError(
+                        "The dataset selected by the locked canonical contract is unavailable; "
+                        "AA-OS refuses to substitute another dataset."
+                    )
+                actual_fingerprint = data_context.dataset_fingerprints.get(locked_dataset_name)
+                if locked_dataset_fingerprint and actual_fingerprint != locked_dataset_fingerprint:
+                    raise DatasetUnavailableError(
+                        "The selected dataset changed after the canonical contract was locked; "
+                        "AA-OS refuses to execute the contract against a different snapshot."
+                    )
+                from dataclasses import replace as dataclass_replace
+                data_context = dataclass_replace(
+                    data_context,
+                    datasets_map={locked_dataset_name: data_context.datasets_map[locked_dataset_name]},
+                    dataset_fingerprints={locked_dataset_name: actual_fingerprint or ""},
+                    dataset_versions={
+                        locked_dataset_name: data_context.dataset_versions.get(locked_dataset_name, {})
+                    },
+                )
         except Exception as e:
             self.checkpointer.fail_execution(
                 investigation_id=investigation_id,
@@ -590,6 +486,36 @@ class InvestigationController:
                 failure_class=FailureTaxonomy.RESOURCE_UNAVAILABLE,
             )
             return False
+
+        if locked_contract is not None and locked_contract.filter_conditions:
+            if not locked_dataset_name or locked_dataset_name not in data_context.datasets_map:
+                return _complete_inconclusive(
+                    "The locked dataset for the requested population filter is unavailable."
+                )
+            filtered_population = data_context.datasets_map[locked_dataset_name]
+            for condition in locked_contract.filter_conditions:
+                column = condition.get("column")
+                operator = str(condition.get("operator", "")).upper()
+                if column not in filtered_population.columns:
+                    return _complete_inconclusive(
+                        f"The locked population filter references unavailable field {column!r}."
+                    )
+                try:
+                    from packages.analytics_core.src.intelligence.intent_state import filter_condition_mask
+                    mask = filter_condition_mask(filtered_population[column], operator, condition.get("value"))
+                    filtered_population = filtered_population.loc[mask]
+                except (TypeError, ValueError):
+                    return _complete_inconclusive(
+                        f"The locked population filter operator {operator!r} is unsupported."
+                    )
+            if filtered_population.empty:
+                return _complete_inconclusive(
+                    "The selected population filter matches no records; the unfiltered dataset was not substituted."
+                )
+            # Apply the approved population to the acquired context itself. Previously the
+            # filtered dataframe was computed only in a local variable, so downstream semantic
+            # resolution and execution still saw the unfiltered population.
+            data_context.datasets_map[locked_dataset_name] = filtered_population
 
         # 1.4 Centralized pre-analysis variable-resolution gate. Runs before
         # semantic/intent resolution and before any task-family synthesizer
@@ -604,7 +530,16 @@ class InvestigationController:
         for _ds_df in data_context.datasets_map.values():
             _all_available_columns.update(str(c) for c in getattr(_ds_df, "columns", []))
         _missing_requested_vars = detect_unresolved_requested_variables(question, _all_available_columns)
-        if not _missing_requested_vars and detect_rate_question_with_no_column_reference(question, _all_available_columns):
+        # A rate can be derived from a uniquely named binary outcome flag (e.g.
+        # "defect rate" from `is_defective`). Do not treat that as a missing
+        # physical outcome; semantic resolution below binds the actual indicator.
+        _rate_indicator_candidates = [
+            (ds_name, infer_binary_rate_indicator(question, ds_df))
+            for ds_name, ds_df in data_context.datasets_map.items()
+        ]
+        _rate_indicator_candidates = [(ds, col) for ds, col in _rate_indicator_candidates if col]
+        _has_unique_derived_rate = len(_rate_indicator_candidates) == 1
+        if not _missing_requested_vars and not _has_unique_derived_rate and detect_rate_question_with_no_column_reference(question, _all_available_columns):
             _missing_requested_vars = ["the requested rate/proportion outcome"]
         if _missing_requested_vars:
             named = ", ".join(_missing_requested_vars)
@@ -634,6 +569,30 @@ class InvestigationController:
                     terminal_session.commit()
             return True
 
+        # Check if clarification is an explicit refusal of analysis
+        with self.session_factory() as guidance_session:
+            _refusal_event = (
+                guidance_session.query(InvestigationEvent)
+                .filter(
+                    InvestigationEvent.investigation_id == investigation_id,
+                    InvestigationEvent.event_type == "investigation.human_guidance_intent",
+                )
+                .order_by(InvestigationEvent.timestamp.desc(), InvestigationEvent.id.desc())
+                .first()
+            )
+            if _refusal_event:
+                _refusal_payload = dict(_refusal_event.event_payload_json or {})
+                _clarif = _refusal_payload.get("clarification_response")
+                if _clarif and "refuse" in str(_clarif).lower():
+                    refusal_msg = (
+                        f"Investigation halted by human analyst decision: '{_clarif}'. "
+                        "MindEd AA-OS strictly honors epistemic refusal boundaries."
+                    )
+                    return _complete_inconclusive(
+                        refusal_msg,
+                        failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+                    )
+
         # 1.4b Fail-closed guard for aggregate questions whose metric cannot be
         # resolved to any column OR to any known alias vocabulary.  A question
         # like "What is the average shoe size of our customers?" on a dataset
@@ -643,6 +602,14 @@ class InvestigationController:
         # phrase is absent from both the schema AND the standard alias set, so
         # legitimate alias-resolved questions ("average sales" → revenue) are
         # never blocked here.
+        _absent_measure = detect_named_measure_absent(question, _all_available_columns)
+        if _absent_measure:
+            return _complete_inconclusive(
+                f"The question asks about '{_absent_measure}', but no column in the selected "
+                f"data carries that measure. AA-OS will not substitute a different metric; "
+                f"no experiment was run. Add a column for it or rephrase the question.",
+                failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+            )
         if detect_aggregate_metric_not_found(question, _all_available_columns):
             return _complete_inconclusive(
                 "The metric requested in this question (e.g., an aggregate like "
@@ -659,7 +626,21 @@ class InvestigationController:
         # dataset scope. Dependent clauses are refused rather than executed as if
         # a prior result were already established.
         compound_plan = plan_compound_question(question)
+        if compound_plan.is_compound and compound_plan.validation_issues:
+            self.checkpointer.record_event(
+                investigation_id=investigation_id, execution_id=exec_id,
+                event_type="investigation.compound_plan.rejected",
+                payload={"source_question": question, "issues": list(compound_plan.validation_issues)},
+            )
+            return _complete_inconclusive(
+                "The compound plan failed structural validation; no child objective was executed.",
+                failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+            )
         if compound_plan.is_compound:
+            self.checkpointer.record_event(
+                investigation_id=investigation_id, execution_id=exec_id,
+                event_type="investigation.compound_plan.created", payload=compound_plan.to_dict(),
+            )
             with self.session_factory() as objective_session:
                 existing = (
                     objective_session.query(InvestigationObjective)
@@ -687,11 +668,17 @@ class InvestigationController:
                 effective_statement = spec.statement
                 if spec.depends_on_prior_objective:
                     # Check whether prior objectives established a verified empirical finding
+                    required_ordinals = tuple(getattr(spec, "depends_on_ordinals", ()) or ())
                     prior_successful = [
                         r for r in compound_results
                         if r.get("status") == "COMPLETED" and r.get("verdict_type") in ("OBSERVED", "STATISTICALLY_SIGNIFICANT", "DIAGNOSED", "NO_DETECTABLE_EFFECT")
                     ]
-                    if not prior_successful:
+                    successful_ordinals = {int(r.get("ordinal")) for r in prior_successful if r.get("ordinal") is not None}
+                    prerequisites_satisfied = (
+                        bool(required_ordinals) and set(required_ordinals).issubset(successful_ordinals)
+                        if required_ordinals else bool(prior_successful)
+                    )
+                    if not prerequisites_satisfied:
                         block_msg = (
                             f"Dependent analytical objective {spec.ordinal} blocked: prior objective "
                             f"did not establish an empirical finding for {spec.dependency_reason or 'context reference'}."
@@ -726,20 +713,49 @@ class InvestigationController:
                         )
                         continue
 
+                    # A dependent entity reference cannot proceed unless a prior result
+                    # yielded a safely grounded entity label. Never execute the raw
+                    # "those customers" wording as though it were a resolved filter.
+                    has_entity_anaphora = bool(re.search(
+                        r"\b(?:for|among|in|of)\s+(?:those|these|such|the same)\s+(?:customers?|clients?|accounts?|users?|cohorts?|segments?|groups?|products?|orders?|records?|regions?|categories?|campaigns?|channels?|suppliers?|employees?|teams?|departments?)\b|\b(?:those|these|such|the same)\s+(?:customers?|clients?|accounts?|users?|cohorts?|segments?|groups?|products?|orders?|records?|regions?|categories?|campaigns?|channels?|suppliers?|employees?|teams?|departments?)\b",
+                        spec.statement, re.I,
+                    ))
+                    if has_entity_anaphora and not latest_cohort_entity:
+                        block_msg = "Dependent objective blocked: no verified prior entity label was available to ground its follow-up reference."
+                        compound_results.append({
+                            "ordinal": spec.ordinal, "statement": spec.statement,
+                            "child_investigation_id": None, "status": "BLOCKED_DEPENDENCY",
+                            "verdict_type": "INCONCLUSIVE", "confidence_score": 0.0,
+                            "direct_answer": block_msg,
+                        })
+                        self.checkpointer.record_event(
+                            investigation_id=investigation_id, execution_id=exec_id,
+                            event_type="investigation.compound_objective.grounding_rejected",
+                            payload={"ordinal": spec.ordinal, "statement": spec.statement,
+                                     "reason": "no verified prior entity label"},
+                        )
+                        continue
                     # Ground the dependent statement with the empirical cohort discovered in prior stages
                     if latest_cohort_entity:
-                        grounded = re.sub(
-                            r"\b(?:for|among|in|of)\s+(?:those|these|such|the same)\s+(?:customers|clients|accounts|users|cohorts|segments|groups)?\b",
-                            f"for {latest_cohort_entity} customers",
-                            spec.statement,
-                            flags=re.I,
-                        )
-                        grounded = re.sub(
-                            r"\b(?:those|these|such)\s+(?:customers|clients|accounts|users|cohorts|segments|groups)\b",
-                            f"{latest_cohort_entity} customers",
-                            grounded,
-                            flags=re.I,
-                        )
+                        grounded = ground_entity_reference(spec.statement, latest_cohort_entity)
+                        has_entity_anaphora = bool(re.search(
+                            r"\b(?:for|among|in|of)\s+(?:those|these|such|the same)\s+(?:customers?|clients?|accounts?|users?|cohorts?|segments?|groups?|products?|orders?|records?|regions?|categories?|campaigns?|channels?|suppliers?|employees?|teams?|departments?)\b|\b(?:those|these|such|the same)\s+(?:customers?|clients?|accounts?|users?|cohorts?|segments?|groups?|products?|orders?|records?|regions?|categories?|campaigns?|channels?|suppliers?|employees?|teams?|departments?)\b",
+                            spec.statement, re.I,
+                        ))
+                        if grounded is None or (has_entity_anaphora and grounded == spec.statement):
+                            self.checkpointer.record_event(
+                                investigation_id=investigation_id, execution_id=exec_id,
+                                event_type="investigation.compound_objective.grounding_rejected",
+                                payload={"ordinal": spec.ordinal, "statement": spec.statement,
+                                         "reason": "follow-up entity reference was not safely grounded"},
+                            )
+                            compound_results.append({
+                                "ordinal": spec.ordinal, "statement": spec.statement,
+                                "child_investigation_id": None, "status": "BLOCKED_DEPENDENCY",
+                                "verdict_type": "INCONCLUSIVE", "confidence_score": 0.0,
+                                "direct_answer": "Follow-up blocked because its referenced entity could not be grounded safely.",
+                            })
+                            continue
                         effective_statement = grounded
                         self.checkpointer.record_event(
                             investigation_id=investigation_id,
@@ -969,7 +985,42 @@ class InvestigationController:
                 failure_class=FailureTaxonomy.RESOURCE_UNAVAILABLE,
             )
             return False
-        temporal_scope = TemporalResolver.resolve(question, _primary_df_for_temporal, semantic.time_col)
+        # Once a contract is locked, use its resolved temporal scope verbatim. Re-parsing the
+        # original relative phrase against an already-filtered dataframe can shift the period
+        # (for example, "last quarter" may become the quarter before the approved quarter).
+        if locked_contract is not None and isinstance(locked_contract.time_range, dict):
+            approved_range = locked_contract.time_range
+            if approved_range.get("type") == "all":
+                temporal_scope = ResolvedTemporalScope(
+                    False, matched_expression="all data", resolution_method="approved_canonical_contract"
+                )
+            elif approved_range.get("start") and approved_range.get("end") and locked_contract.time_column:
+                def _bound(value):
+                    parsed = pd.Timestamp(value)
+                    return parsed.to_pydatetime() if len(str(value)) > 10 else parsed.date()
+                temporal_scope = ResolvedTemporalScope(
+                    True,
+                    _bound(approved_range["start"]),
+                    _bound(approved_range["end"]),
+                    _bound(approved_range["baseline_start"]) if approved_range.get("baseline_start") else None,
+                    _bound(approved_range["baseline_end"]) if approved_range.get("baseline_end") else None,
+                    str(approved_range.get("expression") or "approved temporal scope"),
+                    "approved_canonical_contract",
+                )
+            else:
+                return _complete_inconclusive(
+                    "The approved contract contains an unresolved temporal scope; no independent re-interpretation was attempted."
+                )
+        else:
+            temporal_scope = TemporalResolver.resolve(question, _primary_df_for_temporal, semantic.time_col)
+        # Preserve the approved time column as the temporal binding; other questions may infer
+        # semantic.time_col independently only when no canonical time column was approved.
+        if locked_contract is not None:
+            semantic.time_col = locked_contract.time_column
+        _temporal_resolved_time_col = (
+            locked_contract.time_column if locked_contract is not None and locked_contract.time_column
+            else (semantic.time_col if temporal_scope.found else None)
+        )
         temporal_provenance_note: Optional[str] = None
         if temporal_scope.found:
             temporal_provenance_note = (
@@ -1018,10 +1069,336 @@ class InvestigationController:
             quality_assessment=quality_assessment,
             ai_provider=self.ai_provider,
         )
+        if locked_contract is not None:
+            # The approved contract is authoritative even when a slot is intentionally empty
+            # (e.g. ROW_COUNT has no target measure). Do not preserve an independently inferred
+            # value from the original question in a slot the approved contract left unset.
+            semantic.target_metric_col = locked_contract.target_column
+            analysis_plan.semantics.target_column = locked_contract.target_column
+            analysis_plan.semantics.grouping_columns = list(locked_contract.grouping_columns or [])
+            analysis_plan.semantics.explanatory_columns = list(locked_contract.explanatory_columns or [])
+            analysis_plan.semantics.time_column = locked_contract.time_column
+            analysis_plan.semantics.ranking_direction = locked_contract.ranking_direction
+            if locked_contract.time_column:
+                semantic.time_col = locked_contract.time_column
+            if locked_contract.requested_aggregation:
+                analysis_plan.estimand["requested_aggregation"] = locked_contract.requested_aggregation
+            else:
+                analysis_plan.estimand.pop("requested_aggregation", None)
+            if locked_contract.resolution_evidence.get("human_claim_boundary") == "ASSOCIATION":
+                analysis_plan.claim_type = "ASSOCIATION"
+                analysis_plan.task = "ASSOCIATION"
+                analysis_plan.limitations.append(
+                    "Human guidance limits the supported claim to observational association."
+                )
+
+        # Check if human guidance intent was confirmed before execution
+        human_guidance_payload: Dict[str, Any] = {}
+        human_guidance_history: List[Dict[str, Any]] = []
+        with self.session_factory() as guidance_session:
+            guidance_rows = (
+                guidance_session.query(InvestigationEvent)
+                .filter(
+                    InvestigationEvent.investigation_id == investigation_id,
+                    InvestigationEvent.event_type == "investigation.human_guidance_intent",
+                )
+                .order_by(InvestigationEvent.timestamp.asc(), InvestigationEvent.id.asc())
+                .all()
+            )
+            # A correction is a patch, not a replacement: replay every turn so
+            # changing the aggregation cannot erase an earlier grouping/filter.
+            for guidance_row in guidance_rows:
+                payload = dict(guidance_row.event_payload_json or {})
+                human_guidance_history.append(payload)
+                human_guidance_payload.update({k: v for k, v in payload.items() if v not in (None, "", [])})
+
+        if locked_contract is not None:
+            human_guidance_payload = {}
+
+        # Apply Human Guidance to Data and Contract Authority
+        if human_guidance_payload:
+            # 1. Clarification response resolution & explicit refusal handling
+            clarification_choice = human_guidance_payload.get("clarification_response")
+            if clarification_choice:
+                # Check if clarification is an explicit refusal of analysis
+                if "refuse" in clarification_choice.lower():
+                    refusal_msg = (
+                        f"Investigation halted by human analyst decision: '{clarification_choice}'. "
+                        "MindEd AA-OS strictly honors epistemic refusal boundaries."
+                    )
+                    return _complete_inconclusive(
+                        refusal_msg,
+                        failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+                    )
+
+                # Check if clarification selected a specific metric (e.g. "Gross revenue (`gross_revenue`)")
+                import re as _re
+                match_col = _re.search(r"`([a-zA-Z0-9_]+)`", clarification_choice)
+                if match_col:
+                    extracted_col = match_col.group(1)
+                    if extracted_col in primary_df.columns:
+                        if not pd.api.types.is_numeric_dtype(primary_df[extracted_col]):
+                            self.checkpointer.fail_execution(
+                                investigation_id=investigation_id,
+                                execution_id=exec_id,
+                                error_message=f"Clarification-selected metric '{extracted_col}' is non-numeric in '{semantic.primary_dataset_name}'.",
+                                failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                            )
+                            return False
+                        semantic.target_metric_col = extracted_col
+                        if getattr(analysis_plan, "semantics", None):
+                            analysis_plan.semantics.target_column = extracted_col
+
+                # Check if clarification selected non-causal association
+                if "non-causal" in clarification_choice.lower() or "association" in clarification_choice.lower():
+                    analysis_plan.claim_type = "ASSOCIATION"
+                    analysis_plan.task = "ASSOCIATION"
+                    analysis_plan.limitations.append("Human guidance: confirmed observational non-causal association boundary.")
+
+            # 2. Scope filter enforcement: validate syntax/tautology and enforce zero-match fail-closed
+            scope_filter_expr = human_guidance_payload.get("scope_filter")
+            if scope_filter_expr and isinstance(scope_filter_expr, str) and scope_filter_expr.strip():
+                clean_filter = scope_filter_expr.strip()
+                try:
+                    validate_scope_filter_expression(clean_filter, list(primary_df.columns))
+                    import duckdb
+                    filtered_df = duckdb.query(f"SELECT * FROM primary_df WHERE {clean_filter}").df()
+                    if len(filtered_df) == 0:
+                        # Fail-closed invariant: zero matching rows must NEVER fall back to full dataset
+                        self.checkpointer.fail_execution(
+                            investigation_id=investigation_id,
+                            execution_id=exec_id,
+                            error_message=(
+                                f"Human-selected scope filter '{clean_filter}' matched 0 records in dataset "
+                                f"'{semantic.primary_dataset_name}'. AA-OS refuses to fall back to the unfiltered dataset."
+                            ),
+                            failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+                        )
+                        return False
+                    primary_df = filtered_df
+                    data_context.datasets_map[semantic.primary_dataset_name] = primary_df
+                    analysis_plan.limitations.append(
+                        f"Human-selected scope filter applied: `{clean_filter}` ({len(filtered_df):,} rows matching)."
+                    )
+                except Exception as filter_err:
+                    # Fail-closed: invalid SQL filter expression cannot continue execution
+                    self.checkpointer.fail_execution(
+                        investigation_id=investigation_id,
+                        execution_id=exec_id,
+                        error_message=(
+                            f"Invalid human-selected scope filter expression '{clean_filter}': {str(filter_err)}. "
+                            "AA-OS refuses to execute an unvalidated filter."
+                        ),
+                        failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                    )
+                    return False
+
+            # 3. Selected metric enforcement: validate against primary_df columns and numeric type
+            sel_metric = human_guidance_payload.get("selected_metric")
+            sel_agg = human_guidance_payload.get("selected_aggregation")
+            is_count_agg = bool(sel_agg and sel_agg.strip().upper() in ("COUNT", "COUNT_DISTINCT"))
+            if sel_metric:
+                if sel_metric not in primary_df.columns:
+                    self.checkpointer.fail_execution(
+                        investigation_id=investigation_id,
+                        execution_id=exec_id,
+                        error_message=f"Selected metric '{sel_metric}' is not a valid column in '{semantic.primary_dataset_name}'.",
+                        failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                    )
+                    return False
+                if not is_count_agg and not pd.api.types.is_numeric_dtype(primary_df[sel_metric]):
+                    self.checkpointer.fail_execution(
+                        investigation_id=investigation_id,
+                        execution_id=exec_id,
+                        error_message=f"Selected metric '{sel_metric}' is non-numeric in '{semantic.primary_dataset_name}'. Quantitative aggregation requires a numeric metric.",
+                        failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                    )
+                    return False
+                semantic.target_metric_col = sel_metric
+                if getattr(analysis_plan, "semantics", None):
+                    analysis_plan.semantics.target_column = sel_metric
+
+            # 4. Selected grouping dimension enforcement
+            sel_group = human_guidance_payload.get("selected_group_dimension")
+            if sel_group:
+                if sel_group not in primary_df.columns:
+                    self.checkpointer.fail_execution(
+                        investigation_id=investigation_id,
+                        execution_id=exec_id,
+                        error_message=f"Selected grouping dimension '{sel_group}' is not a valid column in '{semantic.primary_dataset_name}'.",
+                        failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                    )
+                    return False
+                semantic.group_dimension_col = sel_group
+                if getattr(analysis_plan, "semantics", None):
+                    analysis_plan.semantics.grouping_columns = [sel_group]
+
+            # 5. Confirmed assumptions & custom instructions
+            if human_guidance_payload.get("confirmed_assumptions"):
+                for ca in human_guidance_payload["confirmed_assumptions"]:
+                    if ca not in analysis_plan.limitations:
+                        analysis_plan.limitations.append(ca)
+            if human_guidance_payload.get("custom_instruction"):
+                cust_inst = human_guidance_payload["custom_instruction"].strip()
+                if cust_inst:
+                    # Freeform guidance is a first-class contract patch, not a
+                    # note.  Compile only supported deterministic operations;
+                    # conflicting structured and freeform choices fail closed.
+                    from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
+                    freeform_contract = compile_canonical_question_contract(cust_inst, primary_df)
+                    if freeform_contract.completeness == "COMPLETE" and freeform_contract.family in {"COUNT", "SIMPLE_AGGREGATE"}:
+                        ff_agg = freeform_contract.requested_aggregation or {
+                            "sum": "SUM", "mean": "MEAN", "median": "MEDIAN", "count": "COUNT",
+                        }.get(freeform_contract.estimand)
+                        structured_agg = human_guidance_payload.get("selected_aggregation")
+                        structured_metric = human_guidance_payload.get("selected_metric")
+                        structured_group = human_guidance_payload.get("selected_group_dimension")
+                        conflicts = []
+                        if structured_agg and ff_agg and str(structured_agg).upper() != str(ff_agg).upper():
+                            conflicts.append("aggregation")
+                        if structured_metric and freeform_contract.target_column and structured_metric != freeform_contract.target_column:
+                            conflicts.append("metric")
+                        if structured_group and freeform_contract.grouping_columns and structured_group not in freeform_contract.grouping_columns:
+                            conflicts.append("grouping")
+                        if conflicts:
+                            self.checkpointer.fail_execution(
+                                investigation_id=investigation_id, execution_id=exec_id,
+                                error_message=(f"Structured selections conflict with freeform instruction '{cust_inst}' "
+                                               f"on {', '.join(conflicts)}. Clarify the intended operation; AA-OS will not choose precedence."),
+                                failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                            )
+                            return False
+                        if freeform_contract.target_column:
+                            semantic.target_metric_col = freeform_contract.target_column
+                            analysis_plan.semantics.target_column = freeform_contract.target_column
+                        if freeform_contract.grouping_columns:
+                            semantic.group_dimension_col = freeform_contract.grouping_columns[0]
+                            analysis_plan.semantics.grouping_columns = list(freeform_contract.grouping_columns)
+                        if ff_agg:
+                            analysis_plan.estimand["requested_aggregation"] = ff_agg
+                        analysis_plan.limitations.append(
+                            f"Freeform instruction compiled into executable contract: `{cust_inst}`."
+                        )
+                    # Enforceable instruction compiler: detect explicit operational filters
+                    ci_lower = cust_inst.lower()
+                    translated_filter = None
+                    if "exclude returns" in ci_lower or "exclude return" in ci_lower:
+                        # Check if returns/status column exists (do not conflate with cancelled)
+                        ret_col = next((c for c in primary_df.columns if any(k in c.lower() for k in ["return", "is_returned", "returned", "order_status", "status"])), None)
+                        if ret_col:
+                            if pd.api.types.is_bool_dtype(primary_df[ret_col]):
+                                translated_filter = f"{ret_col} = false"
+                            elif pd.api.types.is_numeric_dtype(primary_df[ret_col]):
+                                translated_filter = f"{ret_col} = 0"
+                            else:
+                                translated_filter = f"(lower({ret_col}) NOT IN ('returned', 'return') OR {ret_col} IS NULL)"
+                        else:
+                            self.checkpointer.fail_execution(
+                                investigation_id=investigation_id,
+                                execution_id=exec_id,
+                                error_message=f"Instruction requested 'Exclude returns', but no return/status column exists in '{semantic.primary_dataset_name}'.",
+                                failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                            )
+                            return False
+
+                    if "exclude cancel" in ci_lower or "exclude cancelled" in ci_lower:
+                        cancel_col = next((c for c in primary_df.columns if any(k in c.lower() for k in ["cancel", "status", "order_status", "is_cancelled"])), None)
+                        if cancel_col:
+                            if pd.api.types.is_bool_dtype(primary_df[cancel_col]):
+                                c_flt = f"{cancel_col} = false"
+                            elif pd.api.types.is_numeric_dtype(primary_df[cancel_col]):
+                                c_flt = f"{cancel_col} = 0"
+                            else:
+                                c_flt = f"(lower({cancel_col}) NOT IN ('cancelled', 'canceled') OR {cancel_col} IS NULL)"
+                            translated_filter = f"({translated_filter}) AND ({c_flt})" if translated_filter else c_flt
+                        else:
+                            self.checkpointer.fail_execution(
+                                investigation_id=investigation_id,
+                                execution_id=exec_id,
+                                error_message=f"Instruction requested 'Exclude cancelled', but no cancellation/status column exists in '{semantic.primary_dataset_name}'.",
+                                failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                            )
+                            return False
+
+                    if "zero" in ci_lower and ("exclude" in ci_lower or "drop" in ci_lower or "filter" in ci_lower or "ignore" in ci_lower):
+                        # Detect zero-dollar/metric exclusion: measures only, NEVER identifier columns
+                        measure_col = None
+                        if sel_metric and pd.api.types.is_numeric_dtype(primary_df[sel_metric]) and not any(id_k in sel_metric.lower() for id_k in ["_id", "id", "key", "pk", "fk"]):
+                            measure_col = sel_metric
+                        else:
+                            # Look for revenue, sales, price, amount, cost
+                            measure_col = next((c for c in primary_df.columns if pd.api.types.is_numeric_dtype(primary_df[c]) and any(m in c.lower() for m in ["revenue", "sales", "price", "amount", "total", "cost", "value"]) and not any(id_k in c.lower() for id_k in ["_id", "id", "key", "pk", "fk"])), None)
+                        if measure_col:
+                            zero_filter = f"{measure_col} > 0"
+                            translated_filter = f"({translated_filter}) AND ({zero_filter})" if translated_filter else zero_filter
+                        else:
+                            self.checkpointer.fail_execution(
+                                investigation_id=investigation_id,
+                                execution_id=exec_id,
+                                error_message=f"Instruction requested zero-exclusion, but no unambiguous numeric measure column was found in '{semantic.primary_dataset_name}'.",
+                                failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                            )
+                            return False
+
+                    if translated_filter:
+                        import duckdb
+                        try:
+                            filtered_df = duckdb.query(f"SELECT * FROM primary_df WHERE {translated_filter}").df()
+                            if len(filtered_df) == 0:
+                                self.checkpointer.fail_execution(
+                                    investigation_id=investigation_id,
+                                    execution_id=exec_id,
+                                    error_message=f"Instruction filter '{translated_filter}' resulted in 0 matching records.",
+                                    failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+                                )
+                                return False
+                            primary_df = filtered_df
+                            data_context.datasets_map[semantic.primary_dataset_name] = primary_df
+                            analysis_plan.limitations.append(f"Instruction executed: `{cust_inst}` (applied filter: `{translated_filter}`)")
+                        except Exception as inst_err:
+                            self.checkpointer.fail_execution(
+                                investigation_id=investigation_id,
+                                execution_id=exec_id,
+                                error_message=f"Failed to execute instruction filter '{translated_filter}': {str(inst_err)}",
+                                failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                            )
+                            return False
+                    else:
+                        # Fail-closed invariant: Do NOT silently record into limitations as plain text note.
+                        # Unrecognized or unsupported custom instructions must fail closed with an explicit analytical error.
+                        self.checkpointer.fail_execution(
+                            investigation_id=investigation_id,
+                            execution_id=exec_id,
+                            error_message=f"Unsupported or unresolvable custom instruction: '{cust_inst}'. Cannot resolve required filter against available dataset columns.",
+                            failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                        )
+                        return False
+
+            # 6. Selected aggregation enforcement: normalize AVG -> MEAN
+            sel_agg = human_guidance_payload.get("selected_aggregation")
+            if sel_agg:
+                from packages.schemas.src.analysis import AggregationType
+                norm_agg = sel_agg.strip().upper()
+                if norm_agg == "AVG":
+                    norm_agg = "MEAN"
+                try:
+                    agg_enum = AggregationType[norm_agg]
+                    if semantic.metric_definition is not None:
+                        semantic.metric_definition.aggregation_type = agg_enum
+                    analysis_plan.estimand["requested_aggregation"] = norm_agg
+                except KeyError:
+                    self.checkpointer.fail_execution(
+                        investigation_id=investigation_id,
+                        execution_id=exec_id,
+                        error_message=f"Unsupported aggregation type '{sel_agg}'.",
+                        failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                    )
+                    return False
 
         # Synchronize resolved canonical question contract with semantic resolution
         canonical_roles_authoritative = bool(
             getattr(analysis_plan.semantics, "canonical_roles_authoritative", False)
+            or bool(human_guidance_payload.get("selected_metric"))
             or (
                 getattr(analysis_plan.semantics, "resolution_confidence", 0.0) >= 0.70
                 and getattr(analysis_plan, "task", "") != "GENERAL_EXPLORATION"
@@ -1063,6 +1440,80 @@ class InvestigationController:
                     semantic.metric_definition.semantic_resolution_status = "RESOLVED"
                 except Exception:
                     pass
+
+        # Milestone M1: Pre-execution consistency gate
+        # Before executing analytical operations, validate that the controller's resolved execution
+        # specification agrees with the approved canonical contract. If any differs, fail closed.
+        if locked_contract is not None:
+            discrepancies = []
+            # Target measure check: if contract specifies target, plan semantics must match
+            if locked_contract.target_column and getattr(analysis_plan.semantics, "target_column", None) != locked_contract.target_column:
+                discrepancies.append(f"Target column mismatch: expected '{locked_contract.target_column}', resolved '{getattr(analysis_plan.semantics, 'target_column', None)}'")
+            
+            # Symmetric grouping check: plan must have exact same grouping columns as locked contract
+            expected_groups = set(locked_contract.grouping_columns or [])
+            actual_groups = set(getattr(analysis_plan.semantics, "grouping_columns", []) or [])
+            if expected_groups != actual_groups:
+                discrepancies.append(f"Grouping columns mismatch: expected {sorted(expected_groups)}, resolved {sorted(actual_groups)}")
+
+            # Explanatory roles check
+            expected_explanatories = set(locked_contract.explanatory_columns or [])
+            actual_explanatories = set(getattr(analysis_plan.semantics, "explanatory_columns", []) or [])
+            if expected_explanatories != actual_explanatories:
+                discrepancies.append(f"Explanatory columns mismatch: expected {sorted(expected_explanatories)}, resolved {sorted(actual_explanatories)}")
+
+            # Aggregation check
+            if locked_contract.requested_aggregation:
+                plan_agg = getattr(analysis_plan, "estimand", {}).get("requested_aggregation")
+                if not plan_agg or plan_agg.upper() != locked_contract.requested_aggregation.upper():
+                    discrepancies.append(f"Requested aggregation mismatch: expected '{locked_contract.requested_aggregation}', resolved '{plan_agg}'")
+
+            # Time column check
+            if locked_contract.time_column and getattr(analysis_plan.semantics, "time_column", None) != locked_contract.time_column:
+                discrepancies.append(f"Time column mismatch: expected '{locked_contract.time_column}', resolved '{getattr(analysis_plan.semantics, 'time_column', None)}'")
+
+            # Task family check
+            if locked_contract.task_family and getattr(analysis_plan, "task", None):
+                plan_task_str = str(getattr(analysis_plan, "task", "")).upper()
+                contract_task_str = str(locked_contract.task_family).upper()
+                if contract_task_str == "RANKING" and "RANK" not in plan_task_str:
+                    discrepancies.append(f"Task mismatch: expected RANKING, resolved {plan_task_str}")
+                elif contract_task_str in ("CAUSAL", "CAUSAL_REQUEST") and plan_task_str not in ("CAUSAL", "ASSOCIATION", "CAUSAL_REQUEST"):
+                    discrepancies.append(f"Task mismatch: expected CAUSAL, resolved {plan_task_str}")
+
+            if discrepancies:
+                error_msg = f"Pre-execution consistency gate failed: execution plan deviates from approved canonical contract: {'; '.join(discrepancies)}"
+                self.checkpointer.record_event(
+                    investigation_id=investigation_id,
+                    execution_id=exec_id,
+                    event_type="investigation.contract_consistency_check_failed",
+                    payload={
+                        "discrepancies": discrepancies,
+                        "locked_contract": locked_contract.to_dict(),
+                        "resolved_plan_target": getattr(analysis_plan.semantics, "target_column", None),
+                        "resolved_plan_grouping": getattr(analysis_plan.semantics, "grouping_columns", None),
+                    },
+                )
+                self.checkpointer.fail_execution(
+                    investigation_id=investigation_id,
+                    execution_id=exec_id,
+                    error_message=error_msg,
+                    failure_class=FailureTaxonomy.ANALYTICAL_ERROR,
+                )
+                return False
+
+            self.checkpointer.record_event(
+                investigation_id=investigation_id,
+                execution_id=exec_id,
+                event_type="investigation.pre_execution_consistency_verified",
+                payload={
+                    "status": "VERIFIED",
+                    "locked_contract_hash": locked_contract.contract_hash(),
+                    "target_column": locked_contract.target_column,
+                    "grouping_columns": list(locked_contract.grouping_columns),
+                    "requested_aggregation": locked_contract.requested_aggregation,
+                },
+            )
 
         # Contextual data-quality findings are decision controls, not merely
         # diagnostics.  At plan time, require the corresponding sensitivity
@@ -1250,7 +1701,7 @@ class InvestigationController:
                     else None
                 )
             )
-            canonical_time_col = analysis_plan.semantics.time_column
+            canonical_time_col = analysis_plan.semantics.time_column or _temporal_resolved_time_col
             canonical_explanatory_cols = list(analysis_plan.semantics.explanatory_columns)
         else:
             canonical_target_col = analysis_plan.semantics.target_column or semantic_binding_set.projected_target_column()
@@ -1259,17 +1710,46 @@ class InvestigationController:
                 if analysis_plan.semantics.grouping_columns
                 else semantic_binding_set.projected_group_dimension()
             )
-            canonical_time_col = analysis_plan.semantics.time_column or semantic_binding_set.projected_time_column()
+            canonical_time_col = (
+                analysis_plan.semantics.time_column
+                or semantic_binding_set.projected_time_column()
+                or _temporal_resolved_time_col
+            )
             canonical_explanatory_cols = (
                 list(analysis_plan.semantics.explanatory_columns)
                 if analysis_plan.semantics.explanatory_columns
                 else semantic_binding_set.projected_explanatory_columns()
             )
 
+        _requested_aggregation = str(
+            (getattr(analysis_plan, "estimand", {}) or {}).get("requested_aggregation") or ""
+        ).strip().upper()
+        # A grouped row-count query has no separate outcome variable. Use its
+        # resolved grouping column as the concrete COUNT target.
+        if (
+            canonical_target_col is None
+            and _requested_aggregation in {"COUNT", "COUNT_ROWS", "ROW_COUNT"}
+            and canonical_group_dimension_col
+        ):
+            canonical_target_col = canonical_group_dimension_col
+
         # Persist the compiled contract as a first-class, versioned artifact.
         # The event stream remains useful for replay, but the DB row is now the
         # durable source of truth for what AA-OS intended to investigate.
         contract_dict = analysis_plan.to_dict()
+        # Dataset-quality evaluation is the slow part on large/multi-table workspaces (seconds on 120k-row
+        # tables). It must run BEFORE the contract write transaction opens: with the shared SQLite
+        # connection (StaticPool) another session's close()/rollback() -- e.g. the UI polling
+        # investigation status -- rolls back ANY uncommitted work, and a long flush()-to-commit() window
+        # lost the freshly inserted contract ("Contract <id> not found" at finalize_contract).
+        _dataset_quality_by_name = {
+            _dn: (
+                quality_assessment
+                if _dn == quality_assessment.dataset_name
+                else DataQualityGate.evaluate_fitness(_df, _dn)
+            )
+            for _dn, _df in data_context.datasets_map.items()
+        }
         with self.session_factory() as contract_session:
             existing_contract = (contract_session.query(InvestigationContract)
                                  .filter(InvestigationContract.investigation_id == investigation_id)
@@ -1296,6 +1776,10 @@ class InvestigationController:
                 scope_data["verified_grains"] = getattr(semantic.world_model, "verified_grains", {}).get(semantic.primary_dataset_name, [])
                 scope_data["epistemic_manifest"] = getattr(semantic.world_model, "epistemic_manifest", {})
 
+            # Data-quality and version-change reviews append open questions AFTER the planner
+            # computed decision_status, which left "RESOLVED" beside "Unresolved context: ...".
+            if analysis_plan.unresolved_questions and analysis_plan.decision_status == "RESOLVED":
+                analysis_plan.decision_status = "PARTIALLY_RESOLVED"
             contract = InvestigationContract(
                 investigation_id=investigation_id,
                 version=(existing_contract.version + 1 if existing_contract else 1),
@@ -1326,6 +1810,8 @@ class InvestigationController:
                 grain_json=grain_data,
                 scope_json={
                     **dict(scope_data or {}),
+                    "human_guidance": dict(human_guidance_payload),
+                    "clarification_history": list(human_guidance_history),
                     "dataset_scope": {
                         "requested_dataset_ids": list(requested_dataset_ids or []),
                         "resolved_dataset_names": sorted(list(data_context.datasets_map.keys())),
@@ -1359,11 +1845,7 @@ class InvestigationController:
                 inv_contract.contract_revision = contract.version
                 inv_contract.current_phase = AnalyticalPhase.CONTRACT_COMPILED
             for dataset_name, dataset_df in data_context.datasets_map.items():
-                dataset_quality = (
-                    quality_assessment
-                    if dataset_name == quality_assessment.dataset_name
-                    else DataQualityGate.evaluate_fitness(dataset_df, dataset_name)
-                )
+                dataset_quality = _dataset_quality_by_name[dataset_name]
                 version_meta = dict((data_context.dataset_versions or {}).get(dataset_name) or {})
                 contract_session.add(InvestigationDataReadiness(
                     investigation_id=investigation_id,
@@ -1406,6 +1888,20 @@ class InvestigationController:
                     recommendations_json=list(dataset_quality.recommendations),
                 ))
             contract_session.commit()
+
+        # Durability check: finalize_contract() runs in a different session and fails closed on a missing
+        # row. Confirm the committed contract is really visible before going on, so a lost write is a
+        # clear, immediate error instead of a confusing "Contract <id> not found" later.
+        with self.session_factory() as _verify_session:
+            _contract_visible = (
+                _verify_session.query(InvestigationContract.id)
+                .filter(InvestigationContract.id == contract_id).first() is not None
+            )
+        if not _contract_visible:
+            raise RuntimeError(
+                f"Contract {contract_id} was not durably persisted (its write transaction was rolled back "
+                "by a concurrent database session). Re-run the investigation."
+            )
 
         for phase, payload in [
             (AnalyticalPhase.QUESTION_UNDERSTANDING, {"question": question}),
@@ -1483,6 +1979,23 @@ class InvestigationController:
         if canonical_roles_authoritative:
             if analysis_plan.semantics.grouping_columns:
                 method_decision.estimand.comparison_dimension = analysis_plan.semantics.grouping_columns[0]
+            elif (
+                method_decision.problem_class == ProblemClass.SURVIVAL_CHURN
+                and not method_decision.estimand.comparison_dimension
+            ):
+                # For a churn-rate comparison phrased as "does X affect
+                # cancellation rate?", the compiler may place X in explanatory
+                # rather than grouping roles. Preserve that explicit requested
+                # variable as the comparison dimension; otherwise the churn
+                # synthesizer sees several categorical candidates and correctly
+                # refuses to guess which one the question means.
+                _requested_churn_dimensions = [
+                    col for col in (method_decision.estimand.predictor_columns or ())
+                    if col in (analysis_plan.semantics.explanatory_columns or ())
+                    and col in primary_df.columns
+                ]
+                if len(_requested_churn_dimensions) == 1:
+                    method_decision.estimand.comparison_dimension = _requested_churn_dimensions[0]
             elif method_decision.estimand.comparison_dimension not in (analysis_plan.semantics.explanatory_columns or ()):
                 method_decision.estimand.comparison_dimension = None
             method_decision.estimand.time_column = analysis_plan.semantics.time_column
@@ -1618,6 +2131,33 @@ class InvestigationController:
         method_gate_ok, method_gate = MethodRegistry.admissibility_for_plan(
             analysis_plan, semantic, quality_assessment, primary_df
         )
+        # The universal plan may label a categorical churn-rate question as
+        # ASSOCIATION, whose generic preflight rejects a categorical predictor
+        # as unsuitable for Pearson/Spearman. When semantic resolution has
+        # already selected the dedicated SURVIVAL_CHURN workflow, that generic
+        # gate is checking the wrong estimator. Permit the churn path only when
+        # its canonical event and comparison roles are resolved to real columns;
+        # all other failures continue through the normal fail-closed gate.
+        _churn_bindings = getattr(method_decision.estimand, "churn_bindings", None) or {}
+        _churn_event = _churn_bindings.get("event_col")
+        _churn_dimension = getattr(method_decision.estimand, "comparison_dimension", None)
+        _resolved_churn_specialist = bool(
+            method_decision.problem_class == ProblemClass.SURVIVAL_CHURN
+            and _churn_bindings.get("outcome_available", False)
+            and _churn_event in primary_df.columns
+            and _churn_dimension in primary_df.columns
+        )
+        if _resolved_churn_specialist and not method_gate_ok:
+            method_gate_ok = True
+            method_gate = {
+                **(method_gate or {}),
+                "specialist_gate_override": "resolved_survival_churn_roles",
+                "reason": (
+                    "The generic plan gate rejected a categorical predictor for "
+                    "correlation, but the canonical method decision resolved the "
+                    "dedicated churn-rate comparison workflow and its event/group roles."
+                ),
+            }
         self.checkpointer.record_event(
             investigation_id=investigation_id,
             execution_id=exec_id,
@@ -1759,8 +2299,12 @@ class InvestigationController:
                 # of hardcoding SUM for every investigation regardless of what
                 # the target metric is (a rate, a mean, a count, ...).
                 aggregation=(
-                    semantic.metric_definition.aggregation_type
-                    if semantic.metric_definition else AggregationType.SUM
+                    AggregationType.COUNT
+                    if _requested_aggregation in {"COUNT", "COUNT_ROWS", "ROW_COUNT"}
+                    else (
+                        semantic.metric_definition.aggregation_type
+                        if semantic.metric_definition else AggregationType.SUM
+                    )
                 ),
             ),
             unit_of_analysis=GrainRef(
@@ -1861,6 +2405,150 @@ class InvestigationController:
             },
         )
 
+        # Typed conditional execution gate (v2): resolve the planner's declared
+        # branches from measured runtime facts, persist every decision, and apply
+        # task-specific enforcement before any specialist experiment can execute.
+        # Planning metadata alone is never treated as authorization. Missing facts
+        # remain UNKNOWN and critical specialist paths fail closed.
+        _typed_plan = (
+            getattr(getattr(analysis_plan, "semantics", None), "semantic_evidence", {}) or {}
+        ).get("typed_investigation_plan") or {}
+        _typed_task = str(_typed_plan.get("task_type") or "UNRESOLVED").upper()
+        _typed_facts: Dict[str, Any] = {"data_quality": {}, "roles": {}, "time_index": {}, "forecast": {},
+                                       "causal_identification": {}, "prediction": {},
+                                       "cluster": {}, "decision_context": {}, "reconciliation": {}}
+        _critical_issues = list(getattr(quality_assessment, "critical_issues", []) or [])
+        _typed_facts["data_quality"]["status"] = (
+            "PASS" if bool(getattr(quality_assessment, "can_proceed", False)) and not _critical_issues else "WARN"
+        )
+        
+        _schema_types = {}
+        for c in primary_df.columns:
+            series = primary_df[c]
+            if pd.api.types.is_bool_dtype(series.dtype):
+                value_type = "boolean"
+            elif pd.api.types.is_numeric_dtype(series.dtype):
+                value_type = "numeric"
+            elif pd.api.types.is_datetime64_any_dtype(series.dtype):
+                value_type = "datetime"
+            elif isinstance(series.dtype, pd.CategoricalDtype):
+                value_type = "categorical"
+            else:
+                value_type = "text_or_mixed"
+                try:
+                    observed = series.dropna()
+                    n = int(len(observed))
+                    unique_count = int(observed.nunique(dropna=True))
+                    if n >= 2 and unique_count >= 2:
+                        cardinality_limit = min(
+                            50, max(10, int(n ** 0.5 + 0.999999))
+                        )
+                        if unique_count <= cardinality_limit:
+                            value_type = "categorical"
+                except Exception:
+                    pass
+            _schema_types[str(c)] = value_type
+
+        _typed_roles = _typed_plan.get("semantic_roles", {}) if isinstance(_typed_plan, dict) else {}
+        _x_col = (_typed_roles.get("x") or
+                  next(iter(getattr(getattr(analysis_plan, "semantics", None), "explanatory_columns", []) or []), None))
+        _y_col = (_typed_roles.get("y") or getattr(getattr(analysis_plan, "semantics", None), "target_metric_col", None)
+                  or getattr(getattr(analysis_plan, "semantics", None), "target_column", None))
+        _group_col = (_typed_roles.get("group") or
+                      next(iter(getattr(getattr(analysis_plan, "semantics", None), "grouping_columns", []) or []), None)
+                      or getattr(getattr(analysis_plan, "semantics", None), "group_dimension_col", None))
+        if _x_col in _schema_types:
+            _typed_facts["roles"]["x_type"] = _schema_types[_x_col]
+        if _y_col in _schema_types:
+            _typed_facts["roles"]["y_type"] = _schema_types[_y_col]
+        if _group_col in primary_df.columns:
+            try:
+                _typed_facts["roles"]["group_cardinality"] = int(primary_df[_group_col].nunique(dropna=True))
+            except Exception:
+                pass
+        _time_col = (getattr(getattr(analysis_plan, "semantics", None), "time_column", None)
+                     or getattr(semantic, "time_col", None))
+        if _time_col in primary_df.columns:
+            try:
+                _time_values = pd.to_datetime(primary_df[_time_col], errors="coerce", utc=True)
+                # The forecasting engine sorts valid observations by time before
+                # fitting. Input row order is not a semantic requirement; require a
+                # parseable, non-degenerate time axis instead of rejecting an otherwise
+                # valid dataset merely because its CSV rows are shuffled.
+                _typed_facts["time_index"]["monotonic"] = bool(
+                    len(_time_values) >= 2
+                    and _time_values.notna().all()
+                    and _time_values.nunique(dropna=True) >= 2
+                )
+            except Exception:
+                _typed_facts["time_index"]["monotonic"] = False
+        _typed_facts["forecast"]["horizon_status"] = (
+            "SPECIFIED" if re.search(
+                r"\bnext\s+\d+\s+(?:periods?|days?|weeks?|months?|quarters?|years?)\b|\bfor\s+\d+\s+(?:periods?|days?|weeks?|months?|quarters?|years?)\b",
+                question, re.I,
+            ) else "UNKNOWN"
+        )
+        _typed_facts["causal_identification"]["status"] = (
+            "IDENTIFIED" if bool(getattr(causal_gate_res, "is_identifiable", False)) else "NOT_IDENTIFIED"
+        )
+        _leakage_indicators = list(getattr(quality_assessment, "leakage_indicators", []) or [])
+        # An empty heuristic list is not proof of no leakage. Until an independent
+        # leakage audit has run, the state is UNKNOWN rather than optimistically PASS.
+        if _leakage_indicators:
+            _typed_facts["prediction"]["leakage_status"] = "FAIL"
+        _typed_facts["cluster"]["stability_status"] = "UNKNOWN"
+        _typed_facts["decision_context"]["status"] = "UNKNOWN"
+        _typed_facts["reconciliation"]["formula_status"] = (
+            "SPECIFIED" if re.search(r"(?:=|\bequals\b|\bshould equal\b|\bmust equal\b)", question, re.I) else "UNKNOWN"
+        )
+        _typed_branch_decisions: List[Dict[str, Any]] = []
+        try:
+            from packages.analytics_core.src.intelligence.typed_investigation_planner import resolve_plan_branches
+            _typed_branch_decisions = resolve_plan_branches(_typed_plan, _typed_facts)
+        except Exception as _branch_exc:
+            _typed_branch_decisions = [{"branch_id": "PLAN-RESOLUTION", "status": "BLOCKED",
+                                        "reason": f"resolver_error:{type(_branch_exc).__name__}",
+                                        "fallback": "BLOCK_OR_CLARIFY"}]
+        _typed_branch_map = {str(d.get("branch_id")): d for d in _typed_branch_decisions}
+        _typed_plan_fingerprint = hashlib.sha256(json.dumps(
+            {"plan_version": _typed_plan.get("plan_version"), "task_type": _typed_task,
+             "source_question": _typed_plan.get("source_question"), "branches": _typed_plan.get("branches")},
+            sort_keys=True, default=str, separators=(",", ":")
+        ).encode("utf-8")).hexdigest()
+        self.checkpointer.record_event(
+            investigation_id=investigation_id, execution_id=exec_id,
+            event_type="investigation.typed_conditional_plan.resolved",
+            payload={"plan_version": _typed_plan.get("plan_version"), "plan_fingerprint": _typed_plan_fingerprint,
+                     "task_type": _typed_task, "facts": _typed_facts,
+                     "decisions": _typed_branch_decisions, "attempt": attempt},
+        )
+
+        def _typed_branch_runs(branch_id: str) -> bool:
+            return _typed_branch_map.get(branch_id, {}).get("status") == "RUN"
+
+        from packages.analytics_core.src.intelligence.typed_investigation_planner import conditional_execution_policy
+        _typed_policy = conditional_execution_policy(_typed_task, _typed_branch_decisions)
+        if not _typed_policy.get("authorized", False):
+            _typed_gate_reason = str(_typed_policy.get("reason") or "Required conditional branch was not authorized.")
+            self.checkpointer.record_event(
+                investigation_id=investigation_id, execution_id=exec_id,
+                event_type="investigation.typed_conditional_plan.enforced",
+                payload={"task_type": _typed_task, "policy": _typed_policy,
+                         "decisions": _typed_branch_decisions, "plan_fingerprint": _typed_plan_fingerprint},
+            )
+            return _complete_inconclusive(_typed_gate_reason, failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE)
+        if _typed_task == "CAUSAL_EFFECT" and not _typed_policy.get("causal_effect_authorized", False):
+            analysis_plan.claim_type = "ASSOCIATION"
+            analysis_plan.limitations.append(
+                "Typed conditional gate withheld causal-effect estimation because the causal identification branch did not pass; results are restricted to non-causal evidence."
+            )
+            self.checkpointer.record_event(
+                investigation_id=investigation_id, execution_id=exec_id,
+                event_type="investigation.typed_conditional_plan.enforced",
+                payload={"task_type": _typed_task, "policy": _typed_policy,
+                         "decisions": _typed_branch_decisions, "plan_fingerprint": _typed_plan_fingerprint},
+            )
+
         # Phase 23 causal estimation: identification alone is not an effect estimate.
         # When a single-table treatment/outcome is identified, run a conservative
         # AIPW estimate with cross-fitted nuisance models and reproducible bootstrap
@@ -1871,6 +2559,7 @@ class InvestigationController:
         if (
             method_decision.causal_intent is not None
             and causal_gate_res.is_identifiable
+            and (_typed_task != "CAUSAL_EFFECT" or _typed_branch_runs("B-ID"))
             and semantic.primary_dataset_name in (method_decision.causal_intent.treatment.table, "df")
         ):
             try:
@@ -2996,7 +3685,9 @@ class InvestigationController:
                     test_reliability=selected_exp.reliability_weight,
                     status="EXECUTED",
                 )
-                session.merge(exp_entity)
+                # Keep the persistent instance: a second merge() of the transient object would
+                # queue a duplicate INSERT (violating uq investigation_id+analytical_identity).
+                exp_entity = session.merge(exp_entity)
 
                 # Explicitly freeze analysis-scope metadata before execution.
                 scope_record = {
@@ -3103,6 +3794,7 @@ class InvestigationController:
                     metric_definition=semantic.metric_definition,
                     dataset_fingerprints=experiment_source_fingerprints,
                     primary_result_truncated=bool(getattr(exec_res, "is_truncated", False)),
+                    primary_result_digest=getattr(exec_res, "relation_digest", None),
                     claim_type=getattr(_target_hyp, "claim_type", None),
                     # Thread the already-resolved semantic world model into the
                     # canonical transition. Churn identifiability must use the
@@ -3227,6 +3919,16 @@ class InvestigationController:
                 )
                 session.merge(obs_entity)
 
+                # Persist the real analysed row count on the experiment's scope record.
+                # The scope record was frozen BEFORE execution from a frame length that is
+                # not the analysed population, so Experiment.analysis_row_count stayed 0
+                # and reviewers saw "Rows Analyzed: 0" next to a 120,000-row analysis.
+                exp_entity.analysis_row_count = int(row_cnt)
+                exp_entity.full_scope = bool(scope_record.get("full_scope", True))
+                exp_entity.sampling_policy = str(scope_record.get("sampling_policy", "NONE") or "NONE")
+                scope_record["analysis_row_count"] = int(row_cnt)
+                exp_entity.arguments_json = {**(exp_entity.arguments_json or {}), "analysis_scope": dict(scope_record)}
+
                 # DEFECT-007 / audit P0: resolve the targeted hypothesis BEFORE
                 # building the Evidence row, both to link evidence (as before)
                 # and to source its confidence_score from the same epistemic
@@ -3299,6 +4001,11 @@ class InvestigationController:
                     # then defer to the winning row, mirroring the same
                     # get-or-create-under-constraint pattern already used for
                     # hypotheses in runtime/hypothesis_persistence.py.
+                    _ev_p_value = (
+                        transition.correlation_p_value
+                        if transition.correlation_p_value is not None
+                        else (float(transition.statistical_inference["p_value"]) if (transition.statistical_inference and "p_value" in transition.statistical_inference and transition.statistical_inference["p_value"] is not None) else None)
+                    )
                     ev_entity = Evidence(
                         id=f"EV_{exp_entity.id}",
                         investigation_id=investigation_id,
@@ -3310,6 +4017,7 @@ class InvestigationController:
                         confidence_score=_evidence_confidence,
                         validation_status=transition.verification_status,
                         evidence_identity_hash=evidence_identity,
+                        p_value=_ev_p_value,
                     )
                     try:
                         with session.begin_nested():
@@ -3380,35 +4088,75 @@ class InvestigationController:
                 # run itself -- only after a restart-and-reconstruct round
                 # trip. Consistent behavior pre/post restart is invariant 11.
                 if evidence_target_hyp is not None:
-                    has_supported_pred = any(p.status == "SUPPORTED" for p in transition.evaluated_predictions)
-                    has_refuted_pred = any(p.status == "REFUTED" for p in transition.evaluated_predictions)
-                    # Explicit prediction outcomes are the most direct signal
-                    # when they exist (churn/segmentation-style experiments
-                    # that generate concrete predicted_observables). Many
-                    # experiment types (correlation, several segmentation
-                    # paths) never generate predictions at all, so falling
-                    # through to "no evidence either way" for them was the
-                    # root cause of a hypothesis that was genuinely, directly
-                    # tested never being recognized as tested. Delegate to
-                    # the same canonical classify_evidence_for_hypothesis()
-                    # that state_reconstruction.py uses after a restart, so
-                    # live-run and post-restart classification can never
-                    # diverge (invariant 11).
+                    # Filter evaluated predictions strictly to the hypothesis being linked
+                    hyp_preds = [
+                        p for p in transition.evaluated_predictions
+                        if getattr(p, "hypothesis_code", None) == evidence_target_hyp.hypothesis_code
+                    ]
+                    has_supported_pred = any(p.status == "SUPPORTED" for p in hyp_preds)
+                    has_refuted_pred = any(p.status == "REFUTED" for p in hyp_preds)
+
                     if has_supported_pred:
                         classification = "supporting"
                     elif has_refuted_pred:
                         classification = "contradicting"
                     else:
-                        classification = classify_evidence_for_hypothesis(
-                            transition.verification_status, ev_entity.effect_size
-                        )
+                        # For inferential tests without predictions (e.g. correlation or group comparisons),
+                        # inspect whether the statistical measurement passed significance or supports the null.
+                        p_val = None
+                        eff_sz = getattr(ev_entity, "effect_size", None)
+                        if transition.correlation_p_value is not None:
+                            p_val = transition.correlation_p_value
+                            if eff_sz is None:
+                                eff_sz = getattr(transition, "correlation_r", None)
+                        elif transition.statistical_inference and "p_value" in transition.statistical_inference and transition.statistical_inference["p_value"] is not None:
+                            p_val = float(transition.statistical_inference["p_value"])
+                            if eff_sz is None:
+                                eff_sz = (
+                                    transition.statistical_inference.get("effect_size")
+                                    or transition.statistical_inference.get("mean_diff")
+                                    or transition.statistical_inference.get("difference")
+                                    or transition.statistical_inference.get("r")
+                                )
+
+                        if p_val is not None:
+                            adq_power = None
+                            if transition.statistical_inference and isinstance(transition.statistical_inference, dict):
+                                if "adequate_power" in transition.statistical_inference:
+                                    adq_power = bool(transition.statistical_inference["adequate_power"])
+                                elif "decision" in transition.statistical_inference and isinstance(transition.statistical_inference["decision"], dict):
+                                    if "adequate_power" in transition.statistical_inference["decision"]:
+                                        adq_power = bool(transition.statistical_inference["decision"]["adequate_power"])
+
+                            subgroup_min = None
+                            if transition.statistical_inference and isinstance(transition.statistical_inference, dict):
+                                if "subgroup_min_n" in transition.statistical_inference:
+                                    subgroup_min = transition.statistical_inference["subgroup_min_n"]
+
+                            claim_txt = getattr(evidence_target_hyp, "claim", "") or getattr(evidence_target_hyp, "statement", "")
+                            classification = classify_inferential_evidence(
+                                p_value=p_val,
+                                is_counter=bool(getattr(evidence_target_hyp, "is_counter_hypothesis", False)),
+                                effect_size=eff_sz,
+                                claim_text=claim_txt,
+                                sample_size=row_cnt,
+                                adequate_power=adq_power,
+                                subgroup_min_n=subgroup_min,
+                            )
+                        else:
+                            classification = classify_evidence_for_hypothesis(
+                                transition.verification_status, getattr(ev_entity, "effect_size", None)
+                            )
+
+                    # Symmetric mirror updating: ensure binary mirror hypotheses update
+                    # both when evidence_target_hyp is primary and when it is counter.
                     if classification == "supporting":
                         if ev_entity.id not in evidence_target_hyp.supporting_evidence_ids:
                             evidence_target_hyp.supporting_evidence_ids.append(ev_entity.id)
                         for ch in current_hyps:
                             if (
-                                getattr(ch, "is_counter_hypothesis", False)
-                                and ch.hypothesis_code != evidence_target_hyp.hypothesis_code
+                                ch.hypothesis_code != evidence_target_hyp.hypothesis_code
+                                and bool(getattr(ch, "is_counter_hypothesis", False)) != bool(getattr(evidence_target_hyp, "is_counter_hypothesis", False))
                                 and _is_binary_mirror_hypothesis(ch, evidence_target_hyp)
                             ):
                                 if ev_entity.id not in ch.contradicting_evidence_ids:
@@ -3418,8 +4166,8 @@ class InvestigationController:
                             evidence_target_hyp.contradicting_evidence_ids.append(ev_entity.id)
                         for ch in current_hyps:
                             if (
-                                getattr(ch, "is_counter_hypothesis", False)
-                                and ch.hypothesis_code != evidence_target_hyp.hypothesis_code
+                                ch.hypothesis_code != evidence_target_hyp.hypothesis_code
+                                and bool(getattr(ch, "is_counter_hypothesis", False)) != bool(getattr(evidence_target_hyp, "is_counter_hypothesis", False))
                                 and _is_binary_mirror_hypothesis(ch, evidence_target_hyp)
                             ):
                                 if ev_entity.id not in ch.supporting_evidence_ids:
@@ -3563,6 +4311,12 @@ class InvestigationController:
                     "elapsed_seconds": round(time.monotonic() - investigation_started_monotonic, 3),
                 })
                 _flush_pending_events()
+                # Same state-consistency rule as EXPERIMENT_EXECUTION_FAILED: the step was
+                # rolled back, so the experiment must not remain executed-but-not-failed.
+                state_mgr.record_experiment_failed(
+                    f"{investigation_id}_{exp_code}",
+                    f"{type(timeout_exc).__name__}: {timeout_exc}",
+                )
                 stopping_reason = "QUERY_EXECUTION_TIMEOUT"
                 all_verifications_passed = False
                 break
@@ -3574,6 +4328,13 @@ class InvestigationController:
                     "elapsed_seconds": round(time.monotonic() - investigation_started_monotonic, 3),
                 })
                 _flush_pending_events()
+                # The step's DB transaction was rolled back, but the in-memory state
+                # may already have registered this experiment as executed. Record the
+                # failure so executed/failed ids agree with the stopping reason.
+                state_mgr.record_experiment_failed(
+                    f"{investigation_id}_{exp_code}",
+                    f"{type(experiment_exc).__name__}: {experiment_exc}",
+                )
                 stopping_reason = "EXPERIMENT_EXECUTION_FAILED"
                 all_verifications_passed = False
                 break
@@ -3700,6 +4461,10 @@ class InvestigationController:
                 current_posteriors=current_probs,
                 unresolved_adversarial_issues=unresolved_adversarial_issues,
                 counter_hypothesis_evaluated=counter_hypothesis_evaluated,
+                # The stopping engine must receive the real accumulated verification
+                # state. Omitting this argument used to inherit a success default,
+                # allowing early stopping after failed or blocked verification.
+                all_verifications_passed=all_verifications_passed,
                 missingness_classification=(latest_missingness_result.classification if latest_missingness_result else None),
             )
             authoritative_stop_decision = stop_decision
@@ -3783,6 +4548,7 @@ class InvestigationController:
                     "epistemic_impact": attack_res.epistemic_impact,
                     "simpsons_paradox": attack_res.simpsons_paradox_detected,
                     "outlier_sensitive": attack_res.outlier_sensitivity_high,
+                    "outlier_robust": getattr(attack_res, "outlier_robust", None),
                     "simpsons_reversal": (attack_res.details or {}).get("simpsons_reversal") if attack_res.is_falsified else None,
                 }
 
@@ -3808,6 +4574,7 @@ class InvestigationController:
                     "epistemic_impact": attack_res.epistemic_impact,
                     "simpsons_paradox_detected": bool(getattr(attack_res, "simpsons_paradox_detected", False)),
                     "outlier_sensitivity_high": bool(getattr(attack_res, "outlier_sensitivity_high", False)),
+                    "outlier_robust": getattr(attack_res, "outlier_robust", None),
                     "details": dict(getattr(attack_res, "details", None) or {}),
                 },
             )
@@ -3842,6 +4609,7 @@ class InvestigationController:
                 df=primary_df,
                 dimension_col=canonical_group_dimension_col,
                 target_metric_col=canonical_target_col,
+                aggregations=_multiverse_pinned_aggregations(semantic),
             )
             # Session 8: expose the specification curve to the analyst/verifier
             # (/investigations/{id} reads the `calculation.multiverse` prefix;
@@ -3899,38 +4667,44 @@ class InvestigationController:
                 primary_df, canonical_group_dimension_col, canonical_target_col
             )
 
-        # DEFECT-007: positive-claim verification is scoped to the LEADING
-        # hypothesis's own evidence lineage, not to the global experiment run.
-        #
-        # `all_verifications_passed` is deliberately retained for diagnostics
-        # and epistemic calibration, because an investigation may contain an
-        # unrelated failed/blocked auxiliary experiment. It must NOT erase a
-        # directly targeted, independently VERIFIED result that supports the
-        # proposition we are actually about to claim.
-        #
-        # A hypothesis can carry evidence IDs from both supporting and
-        # contradicting classifications. Only evidence with an actual
-        # VERIFIED proof is admissible here. This prevents a failed evidence
-        # node from being treated as verified merely because it was linked to
-        # the leading hypothesis.
-        leading_evidence_ids = set(
+        # Verification state is tracked both globally (including blocked or
+        # partial experiments) and against the leading hypothesis's SUPPORTING
+        # evidence lineage. Contradictory evidence is not support, and an old
+        # VERIFIED record must not survive a newer failed/partial verification.
+        leading_supporting_evidence_ids = set(
             getattr(leading_hyp, "supporting_evidence_ids", None) or []
-        ) | set(
-            getattr(leading_hyp, "contradicting_evidence_ids", None) or []
         )
-        leading_verified_evidence = False
-        if leading_evidence_ids:
+        has_verified_evidence = False
+        if leading_supporting_evidence_ids:
             with self.session_factory() as _verification_session:
-                leading_verified_evidence = (
-                    _verification_session.query(EvidenceVerification.id)
-                    .filter(
-                        EvidenceVerification.evidence_id.in_(leading_evidence_ids),
-                        EvidenceVerification.status == VerificationStatus.VERIFIED,
-                    )
-                    .first()
-                    is not None
+                _supporting_rows = (
+                    _verification_session.query(Evidence.id, Evidence.validation_status)
+                    .filter(Evidence.id.in_(leading_supporting_evidence_ids))
+                    .all()
                 )
-        has_verified_evidence = leading_verified_evidence
+                _supporting_validation = {
+                    str(row[0]): str(row[1] or "").strip().upper()
+                    for row in _supporting_rows
+                }
+                _verification_rows = (
+                    _verification_session.query(EvidenceVerification)
+                    .filter(EvidenceVerification.evidence_id.in_(leading_supporting_evidence_ids))
+                    .order_by(EvidenceVerification.created_at.asc(), EvidenceVerification.id.asc())
+                    .all()
+                )
+                _latest_supporting_verification = {}
+                for _vr in _verification_rows:
+                    _latest_supporting_verification[str(_vr.evidence_id)] = str(
+                        getattr(_vr, "status", "") or ""
+                    ).strip().upper()
+                from packages.analytics_core.src.governance.verification_gate import (
+                    has_current_verified_supporting_evidence,
+                )
+                has_verified_evidence = has_current_verified_supporting_evidence(
+                    leading_supporting_evidence_ids,
+                    evidence_validation_status_by_id=_supporting_validation,
+                    latest_verification_status_by_id=_latest_supporting_verification,
+                )
 
         # The assumption ledger was built before any experiment ran, so
         # INDEPENDENT_VERIFICATION (like FORECAST_GENERALIZATION above) was
@@ -4106,17 +4880,41 @@ class InvestigationController:
         # change what the analyst is allowed to claim, not merely what it reports.
         # Existing missingness sensitivity and analyst robustness outputs are used
         # to clear the corresponding review when they actually resolve it.
-        analyst_result = None
-        _analyst_robust = None
-        if analyst_result is not None:
-            _analyst_robust = getattr(analyst_result, "numbers", {}).get("robust")
-            if _analyst_robust is not True:
-                _analyst_robust = None
+        # Outlier-robustness evidence comes from the adversarial attack that really ran
+        # (trimmed-mean and median re-ranking). It resolves the OUTLIER_ROBUSTNESS_REVIEW
+        # only when it is explicitly True; a missing or skipped attack stays unresolved.
+        # (A previous `analyst_result = None` + `if analyst_result is not None:` pair here
+        # was dead code, so this review could never be cleared.)
+        _attack_outlier_robust = getattr(attack_res, "outlier_robust", None)
+        _outlier_sensitive_flag = bool(getattr(attack_res, "outlier_sensitivity_high", False))
+        # When the attack could not run (e.g. an ambiguous question that names no columns, so the
+        # attack has no resolved dimension), it can never clear the outlier review. The data-quality
+        # gate recorded the exact metric and grouping column it flagged, so check exactly that pair.
+        if _attack_outlier_robust is None and not _outlier_sensitive_flag:
+            _flagged_checks = []
+            for _qf in (getattr(quality_assessment, "contextual_findings", None) or []):
+                if getattr(_qf, "finding_id", "") == "OUTLIERS_CONCENTRATED_BY_GROUP":
+                    _qs = getattr(_qf, "scope", None) or {}
+                    _flagged_checks.append(
+                        assess_outlier_robustness(primary_df, _qs.get("grouping_column"), _qs.get("metric_column"))
+                    )
+            if _flagged_checks:
+                if any(c.get("outlier_sensitive") for c in _flagged_checks):
+                    _outlier_sensitive_flag = True
+                elif all(c.get("robust") is True for c in _flagged_checks):
+                    _attack_outlier_robust = True
+            self.checkpointer.record_event(
+                investigation_id=investigation_id,
+                execution_id=exec_id,
+                event_type="investigation.outlier_robustness.flagged_pair_check",
+                payload={"checks": _flagged_checks, "robust": _attack_outlier_robust,
+                         "outlier_sensitive": _outlier_sensitive_flag},
+            )
         final_quality_decision = assess_downstream_impact(
             quality_assessment,
             analysis_plan.task,
             missingness_classification=(latest_missingness_result.classification if latest_missingness_result else None),
-            outlier_robust=_analyst_robust if _analyst_robust is not None else (False if getattr(attack_res, "outlier_sensitivity_high", False) else None),
+            outlier_robust=(False if _outlier_sensitive_flag else (True if _attack_outlier_robust is True else None)),
             selection_bias_resolved=False,
             temporal_issues_resolved=not bool(getattr(quality_assessment, "temporal_issues", []) or []),
             include_unresolved_without_runtime_evidence=False,
@@ -4182,7 +4980,13 @@ class InvestigationController:
             if analysis_plan is not None
             else GateDesignStatus.UNKNOWN
         )
-        _contract_assumptions = list(getattr(analysis_plan, "limitations", []) or [])
+        # A data-quality safeguard whose downstream review has been cleared is no longer an
+        # open assumption; keep only the ones that are still unresolved.
+        _resolved_quality = set(getattr(final_quality_decision, "resolved_findings", []) or [])
+        _contract_assumptions = [
+            _item for _item in list(getattr(analysis_plan, "limitations", []) or [])
+            if not any(f"Data-quality safeguard: {_fid} " in str(_item) for _fid in _resolved_quality)
+        ]
         _causal_strategy = getattr(causal_gate_res.status, "value", str(causal_gate_res.status)) if causal_gate_res.is_identifiable else None
         _structured_gate = evaluate_gate(
             claim_type=_requested_claim,
@@ -4287,7 +5091,7 @@ class InvestigationController:
         verdict_eval = VerdictEngine.evaluate_verdict(
             leading_hypothesis_code=leading_hyp.hypothesis_code,
             leading_hypothesis_posterior=top_prob,
-            all_verifications_passed=has_verified_evidence,
+            all_verifications_passed=(all_verifications_passed and has_verified_evidence),
             adversarial_attack_survived=attack_res.attack_status in ["SURVIVED", "INCONCLUSIVE", "ROBUST"],
             variance_explained_pct=variance_explained_pct,
             causal_identifiable=causal_gate_res.is_identifiable,
@@ -4366,7 +5170,7 @@ class InvestigationController:
         epistemic_vector = EpistemicCalibrationEngine.calibrate_epistemic_state(
             posterior_probability=top_prob,
             evidence_count=len(state_mgr.get_executed_experiments()),
-            all_verifications_passed=has_verified_evidence,
+            all_verifications_passed=(all_verifications_passed and has_verified_evidence),
             multiverse_robustness=(multiverse_report.robustness_score if getattr(multiverse_report, "applicable", True) else None),
             adversarial_survived=attack_res.attack_status in ["SURVIVED", "INCONCLUSIVE", "ROBUST"],
             sample_size=len(primary_df),
@@ -4472,12 +5276,55 @@ class InvestigationController:
                 explanatory=_analyst_predictors,
                 time_col=canonical_time_col,
                 default_aggregation=_agg_default,
+                approved_contract=locked_contract or (
+                    # The human-guidance event is durable and has already been
+                    # validated above.  Project it into the exact immutable
+                    # contract consumed by the deterministic executor, instead
+                    # of letting that executor reinterpret the original text.
+                    # This is deliberately local to supported descriptive
+                    # operations; investigations retain their specialist path.
+                    __import__("dataclasses").replace(
+                        __import__("packages.analytics_core.src.intelligence.canonical_question_contract", fromlist=["compile_canonical_question_contract"]).compile_canonical_question_contract(question, analyst_df),
+                        task_family="COUNT" if str((getattr(analysis_plan, "estimand", {}) or {}).get("requested_aggregation") or "").upper() in {"COUNT", "COUNT_DISTINCT"} else "DESCRIPTIVE",
+                        estimand="count" if str((getattr(analysis_plan, "estimand", {}) or {}).get("requested_aggregation") or "").upper() in {"COUNT", "COUNT_DISTINCT"} else "descriptive",
+                        target_column=(None if str((getattr(analysis_plan, "estimand", {}) or {}).get("requested_aggregation") or "").upper() == "COUNT" else canonical_target_col),
+                        grouping_columns=tuple([canonical_group_dimension_col] if canonical_group_dimension_col else []),
+                        requested_aggregation=(
+                            "ROW_COUNT" if str((getattr(analysis_plan, "estimand", {}) or {}).get("requested_aggregation") or "").upper() == "COUNT"
+                            else str((getattr(analysis_plan, "estimand", {}) or {}).get("requested_aggregation") or _agg_default or "").upper() or None
+                        ),
+                        completeness="COMPLETE",
+                        unresolved_roles=(),
+                        unresolved_semantics=(),
+                        resolution_evidence={
+                            "source": "validated_human_guidance",
+                            "guidance": dict(human_guidance_payload),
+                            "scope_filter_applied_before_execution": human_guidance_payload.get("scope_filter"),
+                        },
+                    ) if human_guidance_payload and (
+                        human_guidance_payload.get("selected_metric")
+                        or human_guidance_payload.get("selected_aggregation")
+                        or human_guidance_payload.get("selected_group_dimension")
+                        or human_guidance_payload.get("scope_filter")
+                        or human_guidance_payload.get("custom_instruction")
+                    ) else None
+                ),
             )
         except Exception as analyst_exc:  # noqa: BLE001 -- the answer layer must never fail an investigation
             analyst_result = None
             self.checkpointer.record_event(
                 investigation_id=investigation_id, execution_id=exec_id,
                 event_type="investigation.analyst_result_failed", payload={"error": str(analyst_exc)},
+            )
+        if (
+            locked_contract is not None
+            and locked_contract.family in {"COUNT", "SIMPLE_AGGREGATE"}
+            and analyst_result is None
+        ):
+            return _complete_inconclusive(
+                "The locked descriptive contract could not be executed and independently verified; "
+                "no alternate interpretation was substituted.",
+                failure_class=FailureTaxonomy.VERIFICATION_FAILURE,
             )
         analyst_verdict_note = ""
         # Churn/confounding questions carry identifiability logic (cohort traps, Simpson's) that the
@@ -4498,6 +5345,19 @@ class InvestigationController:
             or ("churn" in (question or "").lower() and not _pure_breakdown_q)
             or "confound" in str(direct_ans or "").lower()
         )
+        # A locked, human-confirmed descriptive contract that the canonical executor ran and
+        # independently verified is a recomputed fact; the churn loop's comparative
+        # identifiability logic polices causal/comparative readings and does not own it.
+        _canonical_descriptive_verified = bool(
+            locked_contract is not None
+            and locked_contract.family in {"COUNT", "SIMPLE_AGGREGATE"}
+            and analyst_result is not None
+            and isinstance(getattr(analyst_result, "numbers", None), dict)
+            and (analyst_result.numbers.get("verification") or {}).get("status") == "verified"
+            and "canonical_contract" in analyst_result.numbers
+        )
+        if _canonical_descriptive_verified:
+            _loop_owns_answer = False
         if analyst_result is not None and not _loop_owns_answer and verdict_eval.verdict_type != "REFUTED":
             _loop_answer = direct_ans
             _loop_verdict = verdict_eval.verdict_type
@@ -4538,7 +5398,10 @@ class InvestigationController:
                     main_find = f"{analyst_result.headline} (deterministic recomputation from the resolved contract columns)"
                 else:
                     direct_ans = analyst_result.to_text()
-            elif analyst_result.finding == "none" and _data_clear and analyst_result.numbers.get("adequate_power"):
+            elif (
+                analyst_result.finding == "none" and _data_clear and analyst_result.numbers.get("adequate_power")
+                and not analyst_result.numbers.get("mean_rank_disagreement")
+            ):
                 # DEFECT-026 Limit 1: A powered null result is NO_DETECTABLE_EFFECT!
                 verdict_eval.verdict_type = "NO_DETECTABLE_EFFECT"
                 calc_pwr = float(analyst_result.numbers.get("power", 0.95))
@@ -4565,6 +5428,36 @@ class InvestigationController:
                 direct_ans = analyst_result.to_text()
                 if _loop_answer and not analyst_result.supersedes_loop:
                     main_find = f"{main_find} Scientific-loop statement: {_loop_answer}"
+            # Two analyst-layer findings make a decisive pooled verdict unsafe, whichever branch
+            # above produced it: (a) the mean-based and rank-based tests disagree about a "no
+            # difference" result, and (b) the effect has opposite signs in different strata.
+            _analyst_flags = analyst_result.numbers or {}
+            _unsafe_reason = None
+            if _analyst_flags.get("stratum_effect_reversal"):
+                _unsafe_reason = (
+                    f"the effect reverses sign across {_analyst_flags.get('stratum_column', 'strata')} strata, "
+                    "so a pooled verdict would misstate it"
+                )
+            elif _analyst_flags.get("mean_rank_disagreement"):
+                _unsafe_reason = (
+                    "the mean-based and rank-based tests disagree, so 'no detectable difference' is not supported"
+                )
+            if _unsafe_reason and verdict_eval.verdict_type in ("DIAGNOSED", "STATISTICALLY_SIGNIFICANT", "NO_DETECTABLE_EFFECT"):
+                analyst_verdict_note = (
+                    f"{analyst_verdict_note} Downgraded from {verdict_eval.verdict_type} to INCONCLUSIVE: {_unsafe_reason}."
+                ).strip()
+                verdict_eval.verdict_type = "INCONCLUSIVE"
+                verdict_eval.confidence_score = 0.0
+                # The stored confidence follows the loop's posterior; an inconclusive verdict must not
+                # carry a high one.
+                top_prob = min(top_prob, 0.5)
+                direct_ans = analyst_result.to_text()
+                verdict_eval.direct_answer = direct_ans
+            elif _unsafe_reason and verdict_eval.verdict_type == "INCONCLUSIVE":
+                # Already inconclusive (e.g. the claim gate withheld the claim), but the loop's posterior
+                # can still be ~1.0 from refuting the counter-hypothesis alone. An inconclusive verdict
+                # must not be reported with a decisive confidence.
+                top_prob = min(top_prob, 0.5)
             if analyst_verdict_note:
                 main_find = f"{main_find} {analyst_verdict_note}"
             self.checkpointer.record_event(
@@ -4572,6 +5465,80 @@ class InvestigationController:
                 event_type="investigation.analyst_result",
                 payload={**analyst_result.to_dict(), "verdict_note": analyst_verdict_note, "final_verdict": verdict_eval.verdict_type},
             )
+            # Milestone M1: Post-execution trace reconciliation against approved contract
+            if locked_contract is not None:
+                exec_metric = getattr(analyst_result, "target", None)
+                exec_group = getattr(analyst_result, "group", None)
+                from packages.analytics_core.src.governance.plan_reconciliation import (
+                    reconcile_execution_with_contract,
+                )
+                _recon = reconcile_execution_with_contract(locked_contract, exec_metric, exec_group)
+                recon_status = _recon["status"]
+                discrepancies = list(_recon["discrepancies"]) + list(_recon["unverifiable"])
+
+                self.checkpointer.record_event(
+                    investigation_id=investigation_id,
+                    execution_id=exec_id,
+                    event_type="investigation.execution_reconciliation",
+                    payload={
+                        "status": recon_status,
+                        "locked_contract_hash": locked_contract.contract_hash(),
+                        "executed_metric": exec_metric,
+                        "executed_group": exec_group,
+                        "executed_headline": analyst_result.headline,
+                        "discrepancies": discrepancies,
+                    },
+                )
+                if recon_status == "MISMATCH" and verdict_eval.verdict_type in (
+                    "DIAGNOSED", "STATISTICALLY_SIGNIFICANT", "NO_DETECTABLE_EFFECT",
+                ):
+                    # What executed contradicts what the analyst approved: do not present a decisive verdict.
+                    main_find = (
+                        f"{main_find} Downgraded from {verdict_eval.verdict_type} to INCONCLUSIVE: "
+                        f"execution did not match the approved plan ({'; '.join(discrepancies)})."
+                    ).strip()
+                    verdict_eval.verdict_type = "INCONCLUSIVE"
+                    verdict_eval.confidence_score = 0.0
+                    top_prob = min(top_prob, 0.5)
+            # An inconclusive verdict caused by an ambiguous grouping must say so. The system never
+        # guesses a grouping column, so the person has to be told what to do next.
+        try:
+            _g_dim, _g_status, _g_cands = resolve_group_dimension(semantic)
+        except Exception:  # noqa: BLE001
+            _g_dim, _g_status, _g_cands = "", "RESOLVED", []
+        if (
+            _g_status == "AMBIGUOUS"
+            and verdict_eval.verdict_type == "INCONCLUSIVE"
+            and not canonical_group_dimension_col
+            and getattr(analysis_plan, "task", "") in {"COMPARISON", "SEGMENTATION", "DIAGNOSTIC"}
+            and "did not say which column" not in str(direct_ans or "")
+        ):
+            # Only columns that could genuinely serve as a comparison grouping are offered: not
+            # identifiers or free-text (near-unique) and not constants.
+            def _usable_group_col(_c: str) -> bool:
+                try:
+                    _s = primary_df[_c]
+                    _n = int(_s.nunique(dropna=True))
+                    _cl = str(_c).lower()
+                    if _cl in ("id", "key", "uuid", "guid") or _cl.endswith(("_id", "_key", "_uuid", "_ref")):
+                        return False
+                    return 2 <= _n <= 40 and _n < 0.5 * max(1, len(_s))
+                except Exception:  # noqa: BLE001
+                    return False
+            _g_cands = [str(c) for c in _g_cands if _usable_group_col(str(c))]
+            if not _g_cands:
+                _g_cands = [str(c) for c in (resolve_group_dimension(semantic)[2] or [])]
+            _eg = ", ".join(_g_cands[:3])
+            _tgt = canonical_target_col or "the metric"
+            _grouping_hint = (
+                f"The question did not say which column to group by ({len(_g_cands)} candidate columns, e.g. {_eg}), "
+                f"so none was guessed. Name the column to compare (for example, 'Why did {_tgt} vary across "
+                f"{_g_cands[0]}?') to get a grouped answer."
+            )
+            direct_ans = f"{direct_ans} {_grouping_hint}".strip()
+            main_find = f"{main_find} {_grouping_hint}".strip()
+            verdict_eval.direct_answer = direct_ans
+
         # Phase 11 Part 15: attach the analyst-readable metric-semantics
         # rationale to the human-facing finding, so the verdict explains HOW
         # the target metric was aggregated and why (not merely the number).
@@ -4600,6 +5567,23 @@ class InvestigationController:
                 f"{latest_missingness_result.rationale}]"
             )
 
+        # Outlier disclosure: a positive verdict whose effect disappears when the top 1% of values
+        # is trimmed (the adversarial attack's own finding) must say so in the answer itself,
+        # whichever path produced the answer text. The verdict tier is unchanged: this is a
+        # disclosure that the result rests on a few extreme rows, not a refutation.
+        if (
+            getattr(attack_res, "outlier_sensitivity_high", False)
+            and verdict_eval.verdict_type in ("DIAGNOSED", "STATISTICALLY_SIGNIFICANT")
+            and "outlier-sensitive" not in str(direct_ans or "")
+        ):
+            _oc_note = (
+                "Note: this result is outlier-sensitive -- trimming the top 1% of values removes most of the "
+                "difference between segments, so it rests on a few extreme rows. Inspect those rows before acting on it."
+            )
+            direct_ans = f"{direct_ans} [{_oc_note}]"
+            main_find = f"{main_find} {_oc_note}"
+            verdict_eval.direct_answer = direct_ans
+
         # Data-quality qualification gate (moved here from earlier in the
         # function -- see the NOTE above `assess_downstream_impact`'s call
         # site): applied after verdict_eval, direct_ans, and main_find have
@@ -4627,6 +5611,45 @@ class InvestigationController:
                 main_find = f"{main_find} {quality_note}"
                 verdict_eval.direct_answer = direct_ans
                 verdict_eval.main_finding = main_find
+
+        # FINAL CLAIM-INTEGRITY GATE (P0): this is deliberately the last verdict
+        # mutation point before the final provenance manifest/response assembly.
+        # Any analyst overlay, reconciliation, grouping note, or quality handling
+        # above must not be able to restore an inferential claim after failed,
+        # missing, partial, or stale verification.
+        from packages.analytics_core.src.governance.verification_gate import verification_gate_reason
+        _verification_block = verification_gate_reason(
+            verdict_eval.verdict_type,
+            all_verifications_passed=(all_verifications_passed is True),
+            has_verified_evidence=(has_verified_evidence is True),
+        )
+        if _verification_block:
+            _blocked_verdict = verdict_eval.verdict_type
+            verdict_eval.verdict_type = "INCONCLUSIVE"
+            verdict_eval.confidence_score = 0.0
+            top_prob = min(top_prob, 0.5)
+            analyst_verdict_note = (
+                f"Downgraded from {_blocked_verdict} to INCONCLUSIVE: {_verification_block}."
+            )
+            main_find = f"{main_find} {analyst_verdict_note}".strip()
+            direct_ans = (
+                "The analysis could not establish a conclusive inferential result because "
+                "verification did not pass. No significance or causal claim is made."
+            )
+            verdict_eval.direct_answer = direct_ans
+            verdict_eval.main_finding = main_find
+            self.checkpointer.record_event(
+                investigation_id=investigation_id,
+                execution_id=exec_id,
+                event_type="investigation.final_verification_gate_blocked",
+                payload={
+                    "blocked_verdict": _blocked_verdict,
+                    "final_verdict": "INCONCLUSIVE",
+                    "all_verifications_passed": all_verifications_passed is True,
+                    "has_verified_evidence": has_verified_evidence is True,
+                    "reason": _verification_block,
+                },
+            )
 
         manifest_hash = ProvenanceEngine.compute_reproducible_manifest_hash(
             investigation_id=investigation_id,

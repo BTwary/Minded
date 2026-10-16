@@ -375,6 +375,9 @@ class UniformityEvaluator:
         sorted_df = result_df.reindex(result_df[val_col].abs().sort_values(ascending=False).index)
         top_share = float(abs(sorted_df.iloc[0][val_col]) / total)
         threshold = prediction.threshold or 0.45
+        n_categories = len(sorted_df)
+        if n_categories > 0 and threshold <= (1.0 / n_categories):
+            threshold = (1.0 / n_categories) + 0.10
 
         observed = {
             "dimension": dim_col,

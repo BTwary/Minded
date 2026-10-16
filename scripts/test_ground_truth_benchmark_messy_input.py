@@ -146,6 +146,8 @@ class TestGroundTruthBenchmarkMessyInput(unittest.TestCase):
             df=df,
             table_name="cloud_costs",
             query_sql="SELECT tier_segment, SUM(cost_metric) as val FROM cloud_costs GROUP BY tier_segment ORDER BY val DESC;",
+            # Multi-row results must declare which column is the primary metric.
+            primary_result_column="val",
         )
         res_df = exec_result.result_df
         top_segment = res_df.iloc[0]["tier_segment"]
@@ -181,6 +183,8 @@ class TestGroundTruthBenchmarkMessyInput(unittest.TestCase):
             primary_metric=top_val,
             benchmark_metric=total_cost / 4.0,
             effect_size_eta_sq=eta_sq,
+            # Without sample_size the (deprecated) API deliberately returns neutral evidence.
+            sample_size=len(df),
         )
         posteriors, entropy_delta = BeliefEngine.compute_bayesian_posteriors(
             priors=[h1.prior_probability, h2.prior_probability],

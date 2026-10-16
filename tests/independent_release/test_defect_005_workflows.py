@@ -112,6 +112,30 @@ class TestChurnWorkflow(unittest.TestCase):
         self.assertNotIn("will churn", (inv.direct_answer or "").lower())
         self.assertNotIn("predicted to churn", (inv.direct_answer or "").lower())
 
+    def test_predictive_question_clarification_on_historical_binary_label(self):
+        """When customers dataset has a binary churned column, prospective
+        risk questions ('Which customers are likely to churn?') must trigger
+        clarification / AMBIGUOUS_SCOPE, never auto-proceed as a simple
+        SUM(churned) GROUP BY customer_id ranking."""
+        from packages.analytics_core.src.governance.guided_investigation import (
+            evaluate_guided_investigation,
+            AmbiguityStatus,
+        )
+        import pandas as pd
+
+        df = pd.DataFrame({
+            "customer_id": [f"C{i}" for i in range(10)],
+            "segment": ["Consumer", "Corporate"] * 5,
+            "churned": [1, 0, 1, 0, 0, 1, 0, 0, 0, 1],
+        })
+        prop = evaluate_guided_investigation("Which customers are likely to churn?", df=df)
+        self.assertEqual(prop.task, "PREDICTION")
+        self.assertEqual(prop.ambiguity_status, AmbiguityStatus.AMBIGUOUS_SCOPE)
+        self.assertFalse(prop.can_auto_proceed)
+        self.assertIn("likely to churn", prop.clarification_prompt.lower())
+        self.assertIn("historical", prop.clarification_prompt.lower())
+
+
 
 class TestSegmentationWorkflow(unittest.TestCase):
     def test_positive_case_products_by_category(self):

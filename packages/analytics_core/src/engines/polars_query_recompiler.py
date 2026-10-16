@@ -193,12 +193,19 @@ def _strip_outer_numeric_cast(expr: str) -> str:
     return m.group(1).strip() if m else expr.strip()
 
 
+def _sql_sum(expr: pl.Expr) -> pl.Expr:
+    """SQL ``SUM`` semantics: a group with no non-NULL input sums to NULL, whereas polars' ``sum()``
+    returns 0. Without this the independent recompute disagreed with the SQL result on every group
+    whose only values were missing, and a correct result was rejected as ``result_relation_disagreement``."""
+    return pl.when(expr.count() > 0).then(expr.sum()).otherwise(None)
+
+
 def _sum_expr(inner: str, columns: set[str]) -> Optional[pl.Expr]:
     factors = _split_top_level(inner, "*")
     if len(factors) == 2 and all(f in columns for f in factors):
-        return (pl.col(factors[0]) * pl.col(factors[1])).sum()
+        return _sql_sum(pl.col(factors[0]) * pl.col(factors[1]))
     if inner in columns:
-        return pl.col(inner).sum()
+        return _sql_sum(pl.col(inner))
     return None
 
 

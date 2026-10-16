@@ -400,14 +400,9 @@ class IntentEngine:
             elif len(unique) == 1:
                 target_metric_hint = unique[0]
 
-        if not target_metric_hint and len(explicit_targets) == 1:
-            candidate = explicit_targets[0]
-            if not re.search(r"(^|_)(id|key|code|uuid)$", candidate, re.I):
-                target_metric_hint = candidate
-
         group_phrases: List[str] = []
         for match in re.finditer(
-            r"\b(?:by|per|across|within|for each)\s+(.+?)(?=\s+(?:after|before|during|since|between|where|when)\b|\?|$)",
+            r"\b(?:by|per|across|within|for each|in each)\s+(.+?)(?=\s+(?:after|before|during|since|between|where|when)\b|\?|$)",
             q_scan,
             re.I,
         ):
@@ -432,6 +427,12 @@ class IntentEngine:
         if which_group:
             group_phrases.insert(0, which_group.group(1).strip(" ,"))
 
+        if not target_metric_hint and len(explicit_targets) == 1:
+            candidate = explicit_targets[0]
+            is_group_candidate = any(_contains_phrase(candidate, gp) or _contains_phrase(gp, candidate) for gp in group_phrases)
+            if not is_group_candidate and not re.search(r"(^|_)(id|key|code|uuid)$", candidate, re.I):
+                target_metric_hint = candidate
+
         for phrase in group_phrases:
             resolved = _resolve_phrase(phrase, columns, _DIMENSION_ALIASES)
             if resolved and resolved != target_metric_hint:
@@ -440,6 +441,10 @@ class IntentEngine:
             matches = _schema_phrase_matches(phrase, columns)
             if len(matches) == 1 and matches[0] != target_metric_hint:
                 dimension_hint = matches[0]
+                break
+            if not columns and phrase:
+                # When schema columns are not provided, keep the extracted dimension phrase as hint
+                dimension_hint = _normalize_phrase(phrase)
                 break
 
         if not dimension_hint:

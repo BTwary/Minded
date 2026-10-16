@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    # Running as `python scripts/release_gate.py` puts scripts/ (not the repo root) on sys.path,
+    # which made the in-process `scripts.audit_frontend_lock` import fail silently.
+    sys.path.insert(0, str(ROOT))
 MANIFEST = ROOT / "tests" / "independent_release" / "manifest.toml"
 
 

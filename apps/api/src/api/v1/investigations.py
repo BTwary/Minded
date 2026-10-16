@@ -1,18 +1,22 @@
 """Durable Asynchronous Investigations API with Distributed Job Queue, Live SSE Replay, and Human Decision Support."""
 import asyncio
 import json
+import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+from sqlalchemy import delete, select, tuple_
 from sqlalchemy.orm import Session
 
 from apps.api.src.core.database import get_db, SessionLocal
 from apps.api.src.core.security import get_current_user, verify_project_ownership, get_user_authorized_project_ids
 from apps.api.src.models.entities import (
     User,
+    AnalysisRun,
+    AuditLog,
     Investigation,
     InvestigationJob,
     InvestigationExecution,
@@ -31,6 +35,10 @@ from apps.api.src.models.entities import (
     InvestigationEvent,
     DecisionRecommendationRecord,
     Dataset,
+    DatasetVersion,
+    AlertEvent,
+    AlertRule,
+    Project,
     ClaimGateDecision,
     InvestigationContract,
     InvestigationDataReadiness,
@@ -57,6 +65,21 @@ from packages.analytics_core.src.execution.state_machine import (
 )
 
 router = APIRouter(prefix="/investigations", tags=["investigations"])
+logger = logging.getLogger(__name__)
+
+
+class ListFieldPatch(BaseModel):
+    add: Optional[List[str]] = None
+    remove: Optional[List[str]] = None
+    replace: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def validate_patch(self):
+        if self.replace is not None and (self.add is not None or self.remove is not None):
+            raise ValueError("'replace' cannot be combined with 'add' or 'remove'.")
+        if self.add is None and self.remove is None and self.replace is None:
+            raise ValueError("At least one of 'add', 'remove', or 'replace' is required.")
+        return self
 
 
 class InvestigationCreateRequest(BaseModel):
@@ -65,6 +88,77 @@ class InvestigationCreateRequest(BaseModel):
     target_metric: Optional[str] = "revenue"
     priority: Optional[int] = 10
     dataset_ids: Optional[List[str]] = None
+    monitoring_event_id: Optional[str] = None
+    selected_metric: Optional[str] = None
+    selected_aggregation: Optional[str] = None
+    selected_group_dimension: Optional[str] = None
+    confirmed_assumptions: Optional[Union[List[str], ListFieldPatch]] = None
+    scope_filter: Optional[str] = None
+    selected_dataset: Optional[str] = None
+    clarification_response: Optional[str] = None
+    custom_instruction: Optional[str] = None
+    # Typed patch against the canonical intent contract, e.g. {"set":{"time_column":"created_at"}}.
+    intent_patch: Optional[Dict[str, Any]] = None
+    pending_intent_slot: Optional[str] = None
+    plan_hash: Optional[str] = None
+
+
+_GUIDANCE_KEYS = {
+    "selected_metric",
+    "selected_aggregation",
+    "selected_group_dimension",
+    "selected_dataset",
+    "confirmed_assumptions",
+    "scope_filter",
+    "clarification_response",
+    "custom_instruction",
+    "intent_patch",
+    "pending_intent_slot",
+}
+
+
+class PreAnalysisInterpretRequest(BaseModel):
+    project_id: str
+    question: str
+    dataset_ids: Optional[List[str]] = None
+    # Optional human guidance. When present, the preview is produced by the same resolver that
+    # investigation creation uses, so the plan hash returned here is the hash the API will
+    # accept for exactly this guidance.
+    selected_metric: Optional[str] = None
+    selected_aggregation: Optional[str] = None
+    selected_group_dimension: Optional[str] = None
+    selected_dataset: Optional[str] = None
+    confirmed_assumptions: Optional[Union[List[str], ListFieldPatch]] = None
+    scope_filter: Optional[str] = None
+    clarification_response: Optional[str] = None
+    custom_instruction: Optional[str] = None
+    intent_patch: Optional[Dict[str, Any]] = None
+    pending_intent_slot: Optional[str] = None
+
+
+class HumanReviewSubmissionRequest(BaseModel):
+    action: str  # ACCEPT | REQUEST_CORRECTION | REJECT | REDO
+    comments: Optional[str] = None
+    modified_parameters: Optional[Dict[str, Any]] = None
+
+
+class GuidanceRevisionRequest(BaseModel):
+    """Patch one or more intent fields before the analytical contract is locked.
+
+    Empty fields are deliberately omitted from the event so a correction to an
+    aggregation, for example, cannot erase a previously chosen grouping.
+    """
+    selected_metric: Optional[str] = None
+    selected_aggregation: Optional[str] = None
+    selected_group_dimension: Optional[str] = None
+    selected_dataset: Optional[str] = None
+    confirmed_assumptions: Optional[Union[List[str], ListFieldPatch]] = None
+    scope_filter: Optional[str] = None
+    clarification_response: Optional[str] = None
+    custom_instruction: Optional[str] = None
+    intent_patch: Optional[Dict[str, Any]] = None
+    pending_intent_slot: Optional[str] = None
+    plan_hash: Optional[str] = None
 
 
 class DecisionResponseRequest(BaseModel):
@@ -86,6 +180,117 @@ class VerificationSignoffRequest(BaseModel):
     packet_fingerprint: Optional[str] = None
 
 
+def _dispatch_ready_investigation(
+    *,
+    db: Session,
+    investigation_id: str,
+    priority: int,
+    actor: str,
+    question: str,
+    project_id: str,
+    created_at: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
+    if inv is None:
+        raise HTTPException(status_code=404, detail="Investigation not found.")
+    if inv.status != InvestigationState.READY:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Only READY investigations can be dispatched (current status: {inv.status}).",
+        )
+    locked_contract = (
+        db.query(InvestigationEvent)
+        .filter(
+            InvestigationEvent.investigation_id == investigation_id,
+            InvestigationEvent.event_type == "investigation.canonical_contract_locked",
+        )
+        .first()
+    )
+    if locked_contract is None:
+        raise HTTPException(status_code=409, detail="Investigation has no locked canonical contract.")
+
+    try:
+        job_id = get_default_queue_provider().enqueue(
+            investigation_id=investigation_id,
+            priority=priority,
+            db=db,
+        )
+        db.add(InvestigationEvent(
+            id=f"EVT-{gen_uuid()[:8]}",
+            investigation_id=investigation_id,
+            event_type="investigation.dispatch_succeeded",
+            event_payload_json={"job_id": job_id},
+            timestamp=datetime.now(timezone.utc),
+        ))
+        transition_investigation(
+            db=db,
+            investigation_id=investigation_id,
+            to_state=InvestigationState.QUEUED,
+            expected_from=InvestigationState.READY,
+            actor=actor,
+        )
+        return {
+            "investigation_id": investigation_id,
+            "job_id": job_id,
+            "status": InvestigationState.QUEUED,
+            "question": question,
+            "project_id": project_id,
+            "created_at": (created_at or inv.created_at).isoformat() if (created_at or inv.created_at) else None,
+        }
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to dispatch READY investigation %s", investigation_id)
+        current_inv = (
+            db.query(Investigation)
+            .filter(Investigation.id == investigation_id)
+            .first()
+        )
+        if current_inv and current_inv.status in {
+            InvestigationState.QUEUED,
+            InvestigationState.CLAIMED,
+            InvestigationState.RUNNING,
+        }:
+            active_job = (
+                db.query(InvestigationJob)
+                .filter(
+                    InvestigationJob.investigation_id == investigation_id,
+                    InvestigationJob.status.in_(
+                        [JobState.QUEUED, JobState.CLAIMED, JobState.RUNNING]
+                    ),
+                )
+                .order_by(InvestigationJob.created_at.desc())
+                .first()
+            )
+            return {
+                "investigation_id": investigation_id,
+                "job_id": active_job.id if active_job else None,
+                "status": current_inv.status,
+                "question": question,
+                "project_id": project_id,
+                "created_at": (created_at or current_inv.created_at).isoformat()
+                if (created_at or current_inv.created_at)
+                else None,
+            }
+        db.add(InvestigationEvent(
+            id=f"EVT-{gen_uuid()[:8]}",
+            investigation_id=investigation_id,
+            event_type="investigation.dispatch_failed",
+            event_payload_json={"error": f"{type(exc).__name__}: {exc}"},
+            timestamp=datetime.now(timezone.utc),
+        ))
+        db.commit()
+        return {
+            "investigation_id": investigation_id,
+            "job_id": None,
+            "status": InvestigationState.READY,
+            "question": question,
+            "project_id": project_id,
+            "created_at": (created_at or inv.created_at).isoformat() if (created_at or inv.created_at) else None,
+            "dispatch_error": f"{type(exc).__name__}: {exc}",
+            "retry_endpoint": f"/investigations/{investigation_id}/dispatch",
+        }
+
+
 @router.post("")
 def create_investigation(
     payload: InvestigationCreateRequest,
@@ -104,13 +309,75 @@ def create_investigation(
     # runtime must never silently drop a requested dataset and continue with a
     # narrower population than the analyst selected.
     requested_dataset_ids = list(payload.dataset_ids or [])
+    monitoring_event = None
+    monitoring_context = None
+    analysis_question = payload.question
+    pinned_dataset_version_id = None
+    if payload.monitoring_event_id:
+        monitoring_event = (
+            db.query(AlertEvent)
+            .join(AlertRule, AlertEvent.rule_id == AlertRule.id)
+            .filter(
+                AlertEvent.id == payload.monitoring_event_id,
+                AlertEvent.project_id == payload.project_id,
+                AlertRule.project_id == payload.project_id,
+            )
+            .first()
+        )
+        if monitoring_event is None:
+            raise HTTPException(status_code=404, detail="Selected monitoring event is unavailable.")
+        if not monitoring_event.dataset_id or not monitoring_event.dataset_version_id:
+            raise HTTPException(status_code=409, detail="The selected alert has no recorded dataset-version scope.")
+        source_dataset = db.query(Dataset).filter(
+            Dataset.id == monitoring_event.dataset_id,
+            Dataset.project_id == payload.project_id,
+        ).first()
+        source_version = db.query(DatasetVersion).filter(
+            DatasetVersion.id == monitoring_event.dataset_version_id,
+            DatasetVersion.dataset_id == monitoring_event.dataset_id,
+            DatasetVersion.version_number == monitoring_event.dataset_version,
+        ).first()
+        if (
+            source_dataset is None
+            or source_version is None
+            or source_dataset.current_version != monitoring_event.dataset_version
+            or (
+                monitoring_event.dataset_fingerprint
+                and source_version.content_hash != monitoring_event.dataset_fingerprint
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="The alert's exact source snapshot is unavailable or no longer current. Restore that snapshot before investigating; another version will not be substituted.",
+            )
+        event_dataset_ids = [monitoring_event.dataset_id]
+        if requested_dataset_ids and requested_dataset_ids != event_dataset_ids:
+            raise HTTPException(status_code=400, detail="Monitoring follow-up scope must remain the selected event's dataset.")
+        requested_dataset_ids = event_dataset_ids
+        pinned_dataset_version_id = source_version.id
+        monitoring_context = {
+            "event_id": monitoring_event.id,
+            "dataset_id": source_dataset.id,
+            "dataset_version": source_version.version_number,
+            "dataset_version_id": source_version.id,
+            "dataset_fingerprint": source_version.content_hash,
+            "metric": monitoring_event.metric_name,
+            "baseline_value": monitoring_event.expected_value,
+            "observed_value": monitoring_event.current_value,
+            "deviation_percentage": monitoring_event.deviation_percentage,
+            "threshold_pct_change": db.query(AlertRule.threshold_pct_change)
+                .filter(AlertRule.id == monitoring_event.rule_id).scalar(),
+            "evidence_summary": monitoring_event.evidence_summary,
+        }
+        analysis_question = (
+            f"{payload.question.strip()}\n\n"
+            "Selected persisted monitoring event evidence (use only as recorded context; "
+            "do not assert causation or infer unrecorded facts): "
+            f"{json.dumps(monitoring_context, sort_keys=True, separators=(',', ':'))}"
+        )
     if len(requested_dataset_ids) != len(set(requested_dataset_ids)):
         raise HTTPException(status_code=400, detail="Duplicate dataset IDs are not allowed in an investigation scope.")
     if requested_dataset_ids:
-        found = db.query(Dataset.id).filter(
-            Dataset.project_id == payload.project_id,
-            Dataset.id.in_(requested_dataset_ids),
-        ).all()
         found_rows = db.query(Dataset.id, Dataset.name).filter(
             Dataset.project_id == payload.project_id,
             Dataset.id.in_(requested_dataset_ids),
@@ -140,55 +407,252 @@ def create_investigation(
                 },
             )
 
+    # Resolve guidance before creating or queuing executable work.
+    from packages.analytics_core.src.governance.guided_investigation import (
+        ResolverOutcome,
+        ResolverStatus,
+        apply_human_guidance_to_contract,
+        normalize_guidance_payload,
+    )
+    if payload.selected_aggregation:
+        normalized_aggregation = payload.selected_aggregation.strip().upper()
+        if normalized_aggregation == "AVG":
+            normalized_aggregation = "MEAN"
+        if normalized_aggregation not in {
+            "SUM", "MEAN", "COUNT", "COUNT_DISTINCT", "MEDIAN", "MIN", "MAX",
+            "ROW_COUNT", "AVERAGE",
+        }:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported aggregation '{payload.selected_aggregation}'.",
+            )
+
+    from packages.analytics_core.src.engines.dataset_provider import DatabaseDatasetProvider
+    ds_provider = DatabaseDatasetProvider(session_factory=SessionLocal)
+    ds_context = ds_provider.acquire_context(payload.project_id, requested_dataset_ids)
+
+    guidance = {
+        key: value
+        for key, value in payload.model_dump(exclude_unset=True).items()
+        if key in {
+            "selected_metric",
+            "selected_aggregation",
+            "selected_group_dimension",
+            "selected_dataset",
+            "confirmed_assumptions",
+            "scope_filter",
+            "clarification_response",
+            "custom_instruction",
+            "intent_patch",
+            "pending_intent_slot",
+        }
+        and value is not None
+    }
+    try:
+        guidance = normalize_guidance_payload(guidance)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid intent guidance: {exc}") from exc
+
+    if payload.selected_dataset:
+        selected_dataset = payload.selected_dataset.strip()
+        dataset_name = next(
+            (
+                name
+                for name, metadata in ds_context.dataset_versions.items()
+                if str(metadata.get("dataset_id")) == selected_dataset
+            ),
+            selected_dataset,
+        )
+        guidance["selected_dataset"] = dataset_name
+
+    if ds_context.load_errors or ds_context.unavailable_requested_ids or ds_context.scope_errors:
+        resolution = ResolverOutcome(
+            status=ResolverStatus.NEEDS_CLARIFICATION,
+            unresolved_instruction=payload.question,
+            reason=(
+                "The complete dataset scope could not be loaded for pre-execution contract resolution. "
+                "Restore the selected dataset snapshot and retry; no work was queued."
+            ),
+            schema_information={
+                "load_errors": dict(ds_context.load_errors),
+                "unavailable_requested_ids": list(ds_context.unavailable_requested_ids),
+                "scope_errors": list(ds_context.scope_errors),
+            },
+        )
+    else:
+        resolution = apply_human_guidance_to_contract(
+            question=payload.question,
+            data_context=ds_context,
+            guidance=guidance,
+        )
+
     investigation_id = f"INV-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{gen_uuid()[:8]}"
-    
-    # 1. Create Investigation record in PLANNED status
+    guidance_event_payload = {
+        key: value
+        for key, value in guidance.items()
+        if key in {
+            "selected_metric",
+            "selected_aggregation",
+            "selected_group_dimension",
+            "selected_dataset",
+            "confirmed_assumptions",
+            "scope_filter",
+            "clarification_response",
+            "custom_instruction",
+            "intent_patch",
+            "pending_intent_slot",
+        }
+        and value not in (None, "", [])
+    }
     inv = Investigation(
         id=investigation_id,
         project_id=payload.project_id,
         user_id=current_user.id,
-        question=payload.question,
+        question=analysis_question,
         status=InvestigationState.PLANNED,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
         requested_dataset_ids_json=requested_dataset_ids or None,
+        dataset_version_ids_json=[pinned_dataset_version_id] if pinned_dataset_version_id else [],
         parent_investigation_id=None,
         is_subinvestigation=False,
     )
     db.add(inv)
-    db.commit()
-
-    # 2. Transition state to QUEUED
-    transition_investigation(
-        db=db,
-        investigation_id=investigation_id,
-        to_state=InvestigationState.QUEUED,
-        actor=current_user.email,
-    )
-
-    # 3. Enqueue in durable queue
-    queue = get_default_queue_provider()
-    job_id = queue.enqueue(investigation_id=investigation_id, priority=payload.priority or 10)
-
-    # 4. Record event
-    event = InvestigationEvent(
+    db.add(InvestigationEvent(
         id=f"EVT-{gen_uuid()[:8]}",
         investigation_id=investigation_id,
         event_type="investigation.created",
-        event_payload_json={"job_id": job_id, "question": payload.question, "project_id": payload.project_id},
+        event_payload_json={
+            "question": payload.question,
+            "project_id": payload.project_id,
+            "monitoring_event_id": payload.monitoring_event_id,
+            "monitoring_evidence": monitoring_context,
+        },
         timestamp=datetime.now(timezone.utc),
+    ))
+    if guidance_event_payload:
+        db.add(InvestigationEvent(
+            id=f"EVT-{gen_uuid()[:8]}",
+            investigation_id=investigation_id,
+            event_type="investigation.human_guidance_intent",
+            event_payload_json=guidance_event_payload,
+            timestamp=datetime.now(timezone.utc),
+        ))
+    db.add(InvestigationEvent(
+        id=f"EVT-{gen_uuid()[:8]}",
+        investigation_id=investigation_id,
+        event_type="investigation.guidance_resolution",
+        event_payload_json=resolution.to_dict(),
+        timestamp=datetime.now(timezone.utc),
+    ))
+    db.flush()
+
+    if resolution.status == ResolverStatus.RESOLVED:
+        if resolution.contract is None:
+            raise HTTPException(status_code=500, detail="Resolved guidance did not produce a canonical contract.")
+        selected_dataset_name = resolution.schema_information.get("dataset")
+        dataset_fp = ds_context.dataset_fingerprints.get(selected_dataset_name)
+        from packages.analytics_core.src.governance.guided_investigation import compute_resolved_plan_hash
+        current_plan_hash = compute_resolved_plan_hash(
+            contract=resolution.contract,
+            dataset_fingerprint=dataset_fp,
+            schema_version=1,
+        )
+        if not payload.plan_hash:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "PLAN_APPROVAL_REQUIRED",
+                    "message": "Explicit plan approval is required to execute an investigation. Inspect and approve the plan preview.",
+                    "current_plan_hash": current_plan_hash,
+                    "resolution": resolution.to_dict(),
+                },
+            )
+        if payload.plan_hash != current_plan_hash:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "STALE_PLAN_APPROVAL",
+                    "message": "The approved plan hash does not match the current resolved plan. Refresh the plan preview before confirming execution.",
+                    "submitted_plan_hash": payload.plan_hash,
+                    "current_plan_hash": current_plan_hash,
+                    "resolution": resolution.to_dict(),
+                },
+            )
+        db.add(InvestigationEvent(
+            id=f"EVT-{gen_uuid()[:8]}",
+            investigation_id=investigation_id,
+            event_type="investigation.canonical_contract_locked",
+            event_payload_json={
+                "version": 1,
+                "contract": resolution.contract.to_dict(),
+                "contract_hash": resolution.contract.contract_hash(),
+                "plan_hash": current_plan_hash,
+                "guidance": guidance,
+                "dataset_name": selected_dataset_name,
+                "dataset_metadata": ds_context.dataset_versions.get(selected_dataset_name, {}),
+                "dataset_fingerprint": dataset_fp,
+                "locked_at": datetime.now(timezone.utc).isoformat(),
+            },
+            timestamp=datetime.now(timezone.utc),
+        ))
+        transition_investigation(
+            db=db,
+            investigation_id=investigation_id,
+            to_state=InvestigationState.READY,
+            expected_from=InvestigationState.PLANNED,
+            actor=current_user.email,
+        )
+        return _dispatch_ready_investigation(
+            db=db,
+            investigation_id=investigation_id,
+            priority=payload.priority or 10,
+            actor=current_user.email,
+            question=payload.question,
+            project_id=payload.project_id,
+            created_at=inv.created_at,
+        )
+
+    transition_investigation(
+        db=db,
+        investigation_id=investigation_id,
+        to_state=InvestigationState.NEEDS_CLARIFICATION,
+        expected_from=InvestigationState.PLANNED,
+        actor=current_user.email,
     )
-    db.add(event)
-    db.commit()
 
     return {
         "investigation_id": investigation_id,
-        "job_id": job_id,
-        "status": InvestigationState.QUEUED,
+        "job_id": None,
+        "status": InvestigationState.NEEDS_CLARIFICATION,
         "question": payload.question,
         "project_id": payload.project_id,
         "created_at": inv.created_at.isoformat(),
+        "resolution": resolution.to_dict(),
     }
+
+
+@router.post("/{investigation_id}/dispatch")
+def retry_investigation_dispatch(
+    investigation_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
+    if inv is None:
+        raise HTTPException(status_code=404, detail="Investigation not found.")
+    verify_project_ownership(inv.project_id, current_user, db)
+    return _dispatch_ready_investigation(
+        db=db,
+        investigation_id=investigation_id,
+        priority=10,
+        actor=current_user.email,
+        question=inv.question,
+        project_id=inv.project_id,
+        created_at=inv.created_at,
+    )
 
 
 @router.get("")
@@ -237,6 +701,359 @@ def list_investigations(
         }
         for i in invs
     ]
+
+
+@router.get("/history")
+def list_analysis_history(
+    limit: int = Query(default=100, ge=10, le=1000),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return persisted analysis and project records without rerunning calculations."""
+    allowed_ids = get_user_authorized_project_ids(current_user, db)
+    projects = db.query(Project).filter(Project.id.in_(allowed_ids)).all() if allowed_ids else []
+    project_names = {project.id: project.name for project in projects}
+
+    investigations = (
+        db.query(Investigation)
+        .filter(
+            Investigation.project_id.in_(allowed_ids),
+            Investigation.is_subinvestigation.is_(False),
+        )
+        .order_by(Investigation.created_at.desc())
+        .limit(limit)
+        .all()
+        if allowed_ids else []
+    )
+    investigation_ids = [row.id for row in investigations]
+    contracts_by_investigation = {}
+    if investigation_ids:
+        contracts = (
+            db.query(InvestigationContract)
+            .filter(InvestigationContract.investigation_id.in_(investigation_ids))
+            .order_by(InvestigationContract.version.desc())
+            .all()
+        )
+        for contract in contracts:
+            contracts_by_investigation.setdefault(contract.investigation_id, contract)
+
+    evidence_by_investigation: dict[str, list[Evidence]] = {}
+    if investigation_ids:
+        evidence_rows = (
+            db.query(Evidence)
+            .filter(Evidence.investigation_id.in_(investigation_ids))
+            .all()
+        )
+        for row in evidence_rows:
+            evidence_by_investigation.setdefault(row.investigation_id, []).append(row)
+    all_evidence_ids = [row.id for rows in evidence_by_investigation.values() for row in rows]
+    verification_statuses_by_evidence: dict[str, list[str]] = {}
+    verification_details_by_evidence: dict[str, list[dict[str, Any]]] = {}
+    if all_evidence_ids:
+        for verification in db.query(EvidenceVerification).filter(
+            EvidenceVerification.evidence_id.in_(all_evidence_ids)
+        ).all():
+            verification_statuses_by_evidence.setdefault(verification.evidence_id, []).append(
+                str(verification.status or "UNVERIFIED").upper()
+            )
+            verification_details_by_evidence.setdefault(verification.evidence_id, []).append({
+                "status": str(verification.status or "UNVERIFIED").upper(),
+                "primary_tool": verification.primary_tool,
+                "secondary_tool": verification.secondary_tool,
+                "tolerance_threshold": verification.tolerance_threshold,
+                "observed_delta_pct": verification.observed_delta_pct,
+                "is_deterministic": verification.is_deterministic,
+                "validator_fingerprint": verification.validator_fingerprint,
+                "created_at": verification.created_at.isoformat() if verification.created_at else None,
+            })
+
+    experiment_ids = {
+        evidence.experiment_id
+        for rows in evidence_by_investigation.values()
+        for evidence in rows
+        if evidence.experiment_id
+    }
+    observations_by_experiment = {}
+    if experiment_ids:
+        observations = db.query(Observation).filter(
+            Observation.experiment_id.in_(experiment_ids)
+        ).all()
+        observations_by_experiment = {row.experiment_id: row for row in observations}
+
+    gate_rows_by_investigation: dict[str, ClaimGateDecision] = {}
+    if investigation_ids:
+        gate_rows = (
+            db.query(ClaimGateDecision)
+            .filter(ClaimGateDecision.investigation_id.in_(investigation_ids))
+            .order_by(ClaimGateDecision.created_at.desc())
+            .all()
+        )
+        for row in gate_rows:
+            gate_rows_by_investigation.setdefault(row.investigation_id, row)
+
+    source_dataset_ids = set()
+    for contract in contracts_by_investigation.values():
+        population = contract.population_json or {}
+        identities = population.get("dataset_identities", {}) if isinstance(population, dict) else {}
+        for metadata in identities.values() if isinstance(identities, dict) else []:
+            if isinstance(metadata, dict) and metadata.get("dataset_id"):
+                source_dataset_ids.add(str(metadata["dataset_id"]))
+    active_datasets = (
+        db.query(Dataset).filter(Dataset.id.in_(source_dataset_ids)).all()
+        if source_dataset_ids else []
+    )
+    active_by_id = {dataset.id: dataset for dataset in active_datasets}
+    source_descriptors_by_investigation: dict[str, list[dict[str, Any]]] = {}
+
+    def _source_descriptors(investigation: Investigation) -> list[dict[str, Any]]:
+        contract = contracts_by_investigation.get(investigation.id)
+        population = contract.population_json or {} if contract else {}
+        identities = population.get("dataset_identities", {}) if isinstance(population, dict) else {}
+        descriptors = []
+        for name, metadata in identities.items() if isinstance(identities, dict) else []:
+            if not isinstance(metadata, dict):
+                continue
+            dataset_id = str(metadata.get("dataset_id") or "")
+            snapshot_version = metadata.get("dataset_version")
+            active = active_by_id.get(dataset_id)
+            try:
+                exact_version_available = bool(
+                    active
+                    and snapshot_version is not None
+                    and int(active.current_version or 0) == int(snapshot_version)
+                )
+            except (TypeError, ValueError):
+                exact_version_available = False
+            descriptors.append({
+                "dataset_id": dataset_id or None,
+                "name": str(name),
+                "dataset_version": snapshot_version,
+                "dataset_version_id": metadata.get("dataset_version_id"),
+                "fingerprint": metadata.get("fingerprint"),
+                "available": exact_version_available,
+            })
+        if not descriptors:
+            descriptors = [
+                {
+                    "dataset_id": str(dataset_id),
+                    "name": str(dataset_id),
+                    "dataset_version": None,
+                    "dataset_version_id": None,
+                    "fingerprint": None,
+                    "available": False,
+                }
+                for dataset_id in (investigation.requested_dataset_ids_json or [])
+            ]
+        return descriptors
+
+    records = []
+    for investigation in investigations:
+        evidence_rows = evidence_by_investigation.get(investigation.id, [])
+        statuses = [
+            status
+            for evidence in evidence_rows
+            for status in verification_statuses_by_evidence.get(evidence.id, [])
+        ]
+        if any(status in {"FAILED", "MISMATCH", "MISMATCHED"} for status in statuses) or any(
+            str(evidence.validation_status or "").lower() == "failed" for evidence in evidence_rows
+        ):
+            verification_status = "FAILED"
+        elif evidence_rows and all(
+            str(evidence.validation_status or "").lower() == "verified"
+            and any(status in {"PASSED", "VERIFIED"} for status in verification_statuses_by_evidence.get(evidence.id, []))
+            for evidence in evidence_rows
+        ):
+            verification_status = "VERIFIED"
+        else:
+            verification_status = "UNVERIFIED"
+
+        answer_event = (
+            db.query(InvestigationEvent)
+            .filter(
+                InvestigationEvent.investigation_id == investigation.id,
+                InvestigationEvent.event_type == "investigation.analyst_result",
+            )
+            .order_by(InvestigationEvent.sequence.desc())
+            .first()
+        )
+        analyst_result = (answer_event.event_payload_json or {}) if answer_event else None
+        gate = gate_rows_by_investigation.get(investigation.id)
+        records.append({
+            "id": investigation.id,
+            "record_type": "investigation",
+            "project_id": investigation.project_id,
+            "project_name": project_names.get(investigation.project_id, investigation.project_id),
+            "question": investigation.question,
+            "created_at": investigation.created_at.isoformat() if investigation.created_at else None,
+            "updated_at": investigation.updated_at.isoformat() if investigation.updated_at else None,
+            "status": investigation.status,
+            "verdict_type": investigation.verdict_type,
+            "confidence_score": investigation.confidence_score,
+            "headline": (analyst_result or {}).get("headline") or investigation.direct_answer,
+            "direct_answer": investigation.direct_answer,
+            "analyst_result": analyst_result,
+            "verification_status": verification_status,
+            "claim_status": gate.outcome if gate else "NOT_RECORDED",
+            "source_datasets": _source_descriptors(investigation),
+            "evidence_ids": [evidence.id for evidence in evidence_rows],
+            "evidence": [
+                {
+                    "id": evidence.id,
+                    "statement": evidence.statement,
+                    "evidence_type": evidence.evidence_type,
+                    "validation_status": evidence.validation_status,
+                    "confidence_score": evidence.confidence_score,
+                    "calculation_summary": evidence.calculation_summary,
+                    "statistical_test_name": evidence.statistical_test_name,
+                    "p_value": evidence.p_value,
+                    "effect_size": evidence.effect_size,
+                    "experiment_id": evidence.experiment_id,
+                    "row_count_analyzed": (
+                        observations_by_experiment[evidence.experiment_id].row_count_analyzed
+                        if evidence.experiment_id in observations_by_experiment else None
+                    ),
+                    "sql_executed": (
+                        observations_by_experiment[evidence.experiment_id].sql_executed
+                        if evidence.experiment_id in observations_by_experiment else None
+                    ),
+                    "calculation_trace": (
+                        (observations_by_experiment[evidence.experiment_id].result_json or {}).get("calculation_trace")
+                        if evidence.experiment_id in observations_by_experiment else None
+                    ),
+                    "verification_records": verification_details_by_evidence.get(evidence.id, []),
+                }
+                for evidence in evidence_rows
+            ],
+        })
+
+    investigation_id_set = set(investigation_ids)
+    legacy_runs = (
+        db.query(AnalysisRun)
+        .filter(AnalysisRun.project_id.in_(allowed_ids))
+        .order_by(AnalysisRun.created_at.desc())
+        .limit(limit)
+        .all()
+        if allowed_ids else []
+    )
+    for legacy in legacy_runs:
+        if legacy.id in investigation_id_set:
+            continue
+        records.append({
+            "id": legacy.id,
+            "record_type": "legacy_analysis",
+            "project_id": legacy.project_id,
+            "project_name": project_names.get(legacy.project_id, legacy.project_id),
+            "question": legacy.question,
+            "created_at": legacy.created_at.isoformat() if legacy.created_at else None,
+            "updated_at": legacy.updated_at.isoformat() if legacy.updated_at else None,
+            "status": legacy.status,
+            "verdict_type": None,
+            "confidence_score": None,
+            "headline": legacy.direct_answer,
+            "direct_answer": legacy.direct_answer,
+            "analyst_result": None,
+            "saved_result": {
+                "main_finding": legacy.main_finding,
+                "hypotheses": legacy.hypotheses_json or [],
+                "steps": legacy.steps_json or [],
+                "findings": legacy.findings_json or [],
+                "evidence": legacy.evidence_json or [],
+                "manifest": legacy.manifest_json,
+            },
+            "verification_status": "NOT_RECORDED",
+            "claim_status": "NOT_RECORDED",
+            "source_datasets": [],
+            "evidence_ids": [],
+            "evidence": legacy.evidence_json or [],
+        })
+
+    records.sort(key=lambda row: row.get("created_at") or "", reverse=True)
+    return {"records": records[:limit], "projects": [
+        {"id": project.id, "name": project.name, "description": project.description}
+        for project in projects
+    ]}
+
+
+@router.delete("/history")
+def clear_analysis_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete only the caller's saved analysis records, not projects or datasets."""
+    allowed_ids = get_user_authorized_project_ids(current_user, db)
+    if not allowed_ids:
+        return {"status": "success", "removed_investigations": 0, "removed_legacy_analyses": 0}
+
+    investigation_ids = [
+        row[0]
+        for row in db.query(Investigation.id).filter(Investigation.project_id.in_(allowed_ids)).all()
+    ]
+    legacy_query = db.query(AnalysisRun).filter(AnalysisRun.project_id.in_(allowed_ids))
+    legacy_count = legacy_query.count()
+
+    if investigation_ids:
+        metadata = Investigation.__table__.metadata
+        root_table = Investigation.__table__
+        root_keys = {(str(value),) for value in investigation_ids}
+        scoped_keys: dict[Any, set[tuple[Any, ...]]] = {root_table: root_keys}
+        table_order = [root_table]
+        pending_tables = [root_table]
+
+        while pending_tables:
+            parent_table = pending_tables.pop(0)
+            parent_primary_key = list(parent_table.primary_key.columns)
+            parent_rows = scoped_keys[parent_table]
+            for foreign_table in metadata.tables.values():
+                child_primary_key = list(foreign_table.primary_key.columns)
+                for foreign_key in foreign_table.foreign_keys:
+                    if foreign_key.column.table is not parent_table:
+                        continue
+                    parent_index = parent_primary_key.index(foreign_key.column)
+                    parent_values = {row[parent_index] for row in parent_rows}
+                    if not parent_values:
+                        continue
+                    matching_rows = db.execute(
+                        select(*child_primary_key).where(foreign_key.parent.in_(parent_values))
+                    ).all()
+                    if not matching_rows:
+                        continue
+                    child_keys = {tuple(row) for row in matching_rows}
+                    existing_keys = scoped_keys.setdefault(foreign_table, set())
+                    new_keys = child_keys - existing_keys
+                    if new_keys:
+                        existing_keys.update(new_keys)
+                        if foreign_table not in table_order:
+                            table_order.append(foreign_table)
+                        pending_tables.append(foreign_table)
+
+        try:
+            for table in reversed(table_order):
+                keys = scoped_keys[table]
+                primary_key = list(table.primary_key.columns)
+                if len(primary_key) == 1:
+                    predicate = primary_key[0].in_({row[0] for row in keys})
+                else:
+                    predicate = tuple_(*primary_key).in_(keys)
+                db.execute(delete(table).where(predicate))
+            legacy_query.delete(synchronize_session=False)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"History could not be cleared: {exc}") from exc
+    else:
+        try:
+            legacy_query.delete(synchronize_session=False)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"History could not be cleared: {exc}") from exc
+
+    return {
+        "status": "success",
+        "removed_investigations": len(investigation_ids),
+        "removed_legacy_analyses": legacy_count,
+        "projects_and_datasets_preserved": True,
+    }
 
 
 @router.get("/{investigation_id}")
@@ -382,6 +1199,24 @@ def get_investigation(
         .first()
     )
     analysis_plan = plan_event.event_payload_json if plan_event else None
+    latest_guidance_resolution_event = (
+        db.query(InvestigationEvent)
+        .filter(
+            InvestigationEvent.investigation_id == inv.id,
+            InvestigationEvent.event_type == "investigation.guidance_resolution",
+        )
+        .order_by(InvestigationEvent.timestamp.desc(), InvestigationEvent.id.desc())
+        .first()
+    )
+    latest_locked_contract_event = (
+        db.query(InvestigationEvent)
+        .filter(
+            InvestigationEvent.investigation_id == inv.id,
+            InvestigationEvent.event_type == "investigation.canonical_contract_locked",
+        )
+        .order_by(InvestigationEvent.timestamp.desc(), InvestigationEvent.id.desc())
+        .first()
+    )
     decision_event = (
         db.query(InvestigationEvent)
         .filter(InvestigationEvent.investigation_id == inv.id, InvestigationEvent.event_type == "investigation.decision_impact")
@@ -451,11 +1286,21 @@ def get_investigation(
         assumption_items=assumptions,
     )
 
+    # Surface the recorded failure reason so the UI can show it instead of a generic message.
+    _failure_message = None
+    if str(inv.status).upper() == "FAILED":
+        for _event in reversed(event_rows):
+            _fp = _event.event_payload_json or {}
+            if isinstance(_fp, dict) and _fp.get("error_message"):
+                _failure_message = str(_fp["error_message"])
+                break
+
     return {
         "id": inv.id,
         "project_id": inv.project_id,
         "question": inv.question,
         "status": inv.status,
+        "error_message": _failure_message,
         "verdict_type": inv.verdict_type,
         "confidence_score": inv.confidence_score,
         "direct_answer": inv.direct_answer,
@@ -481,6 +1326,16 @@ def get_investigation(
             "missing_evidence": claim_gate_row.missing_evidence_json or [],
         } if claim_gate_row else None),
         "analysis_plan": analysis_plan,
+        "guidance_resolution": (
+            latest_guidance_resolution_event.event_payload_json
+            if latest_guidance_resolution_event
+            else None
+        ),
+        "locked_canonical_contract": (
+            latest_locked_contract_event.event_payload_json
+            if latest_locked_contract_event
+            else None
+        ),
         "decision_impact": decision_impact,
         "ai_status_message": "Analysis and explanation are generated locally from canonical investigation state. AI is optional.",
         "explanation": local_explanation.to_dict(),
@@ -640,7 +1495,13 @@ def get_investigation(
         "verdict": {
             "verdict_type": verdict.verdict_type,
             "confidence": verdict.confidence_score,
-            "justification": verdict.justification,
+            # OBSERVED answers are exact recomputations; the verdict row's justification is the
+            # hypothesis loop's rationale ("posterior 0.99 ...") about a different claim.
+            "justification": (
+                inv.main_finding
+                if str(verdict.verdict_type).upper() == "OBSERVED" and getattr(inv, "main_finding", None)
+                else verdict.justification
+            ),
             "epistemic_grade": verdict.epistemic_grade,
         } if verdict else None,
         "assumption_ledger": {
@@ -1352,3 +2213,528 @@ def sign_off_verification(
         },
     })
     return _verification_state(db, investigation_id, current_user)
+
+
+@router.get("/{investigation_id}/export")
+def export_investigation(
+    investigation_id: str,
+    format: str = Query("pdf", pattern="^(pdf|docx)$"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Export investigation result as publication-grade PDF or structured DOCX in standard answer format."""
+    inv_data = get_investigation(investigation_id=investigation_id, current_user=current_user, db=db)
+    from fastapi.responses import Response
+    from packages.analytics_core.src.reporting.exporter import (
+        export_investigation_to_pdf,
+        export_investigation_to_docx,
+    )
+
+    clean_id = investigation_id.replace(" ", "_")
+    from packages.analytics_core.src.reporting.exporter import (
+        compute_canonical_report_hash,
+        compute_export_fingerprint,
+        verify_report_integrity,
+    )
+    full_hash = compute_canonical_report_hash(inv_data)
+    seal = compute_export_fingerprint(inv_data)
+
+    if format.lower() == "docx":
+        docx_bytes = export_investigation_to_docx(inv_data)
+        return Response(
+            content=docx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f'attachment; filename="MindEd_Investigation_{clean_id}.docx"',
+                "X-MindEd-Document-Seal": seal,
+                "X-MindEd-Content-Digest": full_hash,
+            },
+        )
+
+    pdf_bytes = export_investigation_to_pdf(inv_data)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="MindEd_Investigation_{clean_id}.pdf"',
+            "X-MindEd-Document-Seal": seal,
+            "X-MindEd-Content-Digest": full_hash,
+        },
+    )
+
+
+@router.get("/{investigation_id}/export/verify")
+def verify_export_fingerprint(
+    investigation_id: str,
+    seal: Optional[str] = Query(None, description="The visible document seal e.g. MDED-XXXX-XXXX-XXXX-XXXX"),
+    digest: Optional[str] = Query(None, description="The full 64-char SHA-256 canonical content digest"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Verify that a supplied canonical report data seal or digest strictly matches the authoritative stored investigation record."""
+    inv_data = get_investigation(investigation_id=investigation_id, current_user=current_user, db=db)
+    from packages.analytics_core.src.reporting.exporter import verify_report_integrity
+
+    is_valid, details = verify_report_integrity(inv_data, expected_full_hash=digest, expected_seal=seal)
+    return {
+        "investigation_id": investigation_id,
+        "verification_scope": "CANONICAL_REPORT_DATA_FINGERPRINT",
+        "authentic": is_valid,
+        "details": details,
+        "notice": (
+            "Verified against authoritative stored investigation data. "
+            "This confirms mathematical and textual integrity of the canonical investigation record; "
+            "it is not a cryptographic digital signature over external PDF/DOCX binary byte encodings."
+        ),
+    }
+
+
+@router.post("/interpret")
+def interpret_investigation_question(
+    payload: PreAnalysisInterpretRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Pre-analysis guided interpretation: reveals what MindEd understood, planned calculations, and consequential ambiguity."""
+    verify_project_ownership(payload.project_id, current_user, db)
+
+    from packages.analytics_core.src.engines.dataset_provider import DatabaseDatasetProvider
+    from packages.analytics_core.src.governance.guided_investigation import (
+        evaluate_guided_investigation,
+        select_primary_dataset,
+    )
+
+    provider = DatabaseDatasetProvider(session_factory=SessionLocal)
+    context = provider.acquire_context(payload.project_id, payload.dataset_ids)
+
+    primary_name, primary_df = select_primary_dataset(payload.question, context.datasets_map or {})
+
+    interpretation = evaluate_guided_investigation(
+        question=payload.question,
+        df=primary_df,
+        available_columns=list(primary_df.columns) if primary_df is not None else None,
+    )
+    dataset_fp = context.dataset_fingerprints.get(primary_name) if primary_name else None
+    from packages.analytics_core.src.governance.guided_investigation import (
+        ResolverStatus,
+        apply_human_guidance_to_contract,
+        compute_resolved_plan_hash,
+        normalize_guidance_payload,
+        render_contract_preview_from_contract,
+    )
+    guidance = {
+        key: value
+        for key, value in payload.model_dump(exclude_unset=True).items()
+        if key in _GUIDANCE_KEYS and value is not None
+    }
+    try:
+        guidance = normalize_guidance_payload(guidance)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid intent guidance: {exc}") from exc
+    if guidance.get("selected_dataset"):
+        _sel = str(guidance["selected_dataset"]).strip()
+        guidance["selected_dataset"] = next(
+            (
+                name
+                for name, metadata in context.dataset_versions.items()
+                if str(metadata.get("dataset_id")) == _sel
+            ),
+            _sel,
+        )
+    guidance_resolution = None
+    if guidance:
+        # Resolve through the same code path as creation so the hash shown here is the hash
+        # the API will compute for this guidance.
+        guidance_resolution = apply_human_guidance_to_contract(
+            question=payload.question,
+            data_context=context,
+            guidance=guidance,
+        )
+        if guidance_resolution.contract is not None:
+            interpretation.canonical_contract = guidance_resolution.contract
+            contract = guidance_resolution.contract
+            interpretation.target_metric = contract.target_column
+            interpretation.group_dimension = (contract.grouping_columns or (None,))[0]
+            known_slots = {
+                "target_column", "numerator_column", "denominator_column", "time_column", "time_range",
+                "grouping_columns", "requested_aggregation", "ranking_direction", "filter_conditions",
+            }
+            candidate_slot = str(guidance_resolution.unresolved_instruction or "").strip()
+            if candidate_slot not in known_slots:
+                candidate_slot = next(
+                    (str(item.get("slot")) for item in (contract.intent_ledger or ())
+                     if item.get("status") == "UNRESOLVED" and str(item.get("slot")) in known_slots),
+                    "",
+                )
+            interpretation.pending_intent_slot = candidate_slot or None
+            display_sql = render_contract_preview_from_contract(contract)
+            if display_sql:
+                interpretation.planned_calculation = display_sql
+            if guidance_resolution.status != ResolverStatus.RESOLVED:
+                interpretation.can_auto_proceed = False
+                interpretation.ambiguity_status = (
+                    "AMBIGUOUS_SCOPE"
+                    if any(str(item.get("slot")) in {"time_column", "time_range"} for item in (contract.intent_ledger or ()))
+                    else "MISSING_DATA"
+                )
+                interpretation.clarification_prompt = guidance_resolution.reason
+                interpretation.clarification_options = list(guidance_resolution.suggested_resolutions)
+                if guidance_resolution.suggested_patches:
+                    interpretation.clarification_options = [item.get("label", "Apply clarification") for item in guidance_resolution.suggested_patches]
+                    interpretation.clarification_option_patches = list(guidance_resolution.suggested_patches)
+                interpretation.recommended_action = "Resolve the open intent slots before execution."
+                interpretation.plan_hash = None
+            elif contract.completeness == "INCOMPLETE" or contract.unresolved_roles:
+                interpretation.can_auto_proceed = False
+                interpretation.ambiguity_status = "MISSING_DATA"
+                interpretation.clarification_prompt = "The canonical contract still has unresolved material intent slots."
+                interpretation.clarification_options = list(guidance_resolution.suggested_resolutions)
+                interpretation.plan_hash = None
+            else:
+                # The newly resolved contract supersedes stale clarification statuses from the
+                # previous preview. Do not clear independent safety gates (causal/join risk,
+                # failed verification, or unexpected assumptions) merely because a slot resolved.
+                protected_statuses = {
+                    "JOIN_FANOUT_RISK", "CAUSAL_ON_OBSERVATIONAL", "VERIFICATION_FAILED",
+                    "UNEXPECTED_ASSUMPTION",
+                }
+                if interpretation.ambiguity_status not in protected_statuses:
+                    interpretation.ambiguity_status = "CLEAR"
+                    interpretation.can_auto_proceed = True
+                    interpretation.clarification_prompt = None
+                    interpretation.clarification_options = []
+                    interpretation.clarification_option_patches = []
+                    interpretation.recommended_action = "Execute the approved canonical contract."
+                    interpretation.plan_hash = None
+        resolved_name = guidance_resolution.schema_information.get("dataset") if guidance_resolution.schema_information else None
+        if resolved_name:
+            primary_name = resolved_name
+            dataset_fp = context.dataset_fingerprints.get(primary_name)
+    if interpretation.canonical_contract is not None and interpretation.can_auto_proceed and (
+        guidance_resolution is None or guidance_resolution.status == ResolverStatus.RESOLVED
+    ):
+        interpretation.dataset_name = primary_name
+        interpretation.dataset_fingerprint = dataset_fp
+        interpretation.plan_hash = compute_resolved_plan_hash(
+            contract=interpretation.canonical_contract,
+            dataset_fingerprint=dataset_fp,
+            schema_version=1,
+        )
+
+    result = interpretation.to_dict()
+    if guidance_resolution is not None:
+        result["guidance_resolution"] = guidance_resolution.to_dict()
+        result["guidance_applied"] = guidance
+    result["interpreted_dataset"] = primary_name
+    result["dataset_fingerprint"] = dataset_fp
+    return result
+
+
+@router.post("/{investigation_id}/guidance")
+def revise_investigation_guidance(
+    investigation_id: str,
+    payload: GuidanceRevisionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Resolve and append a correction while an investigation awaits clarification."""
+    from packages.analytics_core.src.engines.dataset_provider import DatabaseDatasetProvider
+    from packages.analytics_core.src.governance.guided_investigation import (
+        ResolverStatus,
+        apply_human_guidance_to_contract,
+        normalize_guidance_payload,
+    )
+    from packages.analytics_core.src.intelligence.canonical_question_contract import (
+        canonical_question_contract_from_dict,
+    )
+
+    inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Investigation not found.")
+    verify_project_ownership(inv.project_id, current_user, db)
+    if inv.status != InvestigationState.NEEDS_CLARIFICATION:
+        raise HTTPException(
+            status_code=409,
+            detail="Guidance can only be revised while the investigation is awaiting clarification.",
+        )
+    patch = {
+        key: value
+        for key, value in payload.model_dump(exclude_unset=True).items()
+        if value is not None and key != "plan_hash"
+    }
+    if not patch:
+        raise HTTPException(status_code=422, detail="Provide at least one guidance field to revise.")
+
+    event_rows = (
+        db.query(InvestigationEvent)
+        .filter(
+            InvestigationEvent.investigation_id == investigation_id,
+            InvestigationEvent.event_type.in_(
+                ["investigation.human_guidance_intent", "investigation.guidance_resolution"]
+            ),
+        )
+        .order_by(InvestigationEvent.timestamp.asc(), InvestigationEvent.id.asc())
+        .all()
+    )
+    merged_guidance: Dict[str, Any] = {}
+    for event in event_rows:
+        event_payload = dict(event.event_payload_json or {})
+        if event.event_type == "investigation.guidance_resolution":
+            continue
+        for key, value in event_payload.items():
+            if key == "confirmed_assumptions":
+                current = list(merged_guidance.get(key, []))
+                if isinstance(value, list):
+                    current = list(value)
+                elif isinstance(value, dict):
+                    if value.get("replace") is not None:
+                        current = list(value["replace"])
+                    else:
+                        for item in value.get("remove") or []:
+                            current = [entry for entry in current if entry != item]
+                        for item in value.get("add") or []:
+                            if item not in current:
+                                current.append(item)
+                merged_guidance[key] = current
+            elif value == "":
+                merged_guidance.pop(key, None)
+            else:
+                merged_guidance[key] = value
+
+    for key, value in patch.items():
+        if key == "confirmed_assumptions":
+            current = list(merged_guidance.get(key, []))
+            if isinstance(value, list):
+                current = list(value)
+            elif isinstance(value, dict):
+                if value.get("replace") is not None:
+                    current = list(value["replace"])
+                else:
+                    for item in value.get("remove") or []:
+                        current = [entry for entry in current if entry != item]
+                    for item in value.get("add") or []:
+                        if item not in current:
+                            current.append(item)
+            merged_guidance[key] = current
+        elif value == "":
+            merged_guidance.pop(key, None)
+        else:
+            merged_guidance[key] = value
+
+    ds_provider = DatabaseDatasetProvider(session_factory=SessionLocal)
+    ds_context = ds_provider.acquire_context(
+        inv.project_id,
+        list(inv.requested_dataset_ids_json) if inv.requested_dataset_ids_json else None,
+    )
+    if ds_context.load_errors or ds_context.unavailable_requested_ids or ds_context.scope_errors:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DATASET_SCOPE_UNAVAILABLE",
+                "message": "The complete dataset scope could not be loaded for guidance resolution.",
+                "load_errors": ds_context.load_errors,
+                "unavailable_requested_ids": ds_context.unavailable_requested_ids,
+                "scope_errors": ds_context.scope_errors,
+            },
+        )
+    if merged_guidance.get("selected_dataset"):
+        selected_dataset = str(merged_guidance["selected_dataset"]).strip()
+        merged_guidance["selected_dataset"] = next(
+            (
+                name
+                for name, metadata in ds_context.dataset_versions.items()
+                if str(metadata.get("dataset_id")) == selected_dataset
+            ),
+            selected_dataset,
+        )
+    previous_resolution = next(
+        (
+            dict(event.event_payload_json or {})
+            for event in reversed(event_rows)
+            if event.event_type == "investigation.guidance_resolution"
+        ),
+        {},
+    )
+    previous_contract_payload = previous_resolution.get("contract")
+    previous_contract = (
+        canonical_question_contract_from_dict(previous_contract_payload)
+        if isinstance(previous_contract_payload, dict)
+        else None
+    )
+    created_event = (
+        db.query(InvestigationEvent)
+        .filter(
+            InvestigationEvent.investigation_id == investigation_id,
+            InvestigationEvent.event_type == "investigation.created",
+        )
+        .first()
+    )
+    resolution_question = (
+        str((created_event.event_payload_json or {}).get("question") or inv.question)
+        if created_event
+        else inv.question
+    )
+    # A fresh slot-aware freeform answer supersedes the previously selected option patch.
+    # Do not combine stale persisted patch values with a new answer to the pending slot.
+    if patch.get("pending_intent_slot") and (patch.get("custom_instruction") or patch.get("clarification_response")) and "intent_patch" not in patch:
+        merged_guidance.pop("intent_patch", None)
+    try:
+        merged_guidance = normalize_guidance_payload(merged_guidance)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid intent guidance: {exc}") from exc
+    resolution = apply_human_guidance_to_contract(
+        question=resolution_question,
+        data_context=ds_context,
+        guidance=merged_guidance,
+        previous_contract=previous_contract,
+    )
+
+    db.add(InvestigationEvent(
+        id=f"EVT-{gen_uuid()[:8]}",
+        investigation_id=investigation_id,
+        event_type="investigation.human_guidance_intent",
+        event_payload_json=patch,
+        timestamp=datetime.now(timezone.utc),
+    ))
+    db.add(InvestigationEvent(
+        id=f"EVT-{gen_uuid()[:8]}",
+        investigation_id=investigation_id,
+        event_type="investigation.guidance_resolution",
+        event_payload_json=resolution.to_dict(),
+        timestamp=datetime.now(timezone.utc),
+    ))
+    if resolution.status != ResolverStatus.RESOLVED:
+        db.commit()
+        return {
+            "investigation_id": investigation_id,
+            "status": InvestigationState.NEEDS_CLARIFICATION,
+            "job_id": None,
+            "question": inv.question,
+            "project_id": inv.project_id,
+            "created_at": inv.created_at.isoformat() if inv.created_at else None,
+            "resolution": resolution.to_dict(),
+            "guidance_patch": patch,
+        }
+    if resolution.contract is None:
+        raise HTTPException(status_code=500, detail="Resolved guidance did not produce a canonical contract.")
+
+    dataset_name = resolution.schema_information.get("dataset")
+    dataset_fp = ds_context.dataset_fingerprints.get(dataset_name)
+    from packages.analytics_core.src.governance.guided_investigation import compute_resolved_plan_hash
+    current_plan_hash = compute_resolved_plan_hash(
+        contract=resolution.contract,
+        dataset_fingerprint=dataset_fp,
+        schema_version=1,
+    )
+    if not payload.plan_hash:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PLAN_APPROVAL_REQUIRED",
+                "message": "Explicit plan approval is required to lock and execute guidance revision. Inspect and approve the plan preview.",
+                "current_plan_hash": current_plan_hash,
+                "resolution": resolution.to_dict(),
+            },
+        )
+    if payload.plan_hash != current_plan_hash:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "STALE_PLAN_APPROVAL",
+                "message": "The approved plan hash does not match the current resolved plan. Refresh the plan preview before confirming execution.",
+                "submitted_plan_hash": payload.plan_hash,
+                "current_plan_hash": current_plan_hash,
+                "resolution": resolution.to_dict(),
+            },
+        )
+    db.add(InvestigationEvent(
+        id=f"EVT-{gen_uuid()[:8]}",
+        investigation_id=investigation_id,
+        event_type="investigation.canonical_contract_locked",
+        event_payload_json={
+            "version": 1,
+            "contract": resolution.contract.to_dict(),
+            "contract_hash": resolution.contract.contract_hash(),
+            "plan_hash": current_plan_hash,
+            "guidance": merged_guidance,
+            "dataset_name": dataset_name,
+            "dataset_metadata": ds_context.dataset_versions.get(dataset_name, {}),
+            "dataset_fingerprint": dataset_fp,
+            "locked_at": datetime.now(timezone.utc).isoformat(),
+        },
+        timestamp=datetime.now(timezone.utc),
+    ))
+    transition_investigation(
+        db=db,
+        investigation_id=investigation_id,
+        to_state=InvestigationState.READY,
+        expected_from=InvestigationState.NEEDS_CLARIFICATION,
+        actor=current_user.email,
+    )
+    return _dispatch_ready_investigation(
+        db=db,
+        investigation_id=investigation_id,
+        priority=10,
+        actor=current_user.email,
+        question=inv.question,
+        project_id=inv.project_id,
+        created_at=inv.created_at,
+    ) | {"resolution": resolution.to_dict(), "guidance_patch": patch}
+
+
+@router.post("/{investigation_id}/review")
+def submit_investigation_review(
+    investigation_id: str,
+    payload: HumanReviewSubmissionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Submit post-analysis human review: Accept for workflow, Request correction, Reject, or Redo.
+    Enforces the invariant that human approval never overrides failed verification.
+    """
+    inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Investigation not found.")
+    verify_project_ownership(inv.project_id, current_user, db)
+
+    verifications = db.query(EvidenceVerification).filter(EvidenceVerification.investigation_id == investigation_id).all()
+    evidence_items = db.query(Evidence).filter(Evidence.investigation_id == investigation_id).all()
+    machine_verified = (
+        len(evidence_items) > 0 and
+        all(e.validation_status == "VERIFIED" for e in evidence_items) and
+        all(v.status in ("PASSED", "VERIFIED") for v in verifications)
+    )
+
+    from packages.analytics_core.src.governance.guided_investigation import apply_human_review_decision
+    try:
+        review_record = apply_human_review_decision(
+            investigation_id=investigation_id,
+            action=payload.action,
+            actor=current_user.email,
+            comments=payload.comments,
+            modified_parameters=payload.modified_parameters,
+            verification_passed=machine_verified,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    _append_verification_event(db, investigation_id, "investigation.human_review", review_record)
+
+    audit_entry = AuditLog(
+        id=f"AUD-{gen_uuid()[:8]}",
+        user_id=current_user.id,
+        action=f"REVIEW_{payload.action.upper()}",
+        resource_type="investigation",
+        resource_id=investigation_id,
+        details_json=review_record,
+    )
+    db.add(audit_entry)
+    db.commit()
+
+    return {
+        "status": "success",
+        "review": review_record,
+        "investigation_id": investigation_id,
+    }

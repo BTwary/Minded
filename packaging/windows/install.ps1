@@ -12,9 +12,13 @@ if (-not (Test-Path $BundlePath -PathType Container)) {
 $Exe = Join-Path $BundlePath 'MindedAAOS.exe'
 $Frontend = Join-Path $BundlePath 'frontend'
 $Marker = Join-Path $BundlePath 'OFFLINE_MODE'
+$Wheelhouse = Join-Path $BundlePath 'wheelhouse'
 if (-not (Test-Path $Exe -PathType Leaf)) { throw "MindedAAOS.exe is missing from the release bundle." }
 if (-not (Test-Path $Frontend -PathType Container)) { throw "Static frontend bundle is missing from the release bundle." }
 if (-not (Test-Path $Marker -PathType Leaf)) { throw "Offline release marker is missing." }
+if (-not (Test-Path $Wheelhouse -PathType Container) -or -not (Get-ChildItem -Path $Wheelhouse -Filter '*.whl' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+  throw "Certified local wheelhouse is missing or empty in the release bundle."
+}
 
 $InstallRoot = Join-Path $env:LOCALAPPDATA 'Minded\AAOS\app'
 if (Test-Path $InstallRoot) { Remove-Item -Recurse -Force $InstallRoot }

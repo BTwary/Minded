@@ -2,6 +2,13 @@
 import unittest
 from pathlib import Path
 
+import pytest
+
+# gradio is pinned for the Hugging Face Space (hf_space/requirements.txt), not in the locked
+# runtime: gradio 6.x requires newer fastapi/starlette than requirements-lock.txt allows, so
+# installing it beside the lock breaks `pip check`. Run this test in an env that has gradio.
+pytest.importorskip("gradio", reason="gradio is HF-Space-only and conflicts with the runtime lock")
+
 from hf_space.app import (
     load_scenario_b2b,
     load_scenario_financials,
@@ -28,7 +35,9 @@ class TestHFSpaceApp(unittest.TestCase):
         coh_files, q3 = load_scenario_cohorts()
         self.assertEqual(len(coh_files), 1)
         self.assertTrue(Path(coh_files[0]).is_file())
-        self.assertIn("retention", q3.lower())
+        # Demo question was deliberately simplified to a plain aggregate (was: lowest retention + spend).
+        self.assertIn("spend", q3.lower())
+        self.assertIn("tier", q3.lower())
 
     def test_load_files_robust(self):
         fin_files, _ = load_scenario_financials()

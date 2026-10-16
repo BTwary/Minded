@@ -8,7 +8,11 @@ import polars as pl
 
 from packages.analytics_core.src.execution.state_machine import VerificationStatus
 from packages.analytics_core.src.engines.polars_query_recompiler import execute_known_query, result_frames_equivalent
-from packages.analytics_core.src.engines.execution_provider import _derive_primary_metric
+from packages.analytics_core.src.engines.execution_provider import (
+    _derive_primary_metric,
+    relation_digest,
+    relation_digests_equivalent,
+)
 
 from packages.schemas.src.analysis import (
     CardinalityType,
@@ -154,7 +158,7 @@ class VerificationEngine:
         relational_plan: Optional[Any] = None,
         relation_tables: Optional[Dict[str, pd.DataFrame]] = None,
         primary_result_column: Optional[str] = None,
-
+        primary_result_digest: Optional[Dict[str, Any]] = None,
     ) -> VerificationResult:
         """
         Production controller contract: when ``primary_result_df`` is supplied,
@@ -463,6 +467,37 @@ class VerificationEngine:
             # (e.g. EvidenceVerification.secondary_tool == "polars_vectorized").
             if primary_result_df is not None:
                 if primary_result_truncated:
+                    # The carried frame is only the head of a larger relation, so frame-level
+                    # equivalence is impossible. When the executing engine supplied a digest of
+                    # the FULL relation, the independent engine must reproduce that digest from
+                    # its own full result; otherwise fail closed as before.
+                    if primary_result_digest is not None:
+                        if secondary_result_df is None and query_sql:
+                            try:
+                                native_res = execute_known_query(query_sql, pl_df)
+                                if native_res is not None:
+                                    secondary_result_df = native_res
+                                    secondary_method = "programmatic_query_recompute"
+                            except Exception as native_exc:
+                                sql_exception_type = sql_exception_type or type(native_exc).__name__
+                                sql_exception_message = sql_exception_message or str(native_exc)
+                        if secondary_result_df is not None:
+                            digest_ok, digest_delta, digest_reason = relation_digests_equivalent(
+                                primary_result_digest, relation_digest(secondary_result_df)
+                            )
+                            return VerificationResult(
+                                primary_tool="duckdb_sql", secondary_tool="polars_vectorized",
+                                primary_value=primary_metric,
+                                secondary_value=secondary_val,
+                                observed_delta_pct=float(digest_delta),
+                                max_relative_delta=float(digest_delta),
+                                status=VerificationStatus.VERIFIED if digest_ok else VerificationStatus.FAILED,
+                                secondary_method=f"full_relation_digest:{secondary_method}",
+                                exception_type=sql_exception_type,
+                                exception_message=sql_exception_message,
+                                sql_attempted=query_sql,
+                                failure_reason=None if digest_ok else f"full_relation_digest_disagreement:{digest_reason}",
+                            )
                     return VerificationResult(
                         primary_tool="duckdb_sql", secondary_tool="polars_vectorized",
                         primary_value=primary_metric,
@@ -515,8 +550,9 @@ class VerificationEngine:
 
                 frames_ok, frame_delta = result_frames_equivalent(primary_result_df, secondary_result_df, effective_tolerance)
                 if frames_ok:
-                    if secondary_val is None:
-                        secondary_val = primary_metric
+                    # VERIFIED rests on independent relation equivalence. If no scalar could
+                    # be reduced from the secondary relation, secondary_value stays None; the
+                    # primary metric is never copied in as if it were an independent value.
                     return VerificationResult(
                         primary_tool="duckdb_sql", secondary_tool="polars_vectorized",
                         primary_value=primary_metric,
@@ -529,10 +565,39 @@ class VerificationEngine:
                         sql_attempted=query_sql,
                         failure_reason=None,
                     )
+                # Polars' SQLContext is not SQL-standard on one point that matters here: SUM over a group
+                # whose values are all NULL is 0, not NULL. A correct DuckDB result with such groups
+                # (missing data) would then be rejected. Before declaring a disagreement, ask the native
+                # recompute, which follows SQL semantics, to reproduce the relation independently; it
+                # must agree with DuckDB for the result to verify, so a genuine error still fails.
+                if secondary_method == "sql_sqlcontext" and query_sql:
+                    try:
+                        native_res = execute_known_query(query_sql, pl_df)
+                        if native_res is not None:
+                            native_ok, native_delta = result_frames_equivalent(
+                                primary_result_df, native_res, effective_tolerance
+                            )
+                            if native_ok:
+                                return VerificationResult(
+                                    primary_tool="duckdb_sql", secondary_tool="polars_vectorized",
+                                    primary_value=primary_metric,
+                                    secondary_value=secondary_val,
+                                    observed_delta_pct=float(native_delta),
+                                    status=VerificationStatus.VERIFIED,
+                                    secondary_method="programmatic_query_recompute",
+                                    exception_type=sql_exception_type,
+                                    exception_message=sql_exception_message,
+                                    sql_attempted=query_sql,
+                                    failure_reason=None,
+                                )
+                    except Exception:
+                        pass  # fall through to the genuine disagreement below
                 return VerificationResult(
                     primary_tool="duckdb_sql", secondary_tool="polars_vectorized",
                     primary_value=primary_metric,
-                    secondary_value=secondary_val if secondary_val is not None else 0.0,
+                    # Never fabricate a sentinel: if the secondary relation could not be
+                    # reduced to a scalar, the secondary value stays None.
+                    secondary_value=secondary_val,
                     observed_delta_pct=float(frame_delta),
                     status=VerificationStatus.FAILED,
                     secondary_method=secondary_method,
@@ -563,16 +628,20 @@ class VerificationEngine:
                 if group_dimension_col and group_dimension_col in pl_df.columns:
                     if aggregation_type == "SUM":
                         agg_df = pl_df.group_by(group_dimension_col).agg(pl.col(target_metric_col).sum().alias("val")).sort("val", descending=True)
-                        secondary_val = float(agg_df["val"][0]) if len(agg_df) > 0 else 0.0
+                        secondary_val = float(agg_df["val"][0]) if len(agg_df) > 0 else None
                     elif aggregation_type in ("MEAN", "AVG"):
                         agg_df = pl_df.group_by(group_dimension_col).agg(pl.col(target_metric_col).mean().alias("val")).sort("val", descending=True)
-                        secondary_val = float(agg_df["val"][0]) if len(agg_df) > 0 else 0.0
+                        secondary_val = float(agg_df["val"][0]) if len(agg_df) > 0 else None
                     elif aggregation_type == "COUNT":
-                        agg_df = pl_df.group_by(group_dimension_col).agg(pl.col(target_metric_col).count().alias("val")).sort("val", descending=True)
-                        secondary_val = float(agg_df["val"][0]) if len(agg_df) > 0 else 0.0
+                        if target_metric_col and target_metric_col in pl_df.columns:
+                            cnt_expr = pl.col(target_metric_col).count().alias("val")
+                        else:
+                            cnt_expr = pl.len().alias("val")
+                        agg_df = pl_df.group_by(group_dimension_col).agg(cnt_expr).sort("val", descending=True)
+                        secondary_val = float(agg_df["val"][0]) if len(agg_df) > 0 else None
                     elif aggregation_type == "COUNT_DISTINCT":
                         agg_df = pl_df.group_by(group_dimension_col).agg(pl.col(target_metric_col).n_unique().alias("val")).sort("val", descending=True)
-                        secondary_val = float(agg_df["val"][0]) if len(agg_df) > 0 else 0.0
+                        secondary_val = float(agg_df["val"][0]) if len(agg_df) > 0 else None
                     elif aggregation_type in ("RATE", "RATIO", "PROPORTION", "WEIGHTED_MEAN"):
                         val = _ratio_agg(pl_df)
                         if val is not None:
@@ -583,7 +652,10 @@ class VerificationEngine:
                     elif aggregation_type in ("MEAN", "AVG"):
                         secondary_val = float(pl_df.select(pl.col(target_metric_col).mean()).item())
                     elif aggregation_type == "COUNT":
-                        secondary_val = float(pl_df.select(pl.col(target_metric_col).count()).item())
+                        if target_metric_col and target_metric_col in pl_df.columns:
+                            secondary_val = float(pl_df.select(pl.col(target_metric_col).count()).item())
+                        else:
+                            secondary_val = float(pl_df.select(pl.len()).item())
                     elif aggregation_type == "COUNT_DISTINCT":
                         secondary_val = float(pl_df.select(pl.col(target_metric_col).n_unique()).item())
                     elif aggregation_type in ("RATE", "RATIO", "PROPORTION", "WEIGHTED_MEAN"):

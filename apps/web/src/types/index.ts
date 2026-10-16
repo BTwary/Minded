@@ -4,7 +4,7 @@ export type ConfidenceLevel =
   | "Low confidence"
   | "Insufficient evidence";
 
-export type ValidationStatus = "PASSED" | "FAILED" | "WARNING" | "SKIPPED";
+export type ValidationStatus = "PASSED" | "FAILED" | "WARNING" | "SKIPPED" | "VERIFIED" | "UNVERIFIED";
 
 export type ClaimGateOutcome = "ANSWER" | "QUALIFIED_ANSWER" | "REFUSE";
 
@@ -127,17 +127,17 @@ export interface EvidenceItem {
   finding_id?: string;
   statement: string;
   calculation_summary: string;
-  dataset_version: string;
-  row_count_analyzed: number;
+  dataset_version?: string;
+  row_count_analyzed?: number;
   time_window?: string;
   sql_executed?: string;
   python_executed?: string;
   statistical_test?: string;
   p_value?: number;
   effect_size?: number;
-  validation_status: ValidationStatus;
+  validation_status: ValidationStatus | "UNVERIFIED";
   raw_metrics: Record<string, any>;
-  verified_at: string;
+  verified_at?: string;
   calculation_trace?: CalculationTrace;
 }
 
@@ -170,6 +170,7 @@ export interface Hypothesis {
   priority: number;
   prior_probability?: number;
   posterior_probability?: number;
+  target_metric?: string;
   status: string;
   reason_for_rejection?: string;
   investigation_steps: string[];
@@ -214,6 +215,10 @@ export interface AnalysisResponse {
   verdict?: AnalyticalVerdict;
   direct_answer: string;
   main_finding: string;
+  analyst_result?: Record<string, unknown> | null;
+  provenance?: Record<string, unknown>;
+  evidence_verifications?: Array<Record<string, unknown>>;
+  reproducible_manifest_hash?: string | null;
   confidence: ConfidenceLevel;
   confidence_breakdown?: MultiVectorConfidence;
   discovery?: DiscoverySummary;
@@ -304,6 +309,9 @@ export interface Dataset {
   description?: string;
   format: string;
   current_version: number;
+  profile_version?: number;
+  dataset_version_id?: string;
+  dataset_fingerprint?: string;
   row_count: number;
   column_count: number;
   data_quality_score?: number;
@@ -313,6 +321,16 @@ export interface Dataset {
   profile?: {
     data_quality?: any;
     profiled_at?: string;
+    first_look?: {
+      quality_score: number;
+      row_meaning: string;
+      quality_findings: string[];
+      suggested_questions: Array<{
+        question: string;
+        intent?: string;
+        relevance?: string;
+      }>;
+    };
     columns?: Array<{
       name: string;
       data_type: string;
@@ -350,24 +368,57 @@ export interface GlossaryTerm {
 
 export interface AlertRule {
   id: string;
+  project_id?: string;
   name: string;
   metric_name: string;
-  threshold_pct_change: number;
+  dataset_id?: string;
+  threshold_pct_change: number | null;
   frequency: string;
   severity: string;
   is_active: boolean;
+  last_evaluated_at?: string | null;
+  last_evaluation_status?: string | null;
+  last_evaluation_trigger?: string | null;
 }
 
 export interface AlertEvent {
   id: string;
+  project_id?: string;
   rule_id: string;
+  rule_name?: string | null;
+  metric_name?: string | null;
+  threshold_pct_change?: number | null;
+  dataset_id?: string | null;
+  dataset_name?: string | null;
+  dataset_version?: number | null;
+  dataset_version_id?: string | null;
+  dataset_fingerprint?: string | null;
+  source_available?: boolean;
+  lifecycle_status?: string | null;
+  acknowledged_at?: string | null;
+  snoozed_until?: string | null;
+  baseline_period?: string | null;
+  comparison_period?: string | null;
   title: string;
   severity: string;
   description: string;
-  current_value: number;
-  expected_value: number;
-  deviation_percentage: number;
+  current_value?: number | null;
+  expected_value?: number | null;
+  deviation_percentage?: number | null;
+  affected_dimensions?: Record<string, unknown>;
+  investigation_analysis_id?: string | null;
+  evidence_summary?: string | null;
+  is_resolved?: boolean;
   triggered_at: string;
+}
+
+export interface MonitoringStatus {
+  scheduler_active: boolean;
+  evaluation_mode: "manual" | "import" | "scheduled" | null;
+  last_evaluation_at: string | null;
+  last_evaluation_status: string | null;
+  last_successful_evaluation_at: string | null;
+  active_rule_count: number;
 }
 
 // --- Human verification workflow (AA-OS works, the analyst verifies) ---------

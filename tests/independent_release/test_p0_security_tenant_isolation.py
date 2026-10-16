@@ -102,11 +102,15 @@ class TestTenantIsolatedBackupAndMigration(unittest.TestCase):
         self.assertIn("Access denied", str(ctx.exception))
 
     def test_migrate_local_to_provider_scopes_by_user_id(self):
-        from apps.api.src.core.database import SessionLocal, engine
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
         from apps.api.src.models.entities import Base, Project, Dataset, DatasetVersion
 
-        Base.metadata.create_all(bind=engine)
-        db = SessionLocal()
+        test_db_path = Path(self.temp_dir) / "test_isolated.db"
+        test_engine = create_engine(f"sqlite:///{test_db_path.as_posix()}")
+        Base.metadata.create_all(bind=test_engine)
+        TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+        db = TestSession()
 
         try:
             # Create user_A project and dataset

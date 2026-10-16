@@ -157,9 +157,9 @@
     "question": "Is price associated with sales?",
     "intent_type": "CORRELATION",
     "plan_task": "ASSOCIATION",
-    "plan_target": "price",
+    "plan_target": "annual_sales",
     "plan_explanatory": [
-      "annual_sales"
+      "price"
     ],
     "plan_grouping": [],
     "plan_time": null,
@@ -243,11 +243,11 @@
     ],
     "plan_grouping": [],
     "plan_time": null,
-    "estimand_target": "price",
+    "estimand_target": null,
     "estimand_predictor": [],
     "estimand_comparison_dim": null,
     "estimand_time": null,
-    "problem_class": "DIAGNOSTIC",
+    "problem_class": "FALLBACK",
     "selected_method_code": null,
     "experiment_sql": null
   },

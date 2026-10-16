@@ -25,11 +25,84 @@ def classify_evidence_for_hypothesis(
 ) -> Optional[str]:
     """Return supporting/contradicting/neutral using canonical status vocabulary."""
     status_upper = (validation_status or "").strip().upper()
-    if status_upper == "VERIFIED" or (effect_size or 0) != 0:
-        return "supporting"
-    if status_upper == "FAILED":
+    # Validation status is authoritative. A non-zero effect is only a magnitude;
+    # it does not establish that the measurement passed verification or that its
+    # direction supports the hypothesis. In particular, FAILED must never be
+    # inverted into supporting evidence by the presence of an effect size.
+    if status_upper in {"FAILED", "FAIL", "INVALID", "REJECTED"}:
         return "contradicting"
+    if status_upper in {"VERIFIED", "PASSED", "PASS"}:
+        return "supporting"
     return None
+
+
+def classify_inferential_evidence(
+    p_value: Optional[float],
+    is_counter: bool,
+    effect_size: Optional[float] = None,
+    claim_text: str = "",
+    sample_size: Optional[int] = None,
+    adequate_power: Optional[bool] = None,
+    subgroup_min_n: Optional[int] = None,
+) -> Optional[str]:
+    """Classify inferential statistical evidence for a hypothesis.
+
+    Adheres strictly to scientific inference principles:
+    1. A non-significant p-value (p >= 0.05) in an underpowered test (N < 30, subgroup n < 10,
+       or explicit adequate_power is False) must be treated as 'unresolved', NOT supporting the null.
+    2. A non-significant p-value in an adequately powered test supports the null/counter hypothesis.
+    3. A significant p-value (p < 0.05) in the direction opposite to a directional claim
+       contradicts the claim, rather than supporting it.
+    """
+    if p_value is None:
+        return "unresolved"
+
+    try:
+        p_val = float(p_value)
+    except (ValueError, TypeError):
+        return "unresolved"
+
+    is_underpowered = False
+    if adequate_power is False:
+        is_underpowered = True
+    elif adequate_power is True:
+        is_underpowered = False
+    elif sample_size is not None and sample_size < 30:
+        is_underpowered = True
+    elif subgroup_min_n is not None and subgroup_min_n < 10:
+        is_underpowered = True
+    elif sample_size is None and subgroup_min_n is None:
+        # Without sample size or power verification, a non-significant result cannot be asserted as powered null
+        is_underpowered = True
+
+    if p_val >= 0.05:
+        if is_underpowered:
+            return "unresolved"
+        # Adequately powered null: supports the counter/null hypothesis, contradicts the effect hypothesis
+        return "supporting" if is_counter else "contradicting"
+
+    # Statistically significant (p < 0.05)
+    # Check directional consistency if claim specifies a direction
+    claim_lower = (claim_text or "").lower()
+    pos_words = ("increase", "higher", "greater", "more", "positive", "growth", "rose", "above")
+    neg_words = ("decrease", "lower", "less", "fewer", "negative", "drop", "fell", "below", "reduce")
+
+    has_pos_claim = any(w in claim_lower for w in pos_words)
+    has_neg_claim = any(w in claim_lower for w in neg_words)
+
+    if effect_size is not None:
+        try:
+            eff_val = float(effect_size)
+            if has_pos_claim and not has_neg_claim and eff_val < 0:
+                # Significant opposite effect: contradicts positive claim
+                return "supporting" if is_counter else "contradicting"
+            if has_neg_claim and not has_pos_claim and eff_val > 0:
+                # Significant opposite effect: contradicts negative claim
+                return "supporting" if is_counter else "contradicting"
+        except (ValueError, TypeError):
+            pass
+
+    return "contradicting" if is_counter else "supporting"
 
 
 def reconstruct_investigation_state(
@@ -140,11 +213,54 @@ def reconstruct_investigation_state(
         target = _find_hypothesis_by_db_id(state_mgr, ev.hypothesis_id)
         if target is None:
             continue
-        classification = classify_evidence_for_hypothesis(ev.validation_status, ev.effect_size)
-        if classification == "supporting" and ev.id not in target.supporting_evidence_ids:
-            target.supporting_evidence_ids.append(ev.id)
-        elif classification == "contradicting" and ev.id not in target.contradicting_evidence_ids:
-            target.contradicting_evidence_ids.append(ev.id)
+        target_preds = [
+            p for p in state_mgr._predictions.values()
+            if getattr(p, "hypothesis_code", None) == target.hypothesis_code
+            and (not getattr(p, "target_experiment_id", None) or getattr(p, "target_experiment_id", None) == ev.experiment_id)
+        ]
+        has_supported_pred = any(getattr(p, "status", None) == "SUPPORTED" for p in target_preds)
+        has_refuted_pred = any(getattr(p, "status", None) == "REFUTED" for p in target_preds)
+        if has_supported_pred:
+            classification = "supporting"
+        elif has_refuted_pred:
+            classification = "contradicting"
+        elif getattr(ev, "p_value", None) is not None:
+            exp_row = session.query(ExperimentRow).filter(ExperimentRow.id == ev.experiment_id).first() if getattr(ev, "experiment_id", None) else None
+            s_size = getattr(exp_row, "analysis_row_count", None) if exp_row else None
+            claim_txt = getattr(target, "claim", "") or getattr(target, "statement", "")
+            classification = classify_inferential_evidence(
+                p_value=ev.p_value,
+                is_counter=bool(getattr(target, "is_counter_hypothesis", False)),
+                effect_size=getattr(ev, "effect_size", None),
+                claim_text=claim_txt,
+                sample_size=s_size,
+            )
+        else:
+            classification = classify_evidence_for_hypothesis(ev.validation_status, ev.effect_size)
+
+        all_hyps = state_mgr.get_all_hypotheses()
+        if classification == "supporting":
+            if ev.id not in target.supporting_evidence_ids:
+                target.supporting_evidence_ids.append(ev.id)
+            for ch in all_hyps:
+                if (
+                    ch.hypothesis_code != target.hypothesis_code
+                    and bool(getattr(ch, "is_counter_hypothesis", False)) != bool(getattr(target, "is_counter_hypothesis", False))
+                    and _is_binary_mirror_hypothesis(ch, target)
+                ):
+                    if ev.id not in ch.contradicting_evidence_ids:
+                        ch.contradicting_evidence_ids.append(ev.id)
+        elif classification == "contradicting":
+            if ev.id not in target.contradicting_evidence_ids:
+                target.contradicting_evidence_ids.append(ev.id)
+            for ch in all_hyps:
+                if (
+                    ch.hypothesis_code != target.hypothesis_code
+                    and bool(getattr(ch, "is_counter_hypothesis", False)) != bool(getattr(target, "is_counter_hypothesis", False))
+                    and _is_binary_mirror_hypothesis(ch, target)
+                ):
+                    if ev.id not in ch.supporting_evidence_ids:
+                        ch.supporting_evidence_ids.append(ev.id)
         state_mgr.append_evidence(
             claim=ev.statement,
             metric=ev.statistical_test_name,
@@ -283,3 +399,12 @@ def _find_hypothesis_by_db_id(state_mgr: InvestigationStateManager, db_id: str) 
         if getattr(h, "id", None) == db_id:
             return h
     return None
+
+
+def _is_binary_mirror_hypothesis(counter_hyp: Any, tested_hyp: Any) -> bool:
+    if counter_hyp is None or tested_hyp is None:
+        return False
+    return (
+        getattr(counter_hyp, "target_metric", None) == getattr(tested_hyp, "target_metric", None)
+        and getattr(counter_hyp, "target_dimension", None) == getattr(tested_hyp, "target_dimension", None)
+    )

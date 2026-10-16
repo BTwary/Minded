@@ -18,7 +18,7 @@ class BaseQueueProvider(ABC):
     """Abstract interface for durable job queues."""
 
     @abstractmethod
-    def enqueue(self, investigation_id: str, priority: int = 10) -> str:
+    def enqueue(self, investigation_id: str, priority: int = 10, db: Optional[Session] = None) -> str:
         pass
 
     @abstractmethod
@@ -59,9 +59,23 @@ class DatabaseQueueProvider(BaseQueueProvider):
     def __init__(self, session_factory=SessionLocal):
         self.session_factory = session_factory
 
-    def enqueue(self, investigation_id: str, priority: int = 10) -> str:
-        db: Session = self.session_factory()
+    def enqueue(self, investigation_id: str, priority: int = 10, db: Optional[Session] = None) -> str:
+        owns_session = db is None
+        db = db or self.session_factory()
         try:
+            active_job = (
+                db.query(InvestigationJob)
+                .filter(
+                    InvestigationJob.investigation_id == investigation_id,
+                    InvestigationJob.status.in_(
+                        [JobState.QUEUED, JobState.CLAIMED, JobState.RUNNING]
+                    ),
+                )
+                .order_by(InvestigationJob.created_at.desc())
+                .first()
+            )
+            if active_job:
+                return active_job.id
             job_id = f"JOB-{gen_uuid()[:8]}"
             job = InvestigationJob(
                 id=job_id,
@@ -73,10 +87,18 @@ class DatabaseQueueProvider(BaseQueueProvider):
                 updated_at=datetime.now(timezone.utc),
             )
             db.add(job)
-            db.commit()
+            if owns_session:
+                db.commit()
+            else:
+                db.flush()
             return job_id
+        except Exception:
+            if owns_session:
+                db.rollback()
+            raise
         finally:
-            db.close()
+            if owns_session:
+                db.close()
 
     def claim_job(self, worker_id: str, lease_duration_seconds: int = 60) -> Optional[Dict[str, Any]]:
         """

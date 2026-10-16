@@ -32,18 +32,35 @@ class AlertRuleResponse(BaseModel):
     auto_investigate: bool
     is_active: bool
     last_evaluated_at: Optional[datetime] = None
+    last_evaluation_status: Optional[str] = None
+    last_evaluation_trigger: Optional[str] = None
     created_at: datetime
 
 
 class AlertEventSchema(BaseModel):
     id: str
+    project_id: Optional[str] = None
     rule_id: str
+    rule_name: Optional[str] = None
+    metric_name: Optional[str] = None
+    threshold_pct_change: Optional[float] = None
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
+    dataset_version: Optional[int] = None
+    dataset_version_id: Optional[str] = None
+    dataset_fingerprint: Optional[str] = None
+    source_available: Optional[bool] = None
+    lifecycle_status: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
+    snoozed_until: Optional[datetime] = None
+    baseline_period: Optional[str] = None
+    comparison_period: Optional[str] = None
     title: str
     severity: AlertSeverity
     description: str
-    current_value: float
-    expected_value: float
-    deviation_percentage: float
+    current_value: Optional[float] = None
+    expected_value: Optional[float] = None
+    deviation_percentage: Optional[float] = None
     affected_dimensions: Dict[str, Any] = Field(default_factory=dict)
     investigation_analysis_id: Optional[str] = None
     evidence_summary: Optional[str] = None

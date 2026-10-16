@@ -21,6 +21,10 @@ class AdversarialAttackResult:
     is_falsified: bool
     simpsons_paradox_detected: bool = False
     outlier_sensitivity_high: bool = False
+    # True only when the group comparison was actually re-checked with outlier-robust
+    # statistics (trimmed mean AND median) and the leading segment did not change.
+    # None means "not assessed" (never inferred from the absence of a warning).
+    outlier_robust: Optional[bool] = None
     details: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -88,6 +92,72 @@ def detect_simpsons_reversal(
                     "secondary_dimension": sec_dim,
                 }
     return None
+
+
+def _rank_robustness(
+    group_means: "pd.Series", trimmed_means: "pd.Series", median_by_group: "pd.Series", outlier_sensitive: bool,
+) -> Tuple[Optional[bool], Dict[str, Any]]:
+    """Shared rank-robustness rule: the leading segment must be the same under the mean, the
+    1%-trimmed mean and the median, with a strict median gap, and the trim must not erase the spread."""
+    try:
+        mean_ok, trim_ok, med_ok = group_means.dropna(), trimmed_means.dropna(), median_by_group.dropna()
+        if len(mean_ok) >= 2 and len(trim_ok) >= 2 and len(med_ok) >= 2:
+            top_mean, top_trim, top_median = mean_ok.idxmax(), trim_ok.idxmax(), med_ok.idxmax()
+            runner_up = float(med_ok.drop(top_median).max())
+            median_gap_ok = float(med_ok.loc[top_median]) > runner_up
+            robust = bool((not outlier_sensitive) and top_mean == top_trim == top_median and median_gap_ok)
+            return robust, {
+                "checked": True,
+                "top_segment_mean": str(top_mean),
+                "top_segment_trimmed_mean": str(top_trim),
+                "top_segment_median": str(top_median),
+                "robust": robust,
+            }
+    except Exception:  # robustness is evidence only when it was really computed
+        pass
+    return None, {"checked": False}
+
+
+def assess_outlier_robustness(df: pd.DataFrame, grouping: Optional[str], metric: Optional[str]) -> Dict[str, Any]:
+    """Check one exact (metric, grouping) pair for outlier sensitivity.
+
+    Used when the adversarial attack could not run -- most importantly for an ambiguous question
+    that names no columns, where the attack has no resolved dimension -- but the data-quality gate
+    has already flagged outliers concentrated in a specific metric and grouping column. The check
+    is run on exactly the pair the gate flagged, never on a guessed column.
+
+    Returns ``{"checked": bool, "robust": Optional[bool], "outlier_sensitive": bool, ...}``.
+    ``robust`` is True only when the check really ran and passed; ``None`` means not assessed.
+    """
+    out: Dict[str, Any] = {"checked": False, "robust": None, "outlier_sensitive": False,
+                           "metric": metric, "grouping": grouping}
+    try:
+        if not grouping or not metric or df is None or df.empty:
+            return out
+        if grouping not in df.columns or metric not in df.columns or grouping == metric:
+            return out
+        if not pd.api.types.is_numeric_dtype(df[metric]):
+            return out
+        work = df[[grouping, metric]].dropna()
+        if len(work) < 10 or work[grouping].nunique() < 2:
+            return out
+        group_means = work.groupby(grouping)[metric].mean()
+        overall_mean = float(group_means.mean())
+        spread_ratio = (float(group_means.max()) - float(group_means.min())) / max(1e-9, abs(overall_mean))
+        q99 = work[metric].quantile(0.99)
+        trimmed_means = work[work[metric] <= q99].groupby(grouping)[metric].mean()
+        trimmed_spread = (
+            (float(trimmed_means.max()) - float(trimmed_means.min())) / max(1e-9, abs(float(trimmed_means.mean())))
+            if not trimmed_means.empty else spread_ratio
+        )
+        sensitive = bool(spread_ratio > 0.30 and trimmed_spread < 0.10)
+        robust, detail = _rank_robustness(group_means, trimmed_means, work.groupby(grouping)[metric].median(), sensitive)
+        out.update(detail)
+        out.update({"checked": bool(detail.get("checked")), "robust": robust, "outlier_sensitive": sensitive,
+                    "spread_ratio": float(spread_ratio), "trimmed_spread": float(trimmed_spread)})
+        return out
+    except Exception:
+        return {"checked": False, "robust": None, "outlier_sensitive": False, "metric": metric, "grouping": grouping}
 
 
 class AdversarialAttacker:
@@ -196,6 +266,13 @@ class AdversarialAttacker:
         trimmed_means = trimmed_df.groupby(dim)[metric].mean()
         trimmed_spread = (float(trimmed_means.max()) - float(trimmed_means.min())) / max(1e-9, abs(float(trimmed_means.mean()))) if not trimmed_means.empty else spread_ratio
         outlier_sensitive = (spread_ratio > 0.30 and trimmed_spread < 0.10)
+
+        # 2b. Rank-robust confirmation. A 1% trim removes a single row on a small table, so
+        # on its own it is a weak check. Re-rank the segments by trimmed mean and by median
+        # (both resistant to a few extreme rows) and require the same leading segment.
+        outlier_robust, robustness_detail = _rank_robustness(
+            group_means, trimmed_means, df.groupby(dim)[metric].median(), outlier_sensitive,
+        )
 
         # 3. Simpson's Paradox / Secondary Partition Confounding Check
         simpsons_paradox = False
@@ -311,6 +388,7 @@ class AdversarialAttacker:
             details["simpsons_reversal"] = {**(simpsons_detail or {}), "primary_dimension": dim, "metric": metric}
         if outlier_sensitive:
             details["outlier_trimming"] = "1PCT"
+        details["outlier_robustness"] = robustness_detail
         if selection_attack:
             details["selection_bias_attack"] = selection_attack
         if leakage_attack:
@@ -326,6 +404,7 @@ class AdversarialAttacker:
             is_falsified=falsified,
             simpsons_paradox_detected=simpsons_paradox,
             outlier_sensitivity_high=outlier_sensitive,
+            outlier_robust=outlier_robust,
             details=details,
         )
 

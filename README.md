@@ -290,13 +290,13 @@ python -m uvicorn apps.api.src.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 *API is live at `http://127.0.0.1:8000` (Swagger docs available at `http://127.0.0.1:8000/api/v1/docs` in development; in production Swagger is disabled and health is at `http://127.0.0.1:8000/health`).*
 
-### 3. Start the Frontend (Next.js 14)
+### 3. Start the Frontend (Next.js 15)
 ```bash
 cd apps/web
 npm install
 npm run dev
 ```
-*Web application is live at `http://localhost:3000` with the editorial software cockpit at `http://localhost:3000/landing.html`.*
+*Web application is live at `http://localhost:3000` with the landing page at `http://localhost:3000/landing.html` (and editorial showcase archived at `docs/showcase/editorial_cockpit.html`).*
 
 ---
 
@@ -306,7 +306,7 @@ npm run dev
 autonomous-data-analyst/
 ├── apps/
 │   ├── api/                    # FastAPI application, authentication & route handlers
-│   └── web/                    # Next.js 14 UI, DataLens components & cursor visualizer
+│   └── web/                    # Next.js 15 UI, DataLens components & cursor visualizer
 ├── packages/
 │   ├── analytics_core/         # Scientific loop: hypothesis, EIG planner, belief, verifier
 │   ├── schemas/                # Canonical Pydantic schemas (Intent, Hypothesis, State)

@@ -297,7 +297,7 @@ def run_check():
     branding_files = {
         "Logo.tsx": (os.path.join(PROJECT_ROOT, "apps", "web", "src", "components", "Logo.tsx"), ["Mind", "Ed", "AA-OS"]),
         "layout.tsx": (os.path.join(PROJECT_ROOT, "apps", "web", "src", "app", "layout.tsx"), ["MindEd AA-OS"]),
-        "landing.html": (os.path.join(PROJECT_ROOT, "landing.html"), ["MindEd AA-OS"]),
+        "landing.html": (os.path.join(PROJECT_ROOT, "apps", "web", "public", "landing.html"), ["MindEd AA-OS"]),
         "README.md": (os.path.join(PROJECT_ROOT, "README.md"), ["AA-OS", "Autonomous Analytical Intelligence"]),
     }
     branding_failures = []

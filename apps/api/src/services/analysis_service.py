@@ -61,6 +61,26 @@ def _confidence_level(verdict_type: str, score: Optional[float]) -> ConfidenceLe
     return ConfidenceLevel.LOW
 
 
+
+def _public_main_finding(inv, verdict_row, verdict_type) -> str:
+    """OBSERVED answers are exact recomputations, so their finding is the deterministic
+    headline stored on the investigation. The verdict row's justification is the
+    hypothesis loop's rationale (posterior of a competing hypothesis), which describes a
+    different claim than the one the question asked about."""
+    if str(verdict_type).upper() == "OBSERVED" and getattr(inv, "main_finding", None):
+        return inv.main_finding
+    return verdict_row.justification if verdict_row else inv.direct_answer
+
+
+def _evidence_dataset_label(exp) -> str:
+    """Dataset name@fingerprint the evidence was computed on (was a hard-coded "1")."""
+    args = dict(getattr(exp, "arguments_json", None) or {})
+    fps = args.get("source_dataset_fingerprints") or {}
+    if isinstance(fps, dict) and fps:
+        return ", ".join(f"{name}@{str(fp)[:8]}" for name, fp in sorted(fps.items()))
+    names = args.get("source_datasets") or []
+    return ", ".join(map(str, names)) if names else "unknown"
+
 class AnalysisService:
     """Service coordinating end-to-end autonomous analysis execution and persistence.
 
@@ -167,6 +187,14 @@ class AnalysisService:
             .first()
         )
         analysis_plan = (plan_event.event_payload_json if plan_event is not None else None)
+        exp_by_id = {e.id: e for e in exp_rows}
+        if isinstance(analysis_plan, dict):
+            # The planner's experiment codes are PROPOSALS (e.g. EXP-DESCRIPTIVE); the loop runs
+            # its own codes (e.g. EXP-CONC-HYP-01). Show what actually ran beside the plan.
+            analysis_plan = {**analysis_plan, "executed_experiments": [
+                {"code": e.test_code, "status": e.status, "rows_analyzed": int(e.analysis_row_count or 0)}
+                for e in exp_rows
+            ]}
 
         verdict_type = inv.verdict_type or "INCONCLUSIVE"
         if verdict_type not in AnalyticalVerdict.__members__.values() and verdict_type not in [v.value for v in AnalyticalVerdict]:
@@ -199,8 +227,12 @@ class AnalysisService:
                 id=e.id,
                 statement=e.statement,
                 calculation_summary=e.calculation_summary or "",
-                dataset_version="1",
-                row_count_analyzed=(obs_by_experiment_id.get(e.experiment_id).row_count_analyzed if e.experiment_id in obs_by_experiment_id else 0),
+                dataset_version=_evidence_dataset_label(exp_by_id.get(e.experiment_id)),
+                row_count_analyzed=(
+                    obs_by_experiment_id.get(e.experiment_id).row_count_analyzed
+                    if e.experiment_id in obs_by_experiment_id
+                    else int(getattr(exp_by_id.get(e.experiment_id), "analysis_row_count", 0) or 0)
+                ),
                 sql_executed=(obs_by_experiment_id.get(e.experiment_id).sql_executed if e.experiment_id in obs_by_experiment_id else None),
                 raw_metrics=((obs_by_experiment_id.get(e.experiment_id).result_json or {}).get("structured_result", {}) if e.experiment_id in obs_by_experiment_id else {}),
                 p_value=e.p_value,
@@ -487,7 +519,7 @@ class AnalysisService:
             status=AnalysisStatus(status_str) if status_str in [s.value for s in AnalysisStatus] else AnalysisStatus.INCONCLUSIVE,
             verdict=AnalyticalVerdict(verdict_type),
             direct_answer=inv.direct_answer,
-            main_finding=verdict_row.justification if verdict_row else inv.direct_answer,
+            main_finding=_public_main_finding(inv, verdict_row, verdict_type),
             confidence=_confidence_level(verdict_type, confidence_score),
             hypotheses=hypotheses,
             steps=steps,
@@ -521,7 +553,7 @@ class AnalysisService:
                     "question": payload.question,
                     "verdict": verdict_type,
                     "direct_answer": inv.direct_answer,
-                    "main_finding": verdict_row.justification if verdict_row else inv.direct_answer,
+                    "main_finding": _public_main_finding(inv, verdict_row, verdict_type),
                     "local_explanation": local_explanation.to_dict(),
                 }
                 ai_prompt = (

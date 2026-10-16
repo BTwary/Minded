@@ -107,6 +107,15 @@ class PredictiveHypothesis:
     dimension_candidates: List[str] = field(default_factory=list)
 
 
+def _is_identifier_name(column: str) -> bool:
+    """True for columns whose NAME marks them as a row/entity identifier (``account_id``, ``order_key``,
+    ``uuid``...). An identifier is never a meaningful confounder or alternative explanation: it is unique
+    per entity, so "controlling for it" removes all between-group variation by construction. Name-based
+    on purpose (no data access here) and narrow, so real dimensions like ``region_code`` are untouched."""
+    c = str(column).strip().lower()
+    return c in ("id", "key", "uuid", "guid", "pk") or c.endswith(("_id", "_key", "_uuid", "_guid", "_ref", "_pk", "_fk"))
+
+
 def resolve_group_dimension(semantic: "SemanticResolution") -> "Tuple[str, str, List[str]]":
     """Single authoritative rule for turning candidate categorical columns
     into a grouping dimension, without ever fabricating one.
@@ -359,7 +368,7 @@ class HypothesisSynthesizer:
         hyps.append(h2)
 
         # H3: Secondary Dimensional Confounding (if additional dimensions exist)
-        sec_dim = next((d for d in available_dims if d != dim), None)
+        sec_dim = next((d for d in available_dims if d != dim and not _is_identifier_name(d)), None)
         if sec_dim:
             h3 = PredictiveHypothesis(
                 id=f"HYP-03",
@@ -404,6 +413,23 @@ class HypothesisSynthesizer:
             })
 
         return hyps
+
+    @staticmethod
+    def _normalize_uniform_priors(hyps: List["PredictiveHypothesis"]) -> None:
+        """Normalize neutral structural priors so they sum to 1 (uniform 1/N).
+
+        Every family builder seeds each hypothesis with prior_probability=1.0
+        and labels it UNIFORM_STRUCTURAL_PRIOR. Only the default and churn
+        families normalized; the segmentation, correlation and forecast
+        families returned raw 1.0 priors, so competing hypotheses both showed
+        P(H|E)=100%. Posterior is reset to the prior, matching the other
+        families."""
+        total = sum(float(getattr(h, "prior_probability", 0.0) or 0.0) for h in hyps)
+        if total <= 0:
+            return
+        for h in hyps:
+            h.prior_probability = float(h.prior_probability) / total
+            h.posterior_probability = h.prior_probability
 
     @staticmethod
     def _synthesize_correlation_hypotheses(
@@ -553,6 +579,7 @@ class HypothesisSynthesizer:
             h.direction = semantic.direction_hint
             stamp_semantic_identity(h)
             h.consolidation_log.append({"event": "created", "prior_source": "UNIFORM_STRUCTURAL_PRIOR", "hypothesis_code": h.hypothesis_code, "claim": h.claim})
+        HypothesisSynthesizer._normalize_uniform_priors(hyps)
         return hyps
 
     @staticmethod
@@ -617,6 +644,7 @@ class HypothesisSynthesizer:
             h.direction = semantic.direction_hint
             stamp_semantic_identity(h)
             h.consolidation_log.append({"event": "created", "prior_source": "UNIFORM_STRUCTURAL_PRIOR", "hypothesis_code": h.hypothesis_code, "claim": h.claim})
+        HypothesisSynthesizer._normalize_uniform_priors(hyps)
         return hyps
 
     @staticmethod
@@ -688,6 +716,7 @@ class HypothesisSynthesizer:
             h.dimension_candidates = dim_candidates
             stamp_semantic_identity(h)
             h.consolidation_log.append({"event": "created", "prior_source": "UNIFORM_STRUCTURAL_PRIOR", "hypothesis_code": h.hypothesis_code, "claim": h.claim})
+        HypothesisSynthesizer._normalize_uniform_priors(hyps)
         return hyps
 
     @staticmethod
@@ -1035,7 +1064,8 @@ class HypothesisSynthesizer:
         alternatives: List[PredictiveHypothesis] = []
         dim = refuted_hypothesis.target_dimension
         metric = refuted_hypothesis.target_metric or _target_metric_via_canonical(semantic, canonical)
-        available_dims = [d for d in canonical.available_categorical_candidates if d != dim]
+        available_dims = [d for d in canonical.available_categorical_candidates
+                          if d != dim and not _is_identifier_name(d)]
 
         existing_codes = {h.hypothesis_code for h in existing_hyps}
         next_idx = len(existing_hyps) + 1

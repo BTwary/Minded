@@ -76,6 +76,16 @@ def on_startup():
 # Include API v1 router
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "service": settings.PROJECT_NAME,
+        "version": "1.0.0",
+        "ai_provider": settings.AI_PROVIDER,
+    }
+
 # Packaged offline desktop mode serves the prebuilt static frontend from the
 # same loopback origin as the API. This removes Node/npm from the runtime
 # dependency graph and keeps browser calls same-origin. The source checkout
@@ -94,16 +104,6 @@ def root():
         "docs_url": None if is_production else f"{settings.API_V1_STR}/docs",
         "api_v1": settings.API_V1_STR,
         "frontend_url": "http://localhost:3000",
-    }
-
-
-@app.get("/health")
-def health_check():
-    return {
-        "status": "healthy",
-        "service": settings.PROJECT_NAME,
-        "version": "1.0.0",
-        "ai_provider": settings.AI_PROVIDER,
     }
 
 

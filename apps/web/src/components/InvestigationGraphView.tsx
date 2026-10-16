@@ -26,6 +26,7 @@ interface Props {
   entropy?: number;
   objective?: string;
   targetMetric?: string;
+  descriptiveAnswer?: boolean;
 }
 
 export default function InvestigationGraphView({
@@ -33,6 +34,7 @@ export default function InvestigationGraphView({
   entropy,
   objective = "Diagnostic",
   targetMetric = "Primary Metric",
+  descriptiveAnswer = false,
 }: Props) {
   const [selectedHypothesis, setSelectedHypothesis] = useState<Hypothesis | null>(
     hypotheses.length > 0 ? hypotheses[0] : null
@@ -80,6 +82,12 @@ export default function InvestigationGraphView({
 
   return (
     <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 space-y-6">
+      {descriptiveAnswer && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-[11px] text-amber-200">
+          This question was answered by direct, verified computation (verdict OBSERVED). The hypotheses
+          below are background checks the engine ran; their probabilities do not describe the answer.
+        </div>
+      )}
       {/* Header bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
         <div>

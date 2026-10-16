@@ -2,11 +2,11 @@
 
 **Date:** 2026-09-30  
 **Archive:** `MindEd_AAOS_v40_Release1.0_candidate.zip`  
-**Release Status:** **RELEASE CANDIDATE — RELEASE-GATE READY**  
+**Release Status:** **RELEASE CANDIDATE — certification evidence recorded; final clean-room release gate and artifact validation required**  
 
 ## 1. Scope and Architectural Closures
 
-AA-OS v40 achieves Release 1.0 certification as a **bounded autonomous data analyst** executing under local-first deterministic discipline.
+AA-OS v40 is the Release 1.0 candidate for a **bounded autonomous data analyst** executing under local-first deterministic discipline.
 
 ### Analytical Contract & Correctness Closures
 

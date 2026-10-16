@@ -350,7 +350,10 @@ class TestVerifierWorkflowEndToEnd(_ControllerBase):
         self.assertTrue(attacks[0]["is_falsified"])
         self.assertEqual(attacks[0]["details"]["simpsons_reversal"]["secondary_dimension"], "severity")
         mv = payload["multiverse"]
-        self.assertTrue(mv["applicable"]); self.assertEqual(mv["total_specifications"], 9)
+        self.assertTrue(mv["applicable"])
+        # The grid varies only estimand-preserving choices: a mean-type metric is pinned to
+        # MEAN (x 3 outlier-trim levels). Crossing SUM/MEDIAN answered a different question.
+        self.assertEqual(mv["total_specifications"], 3)
 
     def test_stopping_outcome_is_persisted(self):
         payload = self._get(self._run(_positive_df(), "Why did cost_metric surge across datacenter_region?"))

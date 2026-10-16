@@ -96,7 +96,8 @@ def run_tests():
         ),
     )
     plan = compiler.compile(complex_intent)
-    assert "SELECT region, SUM(amount) AS Revenue FROM data_table" in plan.sql_query
+    # The compiler targets the table the intent declares (the executor binds the dataframe to that name).
+    assert "SELECT region, SUM(amount) AS Revenue FROM orders" in plan.sql_query
     assert "status = 'completed'" in plan.sql_query
     assert "tier IN ('Enterprise', 'SMB')" in plan.sql_query
     assert "order_date >= '2026-01-01' AND order_date <= '2026-03-31'" in plan.sql_query
