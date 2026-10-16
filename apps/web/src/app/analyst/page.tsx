@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -35,6 +35,7 @@ import {
 import {
   createInvestigation,
   fetchDatasets,
+  fetchDatasetData,
   fetchInvestigation,
   streamInvestigationEvents,
   fetchProjects,
@@ -43,7 +44,8 @@ import {
   reviseInvestigationGuidance,
   retryInvestigationDispatch,
 } from "../../lib/api";
-import { AnalysisResponse, Dataset } from "../../types";
+import { AnalysisResponse, Dataset, Project } from "../../types";
+import AnalyticsDataStarter from "../../components/AnalyticsDataStarter";
 import StepTracker from "../../components/StepTracker";
 import EvidenceViewer from "../../components/EvidenceViewer";
 import EvidenceGraph from "../../components/EvidenceGraph";
@@ -57,9 +59,15 @@ import ProposedAnalysisPanel from "../../components/ProposedAnalysisPanel";
 import RecordLevelInspector from "../../components/RecordLevelInspector";
 
 export default function AnalystPage() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loadingDatasets, setLoadingDatasets] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const initialDataset = useRef<string | null>(null);
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
+  const [planNotice, setPlanNotice] = useState<string | null>(null);
   const [proposedPlan, setProposedPlan] = useState<PreAnalysisPlan | null>(null);
   // Fingerprint of the guidance the current proposedPlan.plan_hash was computed for. The hash the
   // analyst approves must belong to the plan they were shown, so edited guidance is re-previewed
@@ -87,16 +95,25 @@ export default function AnalystPage() {
     async function loadProjects() {
       try {
         const projects = await fetchProjects();
-        setProjectId(projects[0]?.id || "");
+        setProjects(projects);
+        if (!projects.length) throw new Error("No workspace is available for your account.");
+        const params = new URLSearchParams(window.location.search);
+        const requestedProject = params.get("project_id");
+        if (requestedProject && !projects.some((project) => project.id === requestedProject)) {
+          throw new Error("This workspace is unavailable. Open an accessible workspace from Datasets.");
+        }
+        initialDataset.current = params.get("dataset");
+        setProjectId(requestedProject || projects[0]?.id || "");
         if (typeof window !== "undefined") {
           const params = new URLSearchParams(window.location.search);
-          const initialQ = params.get("q");
+          const initialQ = params.get("q") || params.get("question");
           if (initialQ) {
             setQuestion(initialQ);
           }
         }
       } catch (e) {
-        console.error("Failed to load projects:", e);
+        setError(e instanceof Error ? e.message : "Unable to load your workspace. Refresh to try again.");
+        setLoadingDatasets(false);
       }
     }
     loadProjects();
@@ -108,43 +125,81 @@ export default function AnalystPage() {
       setSelectedDatasetIds([]);
       return;
     }
+    let cancelled = false;
+    setLoadingDatasets(true);
     async function loadProjectDatasets() {
       try {
         const ds = await fetchDatasets(projectId);
+        if (cancelled) return;
         setDatasets(ds);
-        setSelectedDatasetIds((current) => current.filter((id) => ds.some((dataset) => dataset.id === id)));
+        const requested = initialDataset.current;
+        initialDataset.current = null;
+        if (requested && !ds.some((dataset) => dataset.id === requested)) {
+          setSelectedDatasetIds([]);
+          setError("The requested dataset is unavailable in this workspace. Choose a dataset below.");
+        } else {
+          setSelectedDatasetIds(requested ? [requested] : ds.length === 1 ? [ds[0].id] : []);
+        }
       } catch (e) {
-        console.error("Failed to load project datasets:", e);
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : "Unable to load datasets. Refresh to try again.");
         setDatasets([]);
         setSelectedDatasetIds([]);
+      } finally {
+        if (!cancelled) setLoadingDatasets(false);
       }
     }
-    loadProjectDatasets();
+    void loadProjectDatasets();
+    return () => { cancelled = true; };
   }, [projectId]);
 
   useEffect(() => {
-    if (!datasets.length) return;
-    const targetId = selectedDatasetIds[0] || datasets[0]?.id;
+    let cancelled = false;
+    setRecordSampleRows([]);
+    setRecordSampleCols([]);
+    setTotalRecordCount(0);
+    setPreviewError(null);
+    const targetId = selectedDatasetIds[0];
     if (!targetId) return;
-    fetch(`/api/v1/datasets/${encodeURIComponent(targetId)}/data?limit=50`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data && Array.isArray(data.rows)) {
-          setRecordSampleRows(data.rows);
-          setRecordSampleCols(data.columns || (data.rows[0] ? Object.keys(data.rows[0]) : []));
-          setTotalRecordCount(data.total_rows || data.row_count || data.rows.length);
-        }
-      })
-      .catch(() => {});
-  }, [datasets, selectedDatasetIds]);
+    fetchDatasetData(targetId).then((data: any) => {
+      if (cancelled) return;
+      setRecordSampleRows(data.rows || []);
+      setRecordSampleCols(data.columns?.length ? data.columns : Object.keys(data.rows?.[0] || {}));
+      setTotalRecordCount(data.total_rows || data.row_count || data.rows?.length || 0);
+    }).catch((cause) => {
+      if (!cancelled) setPreviewError(cause instanceof Error ? cause.message : "Dataset preview unavailable.");
+    });
+    return () => { cancelled = true; };
+  }, [selectedDatasetIds]);
+
+  const changeDatasetScope = (ids: string[]) => {
+    setSelectedDatasetIds(ids);
+    setProposedPlan(null);
+    setPlanNotice(null);
+    setPreviewedGuidanceKey("");
+    setClarificationInvestigationId(null);
+    setDispatchRetryId(null);
+    setAnalysis(null);
+    setChatMessages([]);
+    setInterpretation(null);
+    setFollowUps([]);
+    setIsReportModalOpen(false);
+    setError(null);
+  };
+
+  const busy = isLoading || isPlanning || isUploading || loadingDatasets;
+  const journeyStep = isLoading ? 3 : analysis ? 4 : proposedPlan ? 2 : selectedDatasetIds.length ? 1 : 0;
 
   const handlePlanQuestion = async (q: string) => {
-    if (!q.trim()) return;
+    if (!q.trim() || busy || !selectedDatasetIds.length) return;
     setClarificationInvestigationId(null);
     setDispatchRetryId(null);
     setIsPlanning(true);
     setError(null);
     setQuestion(q);
+    setAnalysis(null);
+    setProposedPlan(null);
+    setPlanNotice(null);
     try {
       if (!projectId) {
         throw new Error("No local analytical workspace is available yet.");
@@ -185,9 +240,10 @@ export default function AnalystPage() {
     } = {},
     retryId?: string
   ) => {
-    if (!q.trim()) return;
+    if (!q.trim() || busy) return;
     setIsLoading(true);
     setError(null);
+    setPlanNotice(null);
     setProgressText("Queueing autonomous investigation…");
     setQuestion(q);
 
@@ -226,7 +282,7 @@ export default function AnalystPage() {
         setProposedPlan(refreshed);
         setPreviewedGuidanceKey(guidanceKey);
         setProgressText(null);
-        setError("The plan was refreshed to reflect your changes. Review it and confirm to run.");
+        setPlanNotice("Your interpretation has been updated to include your guidance. Review the calculation below, then select Run Analysis to approve it.");
         return;
       }
       const requestGuidance = {
@@ -294,6 +350,7 @@ export default function AnalystPage() {
       setClarificationInvestigationId(null);
       setDispatchRetryId(null);
       setProposedPlan(null);
+      setPlanNotice(null);
       setPreviewedGuidanceKey("");
 
       setConversationId(undefined);
@@ -378,7 +435,9 @@ export default function AnalystPage() {
           executive_bullets: [],
           analysis_plan: inv.analysis_plan || undefined,
           decision_impact: inv.decision_impact || undefined,
-          dataset_scope: inv.requested_dataset_ids || [],
+          // The detail API currently records scope under provenance, not at the
+          // top level. Retain the submitted scope for an independent comparison.
+          dataset_scope: inv.requested_dataset_ids ?? selectedDatasetIds,
           cross_dataset_review: inv.cross_dataset_review || undefined,
           created_at: inv.created_at || new Date().toISOString(),
         };
@@ -412,7 +471,7 @@ export default function AnalystPage() {
             setAnalysis(mapped);
             setActiveTab("findings");
             if (status === "FAILED") {
-              setError(current.error_message || "AA-OS investigation failed. Review the investigation events for the recorded failure.");
+              setError(current.error_message || "This run did not produce a result. Review the interpretation and try a more specific question. The failed run is saved in History.");
             }
             break;
           }
@@ -452,24 +511,54 @@ export default function AnalystPage() {
             <Bot className="w-4 h-4" />
             <span>AUTONOMOUS ANALYTICAL INTELLIGENCE OPERATING SYSTEM (AA-OS)</span>
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">AI Analyst & Investigation Studio</h1>
+          <h1 className="text-2xl font-bold text-white tracking-tight">From data to a clear answer</h1>
           <p className="text-xs text-slate-400 mt-1">
-            Zero hallucinated arithmetic: DuckDB OLAP execution, Bayesian Investigation DAGs, and NumPy recomputation.
+            Choose data, review your question, then explore the calculated result and its evidence.
           </p>
         </div>
 
+        <label className="text-xs text-slate-400">Workspace
+          <select aria-label="Workspace" value={projectId} disabled={busy}
+            onChange={(event) => { changeDatasetScope([]); setDatasets([]); setProjectId(event.target.value); }}
+            className="ml-2 rounded-lg border border-slate-700 bg-slate-900 p-2 text-slate-200">
+            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <ol aria-label="Analysis journey" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        {["Choose data", "Ask a question", "Approve interpretation", "Run analysis", "Explore & export"].map((label, index) => (
+          <li key={label} aria-current={journeyStep === index ? "step" : undefined}
+            className={`rounded-xl border px-3 py-3 text-xs ${journeyStep === index ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--foreground)]" : "border-slate-800 text-slate-400"}`}>
+            <span className="mr-2 font-mono">{index + 1}.</span>{label}
+          </li>
+        ))}
+      </ol>
+
+      <AnalyticsDataStarter projectId={projectId} disabled={isLoading || isPlanning || loadingDatasets}
+        onBusyChange={setIsUploading}
+        onUploaded={async (id, sample) => {
+          const refreshed = await fetchDatasets(projectId);
+          setDatasets(refreshed);
+          if (!refreshed.some((dataset) => dataset.id === id)) throw new Error("Upload finished, but the dataset list could not be refreshed. Reload the page to select it.");
+          changeDatasetScope([id]);
+          if (sample) setQuestion("What is the total revenue by region?");
+        }} />
+
+      <section aria-label="Dataset selection">
         {/* Dataset Workspace / Scope */}
         <div className="w-full xl:w-auto bg-slate-900 px-3 py-3 rounded-xl border border-slate-800 text-xs">
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <Filter className="w-3.5 h-3.5 text-cyan-400" />
             <span className="text-slate-400">Dataset workspace:</span>
             <span className="text-cyan-300 font-medium">
-              {selectedDatasetIds.length === 0 ? `All ${datasets.length} datasets` : `${selectedDatasetIds.length} selected`}
+              {selectedDatasetIds.length === 0 ? `Choose a dataset` : `${selectedDatasetIds.length} selected`}
             </span>
             {selectedDatasetIds.length > 0 && (
               <button
                 type="button"
-                onClick={() => setSelectedDatasetIds([])}
+                disabled={busy}
+                onClick={() => changeDatasetScope([])}
                 className="ml-2 text-[10px] text-slate-500 hover:text-white"
               >
                 Clear scope
@@ -483,20 +572,18 @@ export default function AnalystPage() {
                 <button
                   key={d.id}
                   type="button"
-                  onClick={() =>
-                    setSelectedDatasetIds((current) =>
-                      selected ? current.filter((id) => id !== d.id) : [...current, d.id]
-                    )
-                  }
+                  disabled={busy}
+                  aria-pressed={selected}
+                  onClick={() => changeDatasetScope(selected ? selectedDatasetIds.filter((id) => id !== d.id) : [...selectedDatasetIds, d.id])}
                   className={`px-2.5 py-1.5 rounded-lg border text-[11px] transition ${
                     selected
-                      ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200"
+                      ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--foreground)]"
                       : "border-slate-700 bg-slate-950 text-slate-400 hover:text-white hover:border-slate-600"
                   }`}
                   title={`${d.name} • ${d.row_count?.toLocaleString()} rows • v${d.current_version}`}
                 >
                   {d.name}
-                  <span className="ml-1 text-[9px] opacity-60">{d.row_count?.toLocaleString()}r</span>
+                  <span className="ml-1 text-[9px] opacity-60">{d.row_count?.toLocaleString()} rows</span>
                 </button>
               );
             })}
@@ -507,10 +594,16 @@ export default function AnalystPage() {
             </div>
           )}
         </div>
-     </div>
+        {loadingDatasets && <p role="status" className="mt-3 text-xs text-slate-400">Loading your workspace…</p>}
+        {!loadingDatasets && !datasets.length && <p className="mt-3 text-sm text-slate-400">No datasets yet. Upload your CSV or try the sample above.</p>}
+        {previewError && <p role="alert" className="mt-3 text-xs text-amber-300">Preview unavailable: {previewError}</p>}
+        {selectedDatasetIds.length > 0 && recordSampleCols.length > 0 && <p className="mt-3 text-xs text-slate-400">Available columns: {recordSampleCols.join(", ")}</p>}
+      </section>
 
       {/* Query Input Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl focus-within:border-cyan-500/50 transition-all">
+        <label htmlFor="business-question" className="block text-base font-semibold text-white mb-2">2. Ask a business question</label>
+        <p className="text-xs text-slate-400 mb-3">Use the column names above. Next, you’ll review what will be calculated before approving the run.</p>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -520,18 +613,19 @@ export default function AnalystPage() {
         >
           <div className="relative flex-1">
             <input
+              id="business-question"
               type="text"
               placeholder="Ask an analytical question (e.g. 'Which region has the highest revenue?', 'Does discount_pct affect quantity?', 'Why did revenue change?')..."
               value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              disabled={isLoading || isPlanning}
+              onChange={(e) => { setQuestion(e.target.value); setProposedPlan(null); setPlanNotice(null); setPreviewedGuidanceKey(""); }}
+              disabled={busy}
               className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 font-sans"
             />
           </div>
 
           <button
             type="submit"
-            disabled={isLoading || isPlanning || !question.trim()}
+            disabled={busy || !question.trim() || !selectedDatasetIds.length}
             className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-semibold px-6 py-3 rounded-xl flex items-center space-x-2 shadow-lg shadow-cyan-600/30 transition-all flex-shrink-0"
           >
             {isPlanning ? (
@@ -547,7 +641,7 @@ export default function AnalystPage() {
             ) : (
               <>
                 <Send className="w-4 h-4" />
-                <span>Plan & Investigate</span>
+                <span>Review interpretation</span>
               </>
             )}
           </button>
@@ -563,6 +657,7 @@ export default function AnalystPage() {
       )}
 
       {/* Proposed Analysis Panel (Pre-execution confirmation) */}
+      {proposedPlan && planNotice && <p role="status" className="rounded-xl border border-slate-700 bg-[var(--accent-soft)] p-4 text-sm text-[var(--foreground)]">{planNotice}</p>}
       {proposedPlan && (
         <ProposedAnalysisPanel
           key={`${clarificationInvestigationId || "new"}-${proposedPlan.resolution_reason || ""}`}
@@ -573,9 +668,10 @@ export default function AnalystPage() {
           onConfirmAndRun={(customized) => handleExecuteInvestigation(proposedPlan.question, customized)}
           onCancel={() => {
             setProposedPlan(null);
+            setPlanNotice(null);
             setClarificationInvestigationId(null);
           }}
-          isRunning={isLoading}
+          isRunning={busy}
         />
       )}
 
@@ -627,19 +723,20 @@ export default function AnalystPage() {
       )}
 
       {/* Quick Analysis Center */}
-      {!analysis && !isLoading && !proposedPlan && (
-        <QuickAnalysisCenter
-          isLoading={isLoading || isPlanning}
-          onSelectQuestion={(q) => handlePlanQuestion(q)}
-        />
+      {!analysis && !busy && !proposedPlan && selectedDatasetIds.length > 0 && (
+        <details className="rounded-xl border border-slate-800 p-4">
+          <summary className="cursor-pointer text-sm text-slate-300">More question ideas</summary>
+          <p className="my-3 text-xs text-slate-400">Choose an idea only if your selected data contains the relevant columns.</p>
+          <QuickAnalysisCenter isLoading={busy} onSelectQuestion={(q) => handlePlanQuestion(q)} />
+        </details>
       )}
 
       {/* Error Display */}
       {error && (
-        <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-5 flex items-start space-x-3 text-rose-300 text-xs">
+        <div role="alert" className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-5 flex items-start space-x-3 text-rose-300 text-xs">
           <AlertCircle className="w-5 h-5 flex-shrink-0 text-rose-400 mt-0.5" />
           <div>
-            <span className="font-bold block mb-1">Investigation Execution Error</span>
+            <span className="font-bold block mb-1">We couldn’t continue</span>
             <p>{error}</p>
             {dispatchRetryId && (
               <button
@@ -662,9 +759,9 @@ export default function AnalystPage() {
             <Cpu className="w-12 h-12 text-cyan-400 animate-spin" />
           </div>
           <div>
-            <h3 className="text-base font-bold text-white">Autonomous Investigation in Progress</h3>
+            <h3 className="text-base font-bold text-white">Your analysis is running</h3>
             <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-              Reconstructing semantic graph, formulating competing hypotheses, evaluating Expected Information Gain, and recomputing evidence via secondary validator...
+              The local worker is calculating results and checking supporting evidence. Keep this page open; completed analyses are also available in History.
             </p>
           </div>
         </div>
@@ -673,7 +770,9 @@ export default function AnalystPage() {
       {/* Full Analysis Results */}
       {analysis && !isLoading && (
         <div className="space-y-6">
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <div role="status" className="text-sm text-slate-200">{analysis.status === "COMPLETED" ? "Analysis complete — review the findings and limitations below." : `Analysis ${String(analysis.status).toLowerCase()} — review the recorded outcome below.`}</div>
+            <Link href="/history" className="text-xs text-cyan-300 hover:underline">Open saved analyses & PDF / Word exports</Link>
             <button
               onClick={() => setIsReportModalOpen(true)}
               className="text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 px-3.5 py-2 rounded-xl flex items-center space-x-2 transition-all shadow-lg shadow-indigo-600/10"
@@ -771,7 +870,7 @@ export default function AnalystPage() {
           )}
 
           {/* Navigation Tabs Bar */}
-          <div className="flex items-center space-x-2 border-b border-slate-800 pb-2">
+          <div className="flex items-center space-x-2 overflow-x-auto border-b border-slate-800 pb-2">
             {[
               { id: "findings", label: "Findings & Actions", icon: <Lightbulb className="w-4 h-4" /> },
               { id: "records", label: "Record Inspector", icon: <Database className="w-4 h-4" /> },

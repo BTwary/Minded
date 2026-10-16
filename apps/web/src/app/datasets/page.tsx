@@ -426,7 +426,7 @@ export default function DatasetsPage() {
                       <button
                         key={i}
                         type="button"
-                        onClick={() => router.push(`/analyst?dataset=${selectedDataset.id}&q=${encodeURIComponent(q.question)}`)}
+                        onClick={() => router.push(`/analyst?project_id=${encodeURIComponent(selectedProjectId)}&dataset=${encodeURIComponent(selectedDataset.id)}&q=${encodeURIComponent(q.question)}`)}
                         className="text-left bg-slate-950/90 hover:bg-cyan-950/30 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-3 transition group flex flex-col justify-between"
                       >
                         <div>
@@ -560,7 +560,7 @@ export default function DatasetsPage() {
 
                 {(selectedDataset.profile_version ?? selectedDataset.current_version) === selectedDataset.current_version ? (
                   <button
-                    onClick={() => router.push(`/analyst?dataset=${selectedDataset.id}`)}
+                    onClick={() => router.push(`/analyst?project_id=${encodeURIComponent(selectedProjectId)}&dataset=${encodeURIComponent(selectedDataset.id)}`)}
                     className="bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-all shadow-md"
                   >
                     <Bot className="w-3.5 h-3.5" />

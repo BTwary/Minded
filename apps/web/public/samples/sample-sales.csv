@@ -1,0 +1,25 @@
+order_id,order_date,region,product,quantity,revenue
+S001,2025-01-03,North,Notebook,4,80
+S002,2025-01-05,South,Desk Lamp,2,90
+S003,2025-01-08,East,Notebook,6,120
+S004,2025-01-10,West,Desk Lamp,5,225
+S005,2025-01-15,North,Desk Lamp,3,135
+S006,2025-01-18,South,Notebook,5,100
+S007,2025-01-21,East,Desk Lamp,4,180
+S008,2025-01-25,West,Notebook,8,160
+S009,2025-02-02,North,Notebook,7,140
+S010,2025-02-06,South,Desk Lamp,3,135
+S011,2025-02-09,East,Notebook,5,100
+S012,2025-02-12,West,Desk Lamp,6,270
+S013,2025-02-16,North,Desk Lamp,2,90
+S014,2025-02-20,South,Notebook,4,80
+S015,2025-02-23,East,Desk Lamp,3,135
+S016,2025-02-26,West,Notebook,9,180
+S017,2025-03-03,North,Notebook,6,120
+S018,2025-03-07,South,Desk Lamp,4,180
+S019,2025-03-10,East,Notebook,8,160
+S020,2025-03-14,West,Desk Lamp,7,315
+S021,2025-03-18,North,Desk Lamp,4,180
+S022,2025-03-21,South,Notebook,6,120
+S023,2025-03-25,East,Desk Lamp,5,225
+S024,2025-03-28,West,Notebook,10,200
