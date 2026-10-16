@@ -183,3 +183,39 @@ test("a blocked why question discloses absent causal evidence and does not claim
   assert.match(answer.limitations.join(" "), /verified evidence is missing/);
   assert.doesNotMatch(render(data), /How the result was calculated/);
 });
+
+test("What MindEd did uses persisted execution, and mismatches block a confident answer", () => {
+  const data = sales();
+  data.execution_record = {
+    execution_status: "SUCCESS", contract_status: "MATCHED", verification_status: "VERIFIED",
+    dataset: {name: "Executed sales", dataset_id: "sales", dataset_version: 7, dataset_version_id: "v7"},
+    aggregation: "SUM", target_column: "revenue", grouping_columns: ["region"], filters: [],
+    population_row_count: 24, result_row_count: 4, sql: 'SELECT region, SUM("revenue") FROM actual_snapshot GROUP BY region',
+    approved_contract: {target_column: "revenue", requested_aggregation: "SUM"},
+  };
+  let html = render(data);
+  assert.match(html, /What MindEd did/);
+  assert.match(html, /Executed sales/);
+  assert.match(html, /v7/);
+  assert.match(html, /actual_snapshot/);
+  assert.match(html, /Approved plan \(separate from execution\)/);
+  assert.doesNotMatch(html, /No reconciled execution record/);
+  data.execution_record.contract_status = "MISMATCH";
+  html = render(data);
+  assert.match(html, /has not been verified against the approved plan/);
+  assert.doesNotMatch(html, /Total revenue.*3,720/);
+  assert.match(html, /actual_snapshot/);
+  data.execution_record.contract_status = "MATCHED";
+  data.execution_record.verification_status = "FAILED";
+  html = render(data);
+  assert.match(html, /Independent verification of the executed calculation did not pass/);
+  assert.doesNotMatch(html, /Total revenue.*3,720/);
+});
+
+test("a missing execution record never presents planned SQL as executed", () => {
+  const data = sales();
+  data.analysis_plan.planned_sql = "SELECT secret_planned_only";
+  const html = render(data);
+  assert.match(html, /No reconciled execution record was saved/);
+  assert.doesNotMatch(html, /secret_planned_only/);
+});

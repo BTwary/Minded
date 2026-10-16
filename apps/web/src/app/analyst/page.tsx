@@ -389,6 +389,7 @@ export default function AnalystPage() {
           claim_gate: inv.claim_gate,
           main_finding: inv.main_finding || inv.direct_answer || "",
           analyst_result: inv.analyst_result || null,
+          execution_record: inv.execution_record || null,
           provenance: inv.provenance || undefined,
           evidence_verifications: inv.evidence_verifications || [],
           confidence,

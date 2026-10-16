@@ -69,6 +69,14 @@ function verificationState(analysis: AnalysisResponse): string {
     return "QUALIFIED";
   }
 
+  const result = record(analysis.analyst_result);
+  const numbers = record(result?.numbers);
+  const execution = record(analysis.execution_record) || record(numbers?.execution_record);
+  if (execution) {
+    if (execution.contract_status === "MISMATCH" || execution.verification_status === "FAILED") return "FAILED";
+    if (execution.contract_status !== "MATCHED" || execution.verification_status !== "VERIFIED") return "UNVERIFIED";
+  }
+
   const evidence = analysis.evidence || [];
   if (evidence.some((item) => String(item.validation_status).toUpperCase() === "FAILED")) return "FAILED";
   if (!evidence.length) return "UNVERIFIED";
@@ -94,6 +102,13 @@ function verificationState(analysis: AnalysisResponse): string {
 }
 
 function consistencyFailure(analysis: AnalysisResponse, res: JsonRecord): string | null {
+  const execution = record(analysis.execution_record) || record(record(res.numbers)?.execution_record);
+  if (execution && execution.contract_status !== "MATCHED") {
+    return "The execution has not been verified against the approved plan.";
+  }
+  if (execution && execution.verification_status !== "VERIFIED") {
+    return "Independent verification of the executed calculation did not pass.";
+  }
   const recordedVerdict = res.final_verdict;
   if (
     typeof recordedVerdict === "string" &&
@@ -129,6 +144,9 @@ export default function StructuredAnalysisAnswer({
 }) {
   const result = record(analysis.analyst_result);
   const numbers = record(result?.numbers) || {};
+  const execution = record(analysis.execution_record) || record(numbers.execution_record);
+  const executedDataset = record(execution?.dataset);
+  const approvedContract = record(execution?.approved_contract);
   const kind = String(result?.kind || "").toUpperCase();
   const integrityFailure = result ? consistencyFailure(analysis, result) : null;
   const verification = verificationState(analysis);
@@ -585,6 +603,29 @@ export default function StructuredAnalysisAnswer({
           </p>
         </section>
       )}
+
+      <section aria-label="What MindEd did" className="rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)]/40 p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-[var(--foreground)]">What MindEd did</h3>
+        {execution ? <>
+          <p className="text-xs text-[var(--muted)]">
+            Execution: <strong>{display(execution.execution_status)}</strong> · Plan match: <strong>{display(execution.contract_status)}</strong> · Independent verification: <strong>{display(execution.verification_status)}</strong>
+          </p>
+          {execution.contract_status !== "MATCHED" && <p role="alert" className="text-xs text-amber-600">The execution does not establish an answer to the approved question. Actual SQL is shown below where recorded.</p>}
+          <dl className="grid gap-2 text-xs sm:grid-cols-2 text-[var(--muted)]">
+            <div><dt className="font-semibold">Dataset used</dt><dd>{display(executedDataset?.name)} · ID {display(executedDataset?.dataset_id)}</dd></div>
+            <div><dt className="font-semibold">Version used</dt><dd>{display(executedDataset?.dataset_version)} · {display(executedDataset?.dataset_version_id)}</dd></div>
+            <div><dt className="font-semibold">Metric and aggregation executed</dt><dd>{display(execution.aggregation)}({display(execution.target_column)})</dd></div>
+            <div><dt className="font-semibold">Grouping executed</dt><dd>{display(execution.grouping_columns)}</dd></div>
+            <div><dt className="font-semibold">Filters executed</dt><dd>{display(execution.filters)}</dd></div>
+            <div><dt className="font-semibold">Date range executed</dt><dd>{display(execution.time_range)}</dd></div>
+            <div><dt className="font-semibold">Rows in executed scope</dt><dd>{display(execution.population_row_count)}</dd></div>
+            <div><dt className="font-semibold">Result rows / groups</dt><dd>{display(execution.result_row_count)}</dd></div>
+          </dl>
+          {typeof execution.sql === "string" && <details><summary className="cursor-pointer text-xs font-semibold">SQL actually executed</summary><pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{execution.sql}</pre></details>}
+          {record(execution.execution_specification) && <details><summary className="cursor-pointer text-xs font-semibold">Executed specification</summary><pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{JSON.stringify(execution.execution_specification, null, 2)}</pre></details>}
+          {approvedContract && <details><summary className="cursor-pointer text-xs font-semibold">Approved plan (separate from execution)</summary><pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{JSON.stringify(approvedContract, null, 2)}</pre></details>}
+        </> : <p className="text-xs text-[var(--muted)]">No reconciled execution record was saved for this analysis. Recorded evidence below may include executed queries; a proposed plan is not proof of execution.</p>}
+      </section>
 
       {answer.calculation.length > 0 && (
         <section aria-label="How the result was calculated" className="rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)]/40 p-4 space-y-2">

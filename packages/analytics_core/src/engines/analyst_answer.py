@@ -3256,6 +3256,7 @@ def _execute_canonical_descriptive_contract(contract: Any, df: pd.DataFrame) -> 
             "DESCRIPTIVE", headline,
             ["Executed the persisted operation graph from the approved canonical contract."],
             numbers={"operation_graph": graph_result, "canonical_contract": contract.to_dict(),
+                     "executed_operation_graph": graph.to_dict(),
                      "verification": graph_result.get("verification", {"status": "verified", "graph_validated": True})},
             descriptive=True, finding="compound_analysis",
         )

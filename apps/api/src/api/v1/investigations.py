@@ -46,6 +46,7 @@ from apps.api.src.models.entities import (
     Prediction,
     gen_uuid,
 )
+from packages.analytics_core.src.data.content_identity import compute_content_hash
 from packages.analytics_core.src.execution.queue import get_default_queue_provider
 from packages.analytics_core.src.engines.local_explanation import LocalExplanationEngine
 from packages.analytics_core.src.runtime.cross_dataset_review import build_cross_dataset_review
@@ -593,6 +594,7 @@ def create_investigation(
                 "guidance": guidance,
                 "dataset_name": selected_dataset_name,
                 "dataset_metadata": ds_context.dataset_versions.get(selected_dataset_name, {}),
+                "dataset_content_fingerprint": compute_content_hash(ds_context.datasets_map[selected_dataset_name]),
                 "dataset_fingerprint": dataset_fp,
                 "locked_at": datetime.now(timezone.utc).isoformat(),
             },
@@ -791,7 +793,22 @@ def list_analysis_history(
         for row in gate_rows:
             gate_rows_by_investigation.setdefault(row.investigation_id, row)
 
-    source_dataset_ids = set()
+    # Approved calculations persist their physical receipt rather than a second,
+    # heuristic InvestigationContract. Reopen that source identity without rerunning.
+    approved_sources = {}
+    if investigation_ids:
+        receipt_events = (db.query(InvestigationEvent).filter(
+            InvestigationEvent.investigation_id.in_(investigation_ids),
+            InvestigationEvent.event_type == "investigation.approved_execution",
+        ).order_by(InvestigationEvent.sequence.desc()).all())
+        for event in receipt_events:
+            receipt = event.event_payload_json or {}
+            approved_sources.setdefault(event.investigation_id, {
+                name: {**meta, "fingerprint": (receipt.get("source_dataset_fingerprints") or {}).get(name)}
+                for name, meta in (receipt.get("dataset_versions") or {}).items()
+            })
+    source_dataset_ids = {str(meta["dataset_id"]) for sources in approved_sources.values()
+                          for meta in sources.values() if meta.get("dataset_id")}
     for contract in contracts_by_investigation.values():
         population = contract.population_json or {}
         identities = population.get("dataset_identities", {}) if isinstance(population, dict) else {}
@@ -809,6 +826,7 @@ def list_analysis_history(
         contract = contracts_by_investigation.get(investigation.id)
         population = contract.population_json or {} if contract else {}
         identities = population.get("dataset_identities", {}) if isinstance(population, dict) else {}
+        identities = approved_sources.get(investigation.id) or identities
         descriptors = []
         for name, metadata in identities.items() if isinstance(identities, dict) else []:
             if not isinstance(metadata, dict):
@@ -1307,6 +1325,9 @@ def get_investigation(
         "main_finding": inv.main_finding,
         "analysis_mode": "DETERMINISTIC",
         "analyst_result": analyst_result_payload,
+        "execution_record": _latest_payload(["investigation.approved_execution"]) or (
+            (analyst_result_payload or {}).get("numbers", {}).get("execution_record")
+        ),
         "claim_gate": ({
             "outcome": claim_gate_row.outcome,
             "requested_claim": claim_gate_row.requested_claim,
@@ -2661,6 +2682,7 @@ def revise_investigation_guidance(
             "guidance": merged_guidance,
             "dataset_name": dataset_name,
             "dataset_metadata": ds_context.dataset_versions.get(dataset_name, {}),
+            "dataset_content_fingerprint": compute_content_hash(ds_context.datasets_map[dataset_name]),
             "dataset_fingerprint": dataset_fp,
             "locked_at": datetime.now(timezone.utc).isoformat(),
         },

@@ -719,7 +719,9 @@ def extract_filter_conditions(question: str, available_cols: Sequence[str]) -> T
             status_cols = subscription_status_cols
     if len(status_cols) == 1:
         for lifecycle in ("completed", "cancelled", "canceled", "paid", "refunded", "pending", "shipped", "delivered", "active", "inactive"):
-            if re.search(rf"\b{lifecycle}\b", ql, re.I) and not any(x[0] == status_cols[0].casefold() for x in used):
+            # An exclusion must not also synthesize the opposite inclusion predicate.
+            excluded_lifecycle = re.search(rf"\b(?:exclude|excluding|without|ignore)\s+(?:the\s+)?{lifecycle}\b", ql, re.I)
+            if not excluded_lifecycle and re.search(rf"\b{lifecycle}\b", ql, re.I) and not any(x[0] == status_cols[0].casefold() for x in used):
                 add(status_cols[0], "=", lifecycle)
                 break
 
@@ -1339,6 +1341,24 @@ def compile_canonical_question_contract(
             estimand = "ranking"
             evidence["ranking"] = {"group": dim_col, "target": target, "direction": ranking_direction}
 
+    # Explicit descriptive comparison: aggregate one resolved measure for observed
+    # levels of one resolved dimension. No significance or causal claim is implied.
+    compare_aggregate = re.fullmatch(
+        r"compare\s+((?:average|avg|mean|total|sum|count)\s+.+?)\s+(?:in|for|between)\s+(.+?)[?.!]*", q_clean, re.I,
+    )
+    if compare_aggregate and not target:
+        comparison_target = resolve_phrase_to_column(compare_aggregate.group(1), cols)
+        comparison_group, observed_levels = scan_observed_category_values(compare_aggregate.group(2), df)
+        requested_levels = [part.strip().strip("'\"").rstrip("?.!") for part in re.split(r"\s+(?:and|versus|vs)\s+", compare_aggregate.group(2), flags=re.I)]
+        # Every named level must exist; never silently compare a subset of the request.
+        if comparison_target and comparison_group and len(requested_levels) >= 2 and {v.casefold() for v in requested_levels} == {v.casefold() for v in observed_levels}:
+            target = comparison_target
+            grouping = [comparison_group]
+            comparison_values = [next(v for v in observed_levels if v.casefold() == name.casefold()) for name in requested_levels]
+            task_family = "DESCRIPTIVE"
+            estimand = "mean" if re.match(r"average|avg|mean", compare_aggregate.group(1), re.I) else "sum"
+            evidence["descriptive_comparison"] = {"values": comparison_values, "group": comparison_group}
+
     # 6. Group Comparison: "Do smokers tip more than non-smokers?" / "Do male penguins weigh more than female penguins?" / "Do credit card payers tip more than cash payers?" / "Do enterprise customers have higher retention than SMB customers?"
     do_compare_match = re.search(
         r"(?:do|does|did|is|are)\s+(.+?)\s+([a-zA-Z0-9_]+)\s+(?:more|less|higher|lower)\s+than\s+(.+?)(?:\?|$)",
@@ -1629,6 +1649,8 @@ def compile_canonical_question_contract(
         req_agg = "CORRELATION"
 
     filter_conditions = extract_filter_conditions(q_clean, cols)
+    if evidence.get("descriptive_comparison"):
+        filter_conditions += ({"column": grouping[0], "operator": "IN", "value": list(comparison_values)},)
 
     # Clean up unresolved roles
     unresolved: List[str] = []

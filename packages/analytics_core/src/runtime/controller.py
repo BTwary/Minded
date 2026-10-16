@@ -285,6 +285,255 @@ class InvestigationController:
 
         return compiled.sql_query
 
+    def _execute_approved_aggregate(self, investigation_id, exec_id, contract, locked, context, cancellation_check=None):
+        """Execute the approved fact query using the production provider and verifier.
+
+        Descriptive quantities do not require a hypothesis-selection loop. Persist the
+        same experiment/observation/evidence records, and format only the verified relation.
+        """
+        from packages.analytics_core.src.runtime.approved_execution import (
+            compile_approved_aggregate, answer_from_execution,
+        )
+        if cancellation_check and cancellation_check():
+            return False
+        dataset_name = locked["dataset_name"]
+        frame = context.datasets_map[dataset_name]
+        binding = compile_approved_aggregate(contract, frame)
+        sql = binding.plan.to_sql()
+        from packages.analytics_core.src.data.content_identity import compute_content_hash
+        from copy import deepcopy
+        expected_content = compute_content_hash(frame)
+        expected_inputs = {dataset_name: expected_content, "data_table": expected_content}
+        expected_fingerprints = dict(context.dataset_fingerprints)
+        expected_versions = deepcopy(context.dataset_versions)
+        result = self.execution_provider.execute_query(
+            query=sql, data_context=context, primary_table=dataset_name,
+            aggregation_type=binding.specification["aggregation"], primary_result_column="value",
+        )
+        receipt_matches = (
+            getattr(result, "executed_query", None) == sql
+            and getattr(result, "source_datasets", None) == [dataset_name]
+            and getattr(result, "source_dataset_fingerprints", None) == expected_fingerprints
+            and getattr(result, "source_dataset_versions", None) == expected_versions
+            and getattr(result, "input_content_fingerprints", None) == expected_inputs
+        )
+        verification = VerificationEngine.verify_secondary(
+            primary_df=frame, target_metric_col=contract.target_column,
+            aggregation_type=binding.specification["aggregation"], primary_metric=result.primary_value,
+            query_sql=getattr(result, "executed_query", None),
+            primary_result_df=result.result_df, primary_result_truncated=result.is_truncated,
+            relational_plan=binding.plan, relation_tables={"data_table": frame},
+            primary_result_column="value", primary_result_digest=result.relation_digest,
+        )
+        population_rows = int(result.result_df["n"].sum()) if "n" in result.result_df else 0
+        verified = (receipt_matches and result.status == "SUCCESS" and not result.is_truncated
+                    and verification.status == VerificationStatus.VERIFIED and population_rows > 0)
+        actual_sources = getattr(result, "source_datasets", [])
+        actual_dataset = actual_sources[0] if len(actual_sources) == 1 else None
+        record = {
+            **(binding.specification if receipt_matches else {}),
+            "submitted_specification": binding.specification,
+            "dataset": {
+                "name": actual_dataset,
+                **(getattr(result, "source_dataset_versions", {}).get(actual_dataset) or {}),
+                "fingerprint": (getattr(result, "source_dataset_fingerprints", {}).get(actual_dataset)),
+            },
+            "approved_contract": contract.to_dict(), "approved_contract_hash": contract.contract_hash(),
+            "sql": getattr(result, "executed_query", None),
+            "input_content_fingerprints": getattr(result, "input_content_fingerprints", None),
+            "execution_status": result.status,
+            "contract_status": "MATCHED" if receipt_matches else "MISMATCH",
+            "verification_status": str(verification.status),
+            "source_row_count": len(frame), "population_row_count": population_rows,
+            "result_row_count": result.result_row_count,
+            "verification_reason": verification.failure_reason or (
+                "The returned relation is truncated; a complete answer cannot be published." if result.is_truncated
+                else "No rows matched the approved scope." if population_rows == 0 else None),
+        }
+        record.update({
+            "primary_tool": verification.primary_tool, "secondary_tool": verification.secondary_tool,
+            "observed_delta_pct": verification.observed_delta_pct, "tolerance": 1e-4,
+            "source_datasets": actual_sources,
+            "source_dataset_fingerprints": getattr(result, "source_dataset_fingerprints", {}),
+            "dataset_versions": getattr(result, "source_dataset_versions", {}),
+        })
+        answer = None
+        if verified:
+            try:
+                answer = answer_from_execution(contract, binding, result.result_df, record)
+            except ValueError as exc:
+                # The query ran, so retain its receipt even when its values cannot
+                # support an answer (for example an undefined metric or ambiguous groups).
+                verified = False
+                record["verification_status"] = "FAILED"
+                record["verification_reason"] = str(exc)
+        return self._persist_approved_calculation(
+            investigation_id, exec_id, contract, context, dataset_name, record,
+            result.result_df.to_dict("records"), result.execution_time_ms, answer, verified, cancellation_check,
+        )
+
+    def _execute_approved_dataframe(self, investigation_id, exec_id, contract, locked, context, cancellation_check=None):
+        """Retain the existing canonical primitives/operation graph without heuristic fallback."""
+        from packages.analytics_core.src.engines.analyst_answer import _execute_canonical_descriptive_contract
+        if contract.task_family not in {"COUNT", "DESCRIPTIVE", "RANKING"}:
+            raise ValueError(f"Approved {contract.task_family} has no contract-bound execution adapter; clarify or choose a supported calculation.")
+        if cancellation_check and cancellation_check():
+            return False
+        dataset_name = locked["dataset_name"]
+        if set(contract.requested_outputs) - {"table"}:
+            raise ValueError("The approved output format is not supported by this executor.")
+        if contract.numerator_column or contract.denominator_column or contract.comparison_values or contract.time_range:
+            raise ValueError("This executor cannot faithfully bind the approved derived metric, comparison or date scope.")
+        graph = contract.operation_graph
+        if graph is not None:
+            if not graph.get("requested_outputs"):
+                raise ValueError("The approved operation graph has no requested outputs.")
+            if contract.share_of_total:
+                raise ValueError("The approved share denominator is not represented in the operation graph.")
+            for node in graph.get("nodes", []):
+                params = node.get("params") or {}
+                allowed = {"aggregation", "target_column", "grouping_columns", "filters", "percentile"} if node.get("operation") == "AGGREGATE" else {"direction"}
+                if set(params) - allowed:
+                    raise ValueError("The approved operation graph contains parameters the executor does not consume.")
+                if node.get("operation") == "AGGREGATE" and (
+                    params.get("target_column") != contract.target_column
+                    or params.get("aggregation") != contract.requested_aggregation
+                    or params.get("grouping_columns", []) != list(contract.grouping_columns)
+                    or params.get("filters", []) != list(contract.filter_conditions)
+                ):
+                    raise ValueError("The approved operation graph disagrees with the approved metric or scope.")
+                if node.get("operation") == "RANK" and contract.ranking_direction and params.get("direction", "DESC") != contract.ranking_direction:
+                    raise ValueError("The approved operation graph disagrees with the approved ranking direction.")
+        elif contract.ranking_direction:
+            raise ValueError("This primitive does not record an independently checked ranking direction.")
+        started = time.monotonic()
+        answer = _execute_canonical_descriptive_contract(contract, context.datasets_map[dataset_name])
+        actual = answer.numbers if answer is not None else {}
+        spec = {"aggregation": actual.get("operation"), "target_column": actual.get("target_column"),
+                "grouping_columns": actual.get("grouping_columns", []), "filters": actual.get("filters"),
+                "operation_graph": actual.get("executed_operation_graph")}
+        primitive_match = (
+            spec["aggregation"] == contract.requested_aggregation
+            and spec["target_column"] == contract.target_column
+            and spec["grouping_columns"] == list(contract.grouping_columns)
+            and spec["filters"] == list(contract.filter_conditions)
+            and not contract.comparison_values
+            and not contract.time_range
+            and not contract.ranking_direction
+            and (not contract.share_of_total or "share_of_total" in actual)
+        )
+        graph_match = contract.operation_graph is not None and spec["operation_graph"] == contract.operation_graph
+        if answer is None or not (primitive_match or graph_match):
+            raise ValueError("The approved requirements cannot be matched to an execution specification; no alternate calculation was substituted.")
+        verification = actual.get("verification") or {}
+        verified = verification.get("status") == "verified"
+        population_rows = actual.get("population_row_count")
+        outputs = (actual.get("operation_graph") or {}).get("outputs", {})
+        populations = {v["population_row_count"] for v in outputs.values() if "population_row_count" in v}
+        if population_rows is None and len(populations) == 1:
+            population_rows = populations.pop()
+        rows = actual.get("records") or [dict(group=key, **value) for key, value in (actual.get("table") or {}).items()]
+        if outputs:
+            rows = [{"output": key, "result": value} for key, value in outputs.items()]
+        if not rows and "value" in actual:
+            rows = [{"value": actual["value"]}]
+        record = {
+            **spec, "execution_specification": spec, "sql": None,
+            "execution_status": "SUCCESS", "contract_status": "MATCHED",
+            "verification_status": "VERIFIED" if verified else "UNVERIFIED",
+            "primary_tool": "canonical_dataframe_executor",
+            "secondary_tool": verification.get("method") or "canonical_operation_checks",
+            "verification_method": verification,
+            "approved_contract": contract.to_dict(), "approved_contract_hash": contract.contract_hash(),
+            "dataset": {"name": dataset_name, **context.dataset_versions.get(dataset_name, {}),
+                        "fingerprint": context.dataset_fingerprints.get(dataset_name)},
+            "source_datasets": [dataset_name], "source_dataset_fingerprints": context.dataset_fingerprints,
+            "dataset_versions": context.dataset_versions, "population_row_count": population_rows,
+            "result_row_count": None if outputs else len(rows) if rows else None,
+            "output_row_counts": {key: len(value["records"]) for key, value in outputs.items() if "records" in value},
+            "source_row_count": len(context.datasets_map[dataset_name]),
+        }
+        actual["execution_record"] = record
+        return self._persist_approved_calculation(
+            investigation_id, exec_id, contract, context, dataset_name, record, rows,
+            (time.monotonic() - started) * 1000, answer, verified, cancellation_check,
+        )
+
+    def _persist_approved_calculation(self, investigation_id, exec_id, contract, context,
+                                      dataset_name, record, result_rows, duration_ms, answer,
+                                      verified, cancellation_check=None):
+        population_rows = record.get("population_row_count")
+        # Store even a failed verification. Planned SQL is never labelled executed SQL.
+        exp_id = f"{investigation_id}_APPROVED"
+        evidence_id = f"{investigation_id}_FACT"
+        with self.session_factory() as session:
+            session.merge(Experiment(
+                id=exp_id, investigation_id=investigation_id, test_code="APPROVED-CALCULATION",
+                tool_name=record["primary_tool"], status="EXECUTED", experiment_role="PRIMARY",
+                analytical_identity=contract.contract_hash(), arguments_json=_json_safe(record),
+                analysis_row_count=population_rows or 0, full_scope=True, sampling_policy="NONE",
+                executed_at=datetime.now(timezone.utc),
+            ))
+            session.flush()
+            session.merge(Observation(
+                id=f"{investigation_id}_OBS", experiment_id=exp_id,
+                result_json=_json_safe({"result_rows": result_rows, "execution_record": record}),
+                row_count_analyzed=population_rows, execution_time_ms=duration_ms,
+                sql_executed=record.get("sql"),
+            ))
+            session.merge(Evidence(
+                id=evidence_id, investigation_id=investigation_id, experiment_id=exp_id,
+                statement=f"Executed {record['primary_tool']}; approved-plan match: {record['contract_status']}.",
+                calculation_summary=record.get("sql"),
+                validation_status="VERIFIED" if verified else "FAILED", confidence_score=None,
+                analytical_identity=contract.contract_hash(), evidence_identity_hash=contract.contract_hash(),
+            ))
+            session.flush()
+            session.merge(EvidenceVerification(
+                id=f"{investigation_id}_CHECK", evidence_id=evidence_id,
+                primary_tool=record["primary_tool"], secondary_tool=record["secondary_tool"],
+                observed_delta_pct=record.get("observed_delta_pct"), tolerance_threshold=record.get("tolerance", 1e-4),
+                status="VERIFIED" if verified else "FAILED",
+            ))
+            session.commit()
+        self.checkpointer.record_event(
+            investigation_id=investigation_id, execution_id=exec_id,
+            event_type="investigation.approved_execution", payload=_json_safe(record),
+        )
+        if not verified:
+            raise ValueError("Executed inputs did not match the approved plan or independent verification failed; no verified answer was issued.")
+        if cancellation_check and cancellation_check():
+            return False
+        self.checkpointer.record_event(
+            investigation_id=investigation_id, execution_id=exec_id,
+            event_type="investigation.analyst_result", payload=_json_safe({**answer.to_dict(), "final_verdict": "OBSERVED"}),
+        )
+        self.checkpointer.record_event(
+            investigation_id=investigation_id, execution_id=exec_id,
+            event_type="investigation.dataset_scope_resolved",
+            payload={"primary_dataset": dataset_name, "requested_dataset_ids": context.requested_dataset_ids,
+                     "dataset_fingerprints": context.dataset_fingerprints,
+                     "resolved_dataset_names": [dataset_name], "resolved_dataset_versions": context.dataset_versions},
+        )
+        with self.session_factory() as session:
+            inv = session.get(Investigation, investigation_id)
+            inv.status = InvestigationState.COMPLETED
+            inv.verdict_type = "OBSERVED"
+            inv.stopping_criteria_met = True
+            inv.direct_answer = answer.to_text()
+            inv.main_finding = answer.headline
+            inv.confidence_score = None
+            inv.dataset_version_ids_json = [v["dataset_version_id"] for v in context.dataset_versions.values() if v.get("dataset_version_id")]
+            verdict = session.query(InvestigationVerdict).filter_by(investigation_id=investigation_id).first()
+            if verdict is None:
+                verdict = InvestigationVerdict(investigation_id=investigation_id)
+                session.add(verdict)
+            verdict.verdict_type = "OBSERVED"
+            verdict.justification = answer.to_text()
+            session.commit()
+        self.checkpointer.complete_execution(investigation_id=investigation_id, execution_id=exec_id)
+        return True
+
     def execute_investigation(
         self,
         investigation_id: str,
@@ -464,11 +713,23 @@ class InvestigationController:
                         "AA-OS refuses to substitute another dataset."
                     )
                 actual_fingerprint = data_context.dataset_fingerprints.get(locked_dataset_name)
-                if locked_dataset_fingerprint and actual_fingerprint != locked_dataset_fingerprint:
+                if not locked_dataset_fingerprint or actual_fingerprint != locked_dataset_fingerprint:
                     raise DatasetUnavailableError(
                         "The selected dataset changed after the canonical contract was locked; "
                         "AA-OS refuses to execute the contract against a different snapshot."
                     )
+                approved_content = locked_contract_payload.get("dataset_content_fingerprint")
+                if approved_content:
+                    from packages.analytics_core.src.data.content_identity import compute_content_hash
+                    if compute_content_hash(data_context.datasets_map[locked_dataset_name]) != approved_content:
+                        raise DatasetUnavailableError("Physical dataset contents changed after approval; refusing a different snapshot.")
+                approved_metadata = locked_contract_payload.get("dataset_metadata") or {}
+                actual_metadata = data_context.dataset_versions.get(locked_dataset_name, {})
+                for key in ("dataset_id", "dataset_version_id", "dataset_version"):
+                    if approved_metadata.get(key) is not None and approved_metadata[key] != actual_metadata.get(key):
+                        raise DatasetUnavailableError(f"The approved dataset {key} changed; refusing a different dataset/version.")
+                if requested_dataset_ids and actual_metadata.get("dataset_id") not in requested_dataset_ids:
+                    raise DatasetUnavailableError("The locked dataset is outside the requested dataset scope.")
                 from dataclasses import replace as dataclass_replace
                 data_context = dataclass_replace(
                     data_context,
@@ -486,6 +747,37 @@ class InvestigationController:
                 failure_class=FailureTaxonomy.RESOURCE_UNAVAILABLE,
             )
             return False
+
+        if locked_contract is not None and (
+            locked_contract.task_family == "GENERAL_EXPLORATION"
+            or locked_contract.completeness in {"INCOMPLETE", "AMBIGUOUS"}
+            or locked_contract.unresolved_roles or locked_contract.unresolved_semantics
+        ):
+            return _complete_inconclusive(
+                "The approved contract contains unsupported or unresolved analytical requirements; no default calculation was substituted."
+            )
+
+        # Approved plans dispatch once to an existing engine. They never enter the
+        # heuristic hypothesis/template path and cannot fall back to a different answer.
+        if locked_contract is not None:
+            try:
+                relational = (
+                    locked_contract.task_family in {"COUNT", "DESCRIPTIVE", "RANKING"}
+                    and locked_contract.requested_aggregation in {"SUM", "MEAN", "AVG", "ROW_COUNT", "MIN", "MAX"}
+                    and locked_contract.operation_graph is None
+                    and (locked_contract.requested_aggregation == "ROW_COUNT"
+                         or (locked_contract.target_column in data_context.datasets_map[locked_dataset_name].columns
+                             and pd.api.types.is_numeric_dtype(data_context.datasets_map[locked_dataset_name][locked_contract.target_column])))
+                )
+                execute = self._execute_approved_aggregate if relational else self._execute_approved_dataframe
+                return execute(investigation_id, exec_id, locked_contract, locked_contract_payload, data_context, cancellation_check)
+            except (ValueError, TypeError, KeyError, RuntimeError, TimeoutError) as exc:
+                self.checkpointer.fail_execution(
+                    investigation_id=investigation_id, execution_id=exec_id,
+                    error_message=f"Approved plan could not be executed faithfully: {exc}",
+                    failure_class=FailureTaxonomy.VERIFICATION_FAILURE,
+                )
+                return False
 
         if locked_contract is not None and locked_contract.filter_conditions:
             if not locked_dataset_name or locked_dataset_name not in data_context.datasets_map:

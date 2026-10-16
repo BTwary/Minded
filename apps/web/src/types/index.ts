@@ -216,6 +216,7 @@ export interface AnalysisResponse {
   direct_answer: string;
   main_finding: string;
   analyst_result?: Record<string, unknown> | null;
+  execution_record?: Record<string, unknown> | null;
   provenance?: Record<string, unknown>;
   evidence_verifications?: Array<Record<string, unknown>>;
   reproducible_manifest_hash?: string | null;

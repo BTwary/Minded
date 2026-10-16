@@ -248,7 +248,9 @@ def _execute_duckdb_worker(
         digest = relation_digest(result) if truncated else None
         if truncated:
             result = result.head(max_result_rows).copy()
-        return {"primary_metric": primary_metric, "primary_result_column": resolved_primary_column, "result_df": result, "is_truncated": truncated, "relation_digest": digest}
+        from packages.analytics_core.src.data.content_identity import compute_content_hash
+        input_fingerprints = {name: compute_content_hash(frame) for name, frame in tables.items()}
+        return {"input_content_fingerprints": input_fingerprints, "executed_query": sql, "primary_metric": primary_metric, "primary_result_column": resolved_primary_column, "result_df": result, "is_truncated": truncated, "relation_digest": digest}
     finally:
         con.close()
 
@@ -340,5 +342,11 @@ class DuckDBExecutionProvider(BaseExecutionProvider):
         )
         execution.primary_result_column = payload.get("primary_result_column")
         execution.relation_digest = payload.get("relation_digest")
+        # Receipt comes from the worker that executed SQL, not from the planned display SQL.
+        execution.executed_query = payload["executed_query"]
+        execution.input_content_fingerprints = payload["input_content_fingerprints"]
+        execution.source_datasets = list(data_context.datasets_map) if data_context is not None else list(tables)
+        execution.source_dataset_fingerprints = dict(data_context.dataset_fingerprints) if data_context is not None else {}
+        execution.source_dataset_versions = dict(data_context.dataset_versions) if data_context is not None else {}
         return execution
 

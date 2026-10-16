@@ -4,11 +4,13 @@ from typing import Any, Dict
 from .compiler import JoinHop, RelationalPlan
 from .expressions import (
     AggExpr, And, ColumnRef, Comparison, DistinctCount, DivExpr, IsNotNull,
-    IsNull, Literal, Or,
+    IsNull, Literal, Or, CountRows,
 )
 
 
 def expr_to_dict(expr: Any) -> Dict[str, Any]:
+    if isinstance(expr, CountRows):
+        return {"type": "CountRows"}
     if isinstance(expr, ColumnRef):
         return {"type": "ColumnRef", "column": expr.column, "qualifier": expr.qualifier}
     if isinstance(expr, Literal):
@@ -30,6 +32,7 @@ def expr_to_dict(expr: Any) -> Dict[str, Any]:
 
 def expr_from_dict(payload: Dict[str, Any]) -> Any:
     typ = payload["type"]
+    if typ == "CountRows": return CountRows()
     if typ == "ColumnRef": return ColumnRef(payload["column"], payload.get("qualifier"))
     if typ == "Literal": return Literal(payload.get("value"))
     if typ == "AggExpr": return AggExpr(payload["fn"], expr_from_dict(payload["column"]))

@@ -176,6 +176,11 @@ class IsNotNull:
 
 
 @dataclass(frozen=True)
+class CountRows:
+    """COUNT(*) includes rows whose metric is null."""
+
+
+@dataclass(frozen=True)
 class AggExpr:
     fn: str
     column: ColumnRef
@@ -229,6 +234,7 @@ class DivExpr:
 
 
 PlanExpr = Union[
+    CountRows,
     ColumnRef,
     Literal,
     Comparison,
@@ -242,7 +248,7 @@ PlanExpr = Union[
 ]
 
 _PREDICATE_TYPES = (Comparison, And, Or, IsNull, IsNotNull)
-_VALUE_TYPES = (ColumnRef, Literal, AggExpr, DistinctCount, DivExpr)
+_VALUE_TYPES = (ColumnRef, Literal, AggExpr, DistinctCount, DivExpr, CountRows)
 
 
 def _is_predicate_expr(expr: Any) -> bool:
@@ -261,7 +267,7 @@ def is_row_level(expr: PlanExpr) -> bool:
     """
     if isinstance(expr, (ColumnRef, Literal)):
         return True
-    if isinstance(expr, (AggExpr, DistinctCount)):
+    if isinstance(expr, (AggExpr, DistinctCount, CountRows)):
         return False
     if isinstance(expr, Comparison):
         return is_row_level(expr.left) and is_row_level(expr.right)
@@ -332,6 +338,9 @@ def to_sql(expr: PlanExpr) -> str:
 
     if isinstance(expr, IsNotNull):
         return f"({to_sql(expr.expr)} IS NOT NULL)"
+
+    if isinstance(expr, CountRows):
+        return "COUNT(*)"
 
     if isinstance(expr, AggExpr):
         if expr.fn == "COUNT":
@@ -407,6 +416,9 @@ def to_polars(expr: PlanExpr, resolve_column=None):
 
     if isinstance(expr, IsNotNull):
         return to_polars(expr.expr, resolve_column).is_not_null()
+
+    if isinstance(expr, CountRows):
+        return pl.len()
 
     if isinstance(expr, AggExpr):
         if expr.fn == "COUNT":

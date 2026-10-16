@@ -46,6 +46,7 @@ def _plan_expr_to_polars(expr, resolve_column):
     """Compile typed PlanExpr directly to native Polars."""
     from .expressions import (
         ColumnRef,
+        CountRows,
         Literal,
         Comparison,
         And,
@@ -142,6 +143,9 @@ def _plan_expr_to_polars(expr, resolve_column):
             expr.expr,
             resolve_column,
         ).is_not_null()
+
+    if isinstance(expr, CountRows):
+        return pl.len()
 
     if isinstance(expr, AggExpr):
         inner = _plan_expr_to_polars(
@@ -392,11 +396,13 @@ class RelationalPlan:
         # Validate filters before execution.
         # --------------------------------------------------------
         def contains_aggregate(expr):
+            from .expressions import CountRows
             if isinstance(
                 expr,
                 (
                     AggExpr,
                     DistinctCount,
+                    CountRows,
                 ),
             ):
                 return True
