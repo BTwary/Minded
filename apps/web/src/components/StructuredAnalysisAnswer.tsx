@@ -14,6 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { downloadInvestigationExport, submitHumanReview } from "../lib/api";
+import { presentAnalyticalAnswer } from "../lib/analyticalAnswer";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -131,6 +132,7 @@ export default function StructuredAnalysisAnswer({
   const kind = String(result?.kind || "").toUpperCase();
   const integrityFailure = result ? consistencyFailure(analysis, result) : null;
   const verification = verificationState(analysis);
+  const answer = presentAnalyticalAnswer(analysis, verification, integrityFailure);
   const provenance = record(analysis.provenance);
   const manifestHash = provenance?.manifest_hash || analysis.reproducible_manifest_hash;
   const requestedIds = Array.isArray(provenance?.requested_dataset_ids)
@@ -225,7 +227,8 @@ export default function StructuredAnalysisAnswer({
         }
       }
 
-      const shareStr = topVal && grandTotal > 0
+      const additive = ["sum", "count", "row_count"].includes(String(numbers.aggregation || numbers.operation || "").toLowerCase());
+      const shareStr = additive && topVal && grandTotal > 0
         ? `${((topVal / grandTotal) * 100).toFixed(1)}% of overall`
         : "";
 
@@ -273,22 +276,24 @@ export default function StructuredAnalysisAnswer({
         const d = record(data) || {};
         return {
           name,
-          value: typeof d.value === "number" ? d.value : 0,
-          rows: typeof d.n === "number" ? d.n : 0,
+          value: typeof d.value === "number" && Number.isFinite(d.value) ? d.value : null,
+          rows: typeof d.n === "number" && Number.isFinite(d.n) ? d.n : null,
         };
       });
 
       // Sort descending by value
-      entries.sort((a, b) => b.value - a.value);
-      const grandTotal = entries.reduce((acc, curr) => acc + curr.value, 0);
+      entries.sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
+      const additive = ["sum", "count", "row_count"].includes(String(numbers.aggregation || numbers.operation || "").toLowerCase());
+      const grandTotal = entries.every(e => e.value !== null && e.value >= 0)
+        ? entries.reduce((acc, curr) => acc + (curr.value ?? 0), 0) : 0;
 
       const rows = entries.map((e, index) => {
-        const sharePct = grandTotal > 0 ? ((e.value / grandTotal) * 100).toFixed(1) + "%" : "N/A";
+        const sharePct = additive && e.value !== null && grandTotal > 0 ? ((e.value / grandTotal) * 100).toFixed(1) + "%" : "Not applicable";
         return {
           rank: index + 1,
           group: e.name,
-          total: formatCompactNum(e.value),
-          rows: e.rows.toLocaleString(),
+          total: display(e.value),
+          rows: display(e.rows),
           share: sharePct,
         };
       });
@@ -296,7 +301,7 @@ export default function StructuredAnalysisAnswer({
       return {
         title: "Ranking by Metric",
         type: "ranking",
-        headers: ["Rank", "Group / Entity", "Total Value", "Rows", "Share"],
+        headers: ["Rank", "Group / Entity", `${label(String(numbers.aggregation || numbers.operation || "Recorded"))} value`, "Rows", "Share"],
         rows,
       };
     }
@@ -311,7 +316,7 @@ export default function StructuredAnalysisAnswer({
       if (typeof numbers.ci_low === "number" && typeof numbers.ci_high === "number") {
         metrics.push({ metric: "95% confidence interval", result: `${numbers.ci_low.toFixed(3)} to ${numbers.ci_high.toFixed(3)}` });
       }
-      if (typeof numbers.pearson_p === "number") {
+      if (typeof numbers.pearson_p === "number" && Number.isFinite(numbers.pearson_p) && numbers.pearson_p >= 0 && numbers.pearson_p <= 1) {
         metrics.push({ metric: "P-value", result: numbers.pearson_p < 0.001 ? "p < 0.001" : numbers.pearson_p.toFixed(4) });
       }
       if (typeof numbers.slope === "number") {
@@ -345,6 +350,16 @@ export default function StructuredAnalysisAnswer({
       }
     }
 
+    // Named comparisons use the returned means/rates, never totals substituted for means.
+    if (answer.table) {
+      return {
+        title: "Group comparison",
+        type: "generic",
+        headers: answer.table.headers,
+        rows: answer.table.rows.map(row => Object.fromEntries(row.map((value, index) => [String(index), value]))),
+      };
+    }
+
     // C. Generic Fallback Table
     const tableObj = record(numbers.table);
     if (tableObj) {
@@ -354,7 +369,9 @@ export default function StructuredAnalysisAnswer({
         return rec ? Object.keys(rec) : ["value"];
       }))).filter((k) => k !== "n" && k !== "value");
 
-      const headers = ["Item", "Value", ...subKeys.map(label)];
+      const grouping = Array.isArray(numbers.grouping_columns) ? numbers.grouping_columns.join(" / ") : "Item";
+      const metric = [numbers.operation, numbers.target_column].filter(v => typeof v === "string").join(" ");
+      const headers = [grouping, metric || "Value", ...subKeys.map(label)];
       const rows = entries.map(([k, val]) => {
         const rec = record(val) || { value: val };
         return {
@@ -373,46 +390,23 @@ export default function StructuredAnalysisAnswer({
     }
 
     return null;
-  }, [kind, numbers]);
+  }, [kind, numbers, answer.table]);
 
   // 4. Key Insights (max 3 short, non-redundant one-line insights)
-  const keyInsights = useMemo(() => {
-    const details = Array.isArray(result?.details)
-      ? result.details.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      : [];
-
-    const cleaned: string[] = [];
-    for (const d of details) {
-      if (d === headline) continue;
-      // Truncate overly long sentences to crisp one-line takeaways
-      cleaned.push(d);
-      if (cleaned.length >= 3) break;
-    }
-    return cleaned;
-  }, [result?.details, headline]);
+  const keyInsights = answer.findings;
 
   // 5. Limitations & Caveats
   const limitations = useMemo(() => {
-    const raw = Array.isArray(result?.caveats)
-      ? result.caveats.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      : [];
     const claimGate = analysis.claim_gate;
-
-    const list: string[] = [...raw];
+    const list: string[] = [...answer.limitations];
     if (claimGate?.outcome === "QUALIFIED_ANSWER") {
       if (claimGate.allowed_claim) list.push(`Allowed claim: ${claimGate.allowed_claim}`);
       if (claimGate.blocked_claim) list.push(`Not supported: ${claimGate.blocked_claim}`);
       if (claimGate.reason) list.push(`Claim limitation: ${claimGate.reason}`);
     }
 
-    if (["ASSOCIATION", "INTERACTION", "GROUP_COMPARISON", "CORRELATION"].includes(kind)) {
-      if (!list.some((c) => c.toLowerCase().includes("causation"))) {
-        list.push("The analysis establishes statistical association, not mechanistic causation.");
-      }
-    }
-
     return list;
-  }, [result?.caveats, analysis.claim_gate, kind]);
+  }, [answer.limitations, analysis.claim_gate]);
 
   // 6. Recommended Actions
   const actions = useMemo(() => {
@@ -504,22 +498,16 @@ export default function StructuredAnalysisAnswer({
         </div>
       )}
 
-      {/* 1. Headline */}
-      <section className="space-y-1.5">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-2)]">Headline</div>
-        {headline ? (
-          <h1 className="text-xl font-bold tracking-tight text-[var(--foreground)] leading-snug">
-            {headline}
-          </h1>
-        ) : (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 p-3 text-xs text-amber-200">
-            No structured analytical result was recorded. The system did not substitute an estimate.
-          </div>
-        )}
+      {/* Answer first; the table and evidence below support this explanation. */}
+      <section aria-label="Answer" className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/40 p-5 space-y-2">
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)]">Answer</h3>
+        <p className="text-lg font-semibold tracking-tight text-[var(--foreground)] leading-relaxed">
+          {answer.answer}
+        </p>
       </section>
 
       {/* 2. Key Result Metric Banner */}
-      {keyResultInfo.mainValue && (
+      {answer.supported && keyResultInfo.mainValue && (
         <section className="rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)]/60 p-4">
           <div className="text-2xl font-extrabold tracking-tight text-[var(--accent)] font-mono">
             {keyResultInfo.mainValue}
@@ -529,6 +517,15 @@ export default function StructuredAnalysisAnswer({
               {keyResultInfo.mainValueSub}
             </div>
           )}
+        </section>
+      )}
+
+      {keyInsights.length > 0 && (
+        <section aria-label="Key findings" className="space-y-2">
+          <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-2)]">Key findings</h3>
+          <ul className="list-disc space-y-2 pl-5 text-sm leading-relaxed text-[var(--foreground)]">
+            {keyInsights.map((insight, idx) => <li key={idx}>{insight}</li>)}
+          </ul>
         </section>
       )}
 
@@ -584,36 +581,27 @@ export default function StructuredAnalysisAnswer({
             </table>
           </div>
           <p className="text-[10px] text-[var(--muted-2)]">
-            Exact empirical calculations derived directly from dataset records without extrapolation or hallucinated arithmetic.
+            Recorded analytical output. Units follow the source metric; a currency is not assumed.
           </p>
         </section>
       )}
 
-      {/* 4. Key Insights (separate one-line insights) */}
-      {keyInsights.length > 0 && (
-        <section className="space-y-2">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-2)]">Key insights</div>
-          <div className="space-y-2">
-            {keyInsights.map((insight, idx) => (
-              <div
-                key={idx}
-                className="rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)]/50 p-3 text-xs leading-relaxed text-[var(--foreground)]"
-              >
-                {insight}
-              </div>
-            ))}
-          </div>
+      {answer.calculation.length > 0 && (
+        <section aria-label="How the result was calculated" className="rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)]/40 p-4 space-y-2">
+          <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-2)]">How the result was calculated</h3>
+          {answer.calculation.map((detail, idx) => <p key={idx} className="text-xs text-[var(--muted)]">{detail}</p>)}
+          <p className="text-xs text-[var(--muted)]">Recorded queries and source identifiers are available in Evidence and provenance below.</p>
         </section>
       )}
 
       {/* 5. Limitations & Claim Restrictions */}
       {limitations.length > 0 && (
         <section className="rounded-xl border border-amber-500/30 bg-amber-950/15 p-4 space-y-2">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--foreground)]">
             <AlertTriangle className="h-3.5 w-3.5" />
             <span>Limitations &amp; Assumptions</span>
           </div>
-          <div className="space-y-1.5 text-xs leading-relaxed text-amber-200">
+          <div className="space-y-1.5 text-xs leading-relaxed text-[var(--muted)]">
             {limitations.map((item, idx) => (
               <p key={idx}>• {item}</p>
             ))}
@@ -622,7 +610,7 @@ export default function StructuredAnalysisAnswer({
       )}
 
       {/* 6. Recommended Actions */}
-      {actions.length > 0 && (
+      {answer.supported && actions.length > 0 && (
         <section className="space-y-2">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-2)]">Recommended actions</div>
           <ol className="list-decimal space-y-1.5 pl-5 text-xs leading-relaxed text-[var(--foreground)]">
