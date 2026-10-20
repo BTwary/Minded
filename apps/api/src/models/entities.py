@@ -282,6 +282,30 @@ class BusinessGlossary(Base):
 
 
 # ============================================================================
+# 3B. MULTI-QUESTION ANALYSIS SESSION DOMAIN
+# ============================================================================
+
+class AnalysisSession(Base):
+    """User-facing analysis workspace containing many independently auditable questions."""
+    __tablename__ = "analysis_sessions"
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    title = Column(String(255), nullable=False)
+    status = Column(String(20), nullable=False, default="OPEN", index=True)  # OPEN, CLOSED
+    dataset_ids_json = Column(JSON, nullable=False, default=list)
+    # Validated against the selected dataset at question-preview time. It is not
+    # executed directly from this stored string.
+    scope_filter = Column(Text, nullable=True)
+    question_count = Column(Integer, nullable=False, default=0)
+    accepted_investigation_ids_json = Column(JSON, nullable=False, default=list)
+    report_revision = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+
+
+# ============================================================================
 # 4. CANONICAL INVESTIGATION & EPISTEMIC GRAPH DOMAIN
 # ============================================================================
 
@@ -291,6 +315,7 @@ class Investigation(Base):
     id = Column(String(64), primary_key=True)  # e.g. INV-20260822-001 or UUID
     project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
     user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    analysis_session_id = Column(String(36), ForeignKey("analysis_sessions.id"), nullable=True, index=True)
     semantic_model_id = Column(String(36), ForeignKey("semantic_models.id"), nullable=True, index=True)
     question = Column(Text, nullable=False)
     status = Column(String(50), default="PLANNED", index=True)  # PLANNED, RUNNING, COMPLETED, FAILED

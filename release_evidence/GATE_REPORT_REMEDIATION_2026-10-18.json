@@ -1,0 +1,45 @@
+{
+  "checks": {
+    "focused_remediation_compound_and_plan_intent_tests": {
+      "detail": "33 passed",
+      "result": "PASS"
+    },
+    "full_statistical_end_to_end": {
+      "detail": "The existing end-to-end tests import code paths requiring duckdb.",
+      "result": "BLOCKED_ENVIRONMENT"
+    },
+    "full_suite": {
+      "detail": "Collection stopped because python-jose, duckdb, and polars are unavailable; package installation could not reach the package index.",
+      "result": "BLOCKED_ENVIRONMENT"
+    },
+    "modified_python_modules_compile": {
+      "detail": "py_compile passed",
+      "result": "PASS"
+    },
+    "release_decision": {
+      "detail": "Mandatory gates are not all verified.",
+      "result": "BLOCKED"
+    },
+    "review_layer_regressions_without_dependency_blocked_tests": {
+      "detail": "15 passed, 4 deselected",
+      "result": "PASS"
+    },
+    "windows_clean_install": {
+      "detail": "Not verified in this environment.",
+      "result": "NOT_RUN"
+    }
+  },
+  "created_at": "2026-10-18",
+  "environment_blockers": [
+    "python-jose",
+    "duckdb",
+    "polars"
+  ],
+  "limitations": [
+    "No Windows packaging test was performed.",
+    "Full release gates remain mandatory before certification."
+  ],
+  "release_decision": "BLOCKED",
+  "schema": 1,
+  "summary": "Focused remediation tests pass. Full-suite collection and release certification are blocked by missing environment dependencies."
+}

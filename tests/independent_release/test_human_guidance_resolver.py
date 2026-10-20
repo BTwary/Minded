@@ -206,3 +206,87 @@ def test_grouped_share_contract_is_executed_and_independently_verified() -> None
     assert result.numbers["table"]["North"]["share_of_total"] == 0.7
     assert result.numbers["table"]["South"]["share_of_total"] == 0.3
     assert result.numbers["verification"]["shares_match"] is True
+
+
+
+def test_scope_filter_accepts_is_alias_for_custom_dataset_columns() -> None:
+    frame = pd.DataFrame(
+        {
+            "region": ["East", "West", "East"],
+            "realized_revenue": [10.0, 20.0, 30.0],
+            "order_status": ["Delivered", "Returned", "Delivered"],
+        }
+    )
+
+    outcome = apply_human_guidance_to_contract(
+        "Calculate total realized_revenue by region",
+        frame,
+        {
+            "selected_metric": "realized_revenue",
+            "selected_aggregation": "SUM",
+            "selected_group_dimension": "region",
+            "scope_filter": "order_status is Delivered",
+        },
+    )
+
+    assert outcome.status is ResolverStatus.RESOLVED
+    assert outcome.contract.target_column == "realized_revenue"
+    assert outcome.contract.grouping_columns == ("region",)
+    assert {"column": "order_status", "operator": "=", "value": "Delivered"} in list(
+        outcome.contract.filter_conditions
+    )
+
+
+def test_scope_filter_accepts_multiple_literal_exclusions_joined_by_and() -> None:
+    frame = pd.DataFrame(
+        {
+            "region": ["East", "West", "East", "South"],
+            "realized_revenue": [10.0, 20.0, 30.0, 40.0],
+            "order_status": ["Delivered", "Returned", "Cancelled", "Delivered"],
+        }
+    )
+
+    outcome = apply_human_guidance_to_contract(
+        "Calculate total realized_revenue by region",
+        frame,
+        {
+            "selected_metric": "realized_revenue",
+            "selected_aggregation": "SUM",
+            "selected_group_dimension": "region",
+            "scope_filter": "order_status is not 'Returned' AND order_status != 'Cancelled'",
+        },
+    )
+
+    assert outcome.status is ResolverStatus.RESOLVED
+    assert {"column": "order_status", "operator": "!=", "value": "Returned"} in list(
+        outcome.contract.filter_conditions
+    )
+    assert {"column": "order_status", "operator": "!=", "value": "Cancelled"} in list(
+        outcome.contract.filter_conditions
+    )
+
+
+def test_scope_filter_rejects_or_and_sql_expressions() -> None:
+    frame = pd.DataFrame(
+        {
+            "region": ["East", "West"],
+            "realized_revenue": [10.0, 20.0],
+            "order_status": ["Delivered", "Returned"],
+        }
+    )
+
+    for unsafe_filter in (
+        "order_status = 'Delivered' OR order_status = 'Returned'",
+        "order_status = 'Delivered'; DROP TABLE data",
+    ):
+        outcome = apply_human_guidance_to_contract(
+            "Calculate total realized_revenue by region",
+            frame,
+            {
+                "selected_metric": "realized_revenue",
+                "selected_aggregation": "SUM",
+                "selected_group_dimension": "region",
+                "scope_filter": unsafe_filter,
+            },
+        )
+        assert outcome.status is ResolverStatus.UNSUPPORTED

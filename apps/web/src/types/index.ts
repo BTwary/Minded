@@ -212,11 +212,31 @@ export interface AnalysisResponse {
   question: string;
   dataset_scope?: string[];
   status: string;
+  review_status?: string | null;
   verdict?: AnalyticalVerdict;
   direct_answer: string;
   main_finding: string;
   analyst_result?: Record<string, unknown> | null;
   execution_record?: Record<string, unknown> | null;
+  report_contract?: {
+    schema_version?: string;
+    interpreted?: string[];
+    calculation?: string[];
+    visualizations?: Array<Record<string, unknown>>;
+    narrative?: {
+      family?: string;
+      title?: string;
+      status?: string;
+      summary?: string;
+      paragraphs?: string[];
+      supported_claim_count?: number;
+      withheld_claim_count?: number;
+      claims?: Array<Record<string, unknown>>;
+      validation?: Record<string, unknown>;
+      limitations?: string[];
+      next_steps?: string[];
+    };
+  } | null;
   provenance?: Record<string, unknown>;
   evidence_verifications?: Array<Record<string, unknown>>;
   reproducible_manifest_hash?: string | null;

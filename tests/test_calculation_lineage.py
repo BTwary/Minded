@@ -41,7 +41,7 @@ def test_trace_contains_formula_sql_and_verification_chain():
     payload = trace.to_dict()
     assert payload["canonical_hash"]
     assert payload["dataset_fingerprints"] == {"sales": "abc123"}
-    assert any(s["kind"] == "METRIC_FORMULA" and "SUM(revenue)" in (s["executable_expression"] or "") for s in payload["steps"])
+    assert any(s["kind"] == "METRIC_FORMULA" and 'SUM("revenue")' in (s["executable_expression"] or "") for s in payload["steps"])
     assert any(s["kind"] == "INDEPENDENT_VERIFICATION" for s in payload["steps"])
     assert any(s["kind"] == "BELIEF_UPDATE" and "posterior_i" in (s["formula"] or "") for s in payload["steps"])
     CalculationTraceSchema.model_validate(payload)

@@ -409,7 +409,7 @@ def resolve_plan_branches(plan: Mapping[str, Any], facts: Mapping[str, Any], pre
 
 
 _REQUIRED_EXECUTION_BRANCHES = {
-    "FORECAST": ("B-TIME", "Forecast execution requires a verified monotonic time index."),
+    "FORECAST": ("B-TIME", "Forecast execution requires a verified time index and an explicit forecast horizon (for example \"next month\" or \"next 3 months\")."),
     "PREDICTION": ("B-LEAK", "Predictive model fitting requires an independent target-leakage check to PASS."),
     "COMPARISON": ("B-GROUP", "Group comparison requires at least two observed groups."),
     "ASSOCIATION": ("B-TYPE", "Association requires a validated method compatible with the resolved variable types."),

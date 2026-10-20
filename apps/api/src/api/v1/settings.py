@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from apps.api.src.ai.providers.factory import get_ai_config, get_ai_provider, is_ai_enabled, set_ai_config
+from apps.api.src.core.config import settings
 from apps.api.src.core.security import get_current_user
 from apps.api.src.models.entities import User
 

@@ -639,7 +639,16 @@ def _choose_agg(question: str, default_agg: Optional[str], is_binary: bool, targ
     # Intensive metrics (mpg, efficiency, orbital_period, price, fare, etc.) must NEVER aggregate as SUM.
     if target:
         t_low = target.lower()
-        if any(tok in t_low for tok in ("rate", "price", "ratio", "pct", "percent", "margin", "score", "rating", "duration", "latency", "age", "discount", "aov", "mpg", "efficiency", "orbital", "mass", "weight", "horsepower", "carat", "bill_length", "flipper_length")):
+        # Intensive measurements should not default to a sum merely because the question asks
+        # how they changed over time. Climate/environment indicators such as temperature are
+        # averages by default unless the user explicitly asks for an accumulated total above.
+        if any(tok in t_low for tok in (
+            "rate", "price", "ratio", "pct", "percent", "margin", "score", "rating",
+            "duration", "latency", "age", "discount", "aov", "mpg", "efficiency",
+            "orbital", "mass", "weight", "horsepower", "carat", "bill_length",
+            "flipper_length", "temperature", "temp_c", "temp_f", "humidity", "pressure",
+            "wind_speed", "windspeed", "aqi", "pm25", "pm2_5", "concentration",
+        )):
             return "mean"
     d = (default_agg or "").lower()
     if d in ("mean", "avg", "average", "rate", "ratio", "proportion"):
@@ -2569,18 +2578,99 @@ def _period_frame(
     return frame, grain
 
 
+def _resolve_trend_window(question: str, dates: pd.Series) -> Tuple[pd.Series, str, bool]:
+    """Apply an explicitly requested temporal window to the date series.
+
+    Relative windows are anchored to the latest parseable timestamp in the supplied data,
+    not to the machine clock. The boolean reports whether the question named a window.
+    """
+    q = str(question or "")
+    valid = dates.dropna()
+    if valid.empty:
+        return pd.Series(False, index=dates.index), "No parseable timestamps", False
+    dmin, dmax = valid.min(), valid.max()
+    start = end = None
+    label = "full available history"
+    requested = False
+
+    # Explicit year-to-year boundaries take priority over the generic single-year parser.
+    range_match = re.search(
+        r"\b(?:from|between)\s+(?P<start>(?:19|20)\d{2})\s+(?:to|through|until|and|[-–])\s+(?P<end>(?:19|20)\d{2})\b",
+        q, re.I,
+    )
+    if range_match:
+        requested = True
+        start_year, end_year = int(range_match.group("start")), int(range_match.group("end"))
+        if end_year < start_year:
+            return pd.Series(False, index=dates.index), "Unresolved (end year precedes start year)", True
+        start = pd.Timestamp(year=start_year, month=1, day=1)
+        end = pd.Timestamp(year=end_year + 1, month=1, day=1)
+        label = f"{start_year}-{end_year} (inclusive calendar years)"
+    else:
+        since_match = re.search(r"\bsince\s+(?P<year>(?:19|20)\d{2})\b", q, re.I)
+        if since_match:
+            requested = True
+            year = int(since_match.group("year"))
+            start = pd.Timestamp(year=year, month=1, day=1)
+            end = dmax.normalize() + pd.Timedelta(days=1)
+            label = f"since {year} through latest data date {dmax.date()}"
+        else:
+            decade_match = re.search(r"\b(?:over\s+the\s+|over\s+|in\s+the\s+|the\s+)?(?:past|last|trailing)\s+(?:the\s+)?decade\b|\b(?:over\s+the\s+)?past decade\b", q, re.I)
+            if decade_match:
+                requested = True
+                start = dmax - pd.DateOffset(years=10)
+                end = dmax.normalize() + pd.Timedelta(days=1)
+                label = f"10-year window ending {dmax.date()} (anchored to latest data)"
+            else:
+                # Reuse the established canonical period resolver for quarters, months, years,
+                # quantified rolling windows, and other existing temporal language.
+                parsed = parse_period(q, dates)
+                requested = bool(_GENERIC_TEMPORAL_MARKER_RE.search(q) or re.search(r"\b(?:from|between)\s+(?:19|20)\d{2}\b", q, re.I))
+                if parsed is not None:
+                    start, end = parsed.start, parsed.end
+                    label = parsed.label
+                    if parsed.resolved_year_note:
+                        label += f" {parsed.resolved_year_note}"
+                elif requested:
+                    return pd.Series(False, index=dates.index), "Unresolved requested time window", True
+                else:
+                    return dates.notna(), f"full available history ({dmin.date()} to {dmax.date()})", False
+
+    # Clamp requested bounds to the available data, but never widen the user's requested window.
+    if start is None or end is None or end <= start:
+        return pd.Series(False, index=dates.index), "Unresolved requested time window", True
+    mask = dates.notna() & dates.ge(start) & dates.lt(end)
+    if not bool(mask.any()):
+        return mask, f"{label}; no observations fall inside the requested window", True
+    actual = dates.loc[mask].dropna()
+    actual_label = f"{label}; observed coverage {actual.min().date()} to {actual.max().date()}"
+    return mask, actual_label, requested
+
+
 def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
-    dates = _parse_dates(df[time_col])
-    if dates is None:
+    if target not in df.columns or time_col not in df.columns:
         return None
-    binary = _binary_values(df[target])
-    y = binary if binary is not None else _to_numeric(df[target])
-    agg = _choose_agg(q, agg_default, binary is not None, target=target)
+    dates_all = _parse_dates(df[time_col])
+    if dates_all is None:
+        return None
+    binary_all = _binary_values(df[target])
+    y_all = binary_all if binary_all is not None else _to_numeric(df[target])
+
+    window_mask, window_label, window_requested = _resolve_trend_window(q, dates_all)
+    if not bool(window_mask.any()):
+        # A timeframe was requested but cannot be resolved, so never answer using an unrelated
+        # full-history trend. The caller can surface its normal insufficient-evidence path.
+        return None
+    dates = dates_all.loc[window_mask]
+    y = y_all.loc[window_mask]
+    scoped_df = df.loc[window_mask]
+
+    agg = _choose_agg(q, agg_default, binary_all is not None, target=target)
     if agg == "rate":
         agg = "mean"
 
     target_unit = None
-    if re.search(r"\b(year|years|annual|annually|yearly)\b", q, re.I):
+    if re.search(r"\b(year|years|annual|annually|yearly|decade)\b", q, re.I):
         target_unit = "year"
     elif re.search(r"\b(quarter|quarterly)\b", q, re.I):
         target_unit = "quarter"
@@ -2592,125 +2682,708 @@ def _trend(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
         target_unit = "day"
 
     frame, grain = _period_frame(dates, y, agg, target_unit=target_unit)
-    used = int(frame["n"].sum())
-    caveats = _hygiene(df, [time_col, target], used)
+    used = int(frame["n"].sum()) if not frame.empty else 0
+    caveats = _hygiene(scoped_df, [time_col, target], used)
+    caveats.append(f"Requested analysis window: {window_label}.")
     if len(frame) < 4:
         return None
-    # Drop an incomplete trailing period (a partial month always looks like a "drop").
-    distinct_days = pd.DataFrame({"t": dates.dt.normalize(), "y": y}).dropna().groupby(dates.dt.to_period("M" if grain == "month" else "W"))["t"].nunique()
-    finer_than_period = bool(len(distinct_days)) and float(distinct_days.median()) > 1.5
-    if grain in ("month", "week") and len(frame) >= 5 and finer_than_period:
-        last = frame.iloc[-1]
-        per = frame.index[-1]
-        full_days = (per.end_time.normalize() - per.start_time.normalize()).days + 1
-        seen_days = (last["last"].normalize() - per.start_time.normalize()).days + 1
-        if agg in ("sum", "count") and seen_days < 0.9 * full_days:
-            caveats.append(f"The last {grain} ({per}) covers only {seen_days} of {full_days} days and was excluded from the trend, since a partial period always looks like a drop.")
-            frame = frame.iloc[:-1]
+
+    # Drop an incomplete trailing period for sum/count series when its coverage is demonstrably
+    # partial. The analysis uses all other valid observations inside the requested window.
+    try:
+        distinct_days = pd.DataFrame({"t": dates.dt.normalize(), "y": y}).dropna().groupby(dates.dt.to_period("M" if grain == "month" else "W"))["t"].nunique()
+        finer_than_period = bool(len(distinct_days)) and float(distinct_days.median()) > 1.5
+        if grain in ("month", "week") and len(frame) >= 5 and finer_than_period:
+            last = frame.iloc[-1]
+            per = frame.index[-1]
+            full_days = (per.end_time.normalize() - per.start_time.normalize()).days + 1
+            seen_days = (last["last"].normalize() - per.start_time.normalize()).days + 1
+            if agg in ("sum", "count") and seen_days < 0.9 * full_days:
+                caveats.append(f"The last {grain} ({per}) covers only {seen_days} of {full_days} days and was excluded because it is incomplete.")
+                frame = frame.iloc[:-1]
+    except (AttributeError, TypeError, ValueError):
+        caveats.append("Partial-period coverage could not be checked reliably for this time axis.")
+    if len(frame) < 4:
+        return None
+
     from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
     idx = canonical_time_coordinates(frame.index, length=len(frame), target_unit=grain)
     vals = frame["value"].to_numpy(float)
+    if len(vals) < 4 or not np.isfinite(vals).all():
+        return None
+
     lr = sps.linregress(idx, vals)
     tau, tau_p = sps.kendalltau(idx, vals)
-    ci = 1.96 * lr.stderr
+    # Sen/Theil-Sen slope and rank-based interval offer a robust cross-check against outliers.
+    try:
+        sen = sps.theilslopes(vals, idx, alpha=0.95)
+        sen_slope = float(sen.slope)
+        sen_ci_low, sen_ci_high = float(sen.low_slope), float(sen.high_slope)
+    except (ValueError, FloatingPointError, AttributeError):
+        sen_slope = float(lr.slope)
+        sen_ci_low, sen_ci_high = float(lr.slope - 1.96 * lr.stderr), float(lr.slope + 1.96 * lr.stderr)
+        caveats.append("Robust Sen slope interval could not be computed; the reported range is the linear-slope fallback.")
+
+    # HAC standard errors are used for the parametric trend cross-check. If the optional runtime
+    # operation fails, report the omission rather than silently labelling naive OLS inference robust.
+    hac_slope = float(lr.slope)
+    hac_se = float(lr.stderr) if np.isfinite(lr.stderr) else None
+    hac_p = float(lr.pvalue) if np.isfinite(lr.pvalue) else None
+    hac_ci_low = float(lr.slope - 1.96 * lr.stderr) if np.isfinite(lr.stderr) else None
+    hac_ci_high = float(lr.slope + 1.96 * lr.stderr) if np.isfinite(lr.stderr) else None
+    hac_available = False
+    hac_max_lag = max(1, min(len(vals) - 2, int(math.floor(4.0 * (len(vals) / 100.0) ** (2.0 / 9.0))))) if len(vals) > 3 else 1
+    try:
+        import statsmodels.api as sm
+        hac_fit = sm.OLS(vals, sm.add_constant(idx)).fit(cov_type="HAC", cov_kwds={"maxlags": hac_max_lag, "use_correction": True})
+        hac_slope = float(hac_fit.params[1])
+        hac_se = float(hac_fit.bse[1])
+        hac_p = float(hac_fit.pvalues[1])
+        hac_ci = hac_fit.conf_int(alpha=0.05)[1]
+        hac_ci_low, hac_ci_high = float(hac_ci[0]), float(hac_ci[1])
+        hac_available = True
+    except Exception as exc:
+        hac_p = None
+        hac_se = None
+        hac_ci_low = None
+        hac_ci_high = None
+        caveats.append(f"HAC-corrected OLS interval unavailable ({type(exc).__name__}); no robust OLS p-value or interval is reported.")
+
     k = max(1, min(3, len(vals) // 4))
     start_lvl, end_lvl = float(vals[:k].mean()), float(vals[-k:].mean())
     pct_change = (end_lvl / start_lvl - 1) if start_lvl else float("nan")
-    sig = lr.pvalue < ALPHA and tau_p < ALPHA
+    # Estimate serial dependence from residuals around the fitted trend rather than raw levels,
+    # which would mistake a deterministic trend for persistence.
+    residuals = vals - (lr.intercept + lr.slope * idx)
+    if len(residuals) >= 3 and float(np.sum(residuals ** 2)) > 0:
+        mean_resid = float(np.mean(residuals))
+        resid_centered = residuals - mean_resid
+        denom_ac = float(np.sum(resid_centered ** 2))
+        autocorr_1 = float(np.sum(resid_centered[:-1] * resid_centered[1:]) / denom_ac) if denom_ac > 0 else 0.0
+    else:
+        autocorr_1 = 0.0
+    numbers = {
+        "grain": grain, "periods": len(frame), "source_observation_count": used,
+        "aggregation": agg, "time_column": str(time_col), "target_column": str(target), "time_window": window_label,
+        "slope_per_period": float(lr.slope), "slope_p": float(lr.pvalue),
+        "sen_slope_per_period": sen_slope, "sen_slope_ci_low": sen_ci_low, "sen_slope_ci_high": sen_ci_high,
+        "hac_slope_per_period": hac_slope if hac_available else None,
+        "hac_slope_se": hac_se, "hac_slope_p": hac_p,
+        "hac_ci_low": hac_ci_low, "hac_ci_high": hac_ci_high,
+        "hac_inference_available": hac_available, "hac_max_lag": hac_max_lag,
+        "kendall_tau": float(tau) if np.isfinite(tau) else None,
+        "kendall_p_raw": float(tau_p) if np.isfinite(tau_p) else None,
+        "start_level": start_lvl, "end_level": end_lvl,
+        "pct_change": float(pct_change) if pct_change == pct_change else None,
+        "autocorrelation_lag1_residual": round(autocorr_1, 3),
+        "causal_identification": False,
+    }
+    # A decade with annual points is a very small sample. Do not equate a low p-value from
+    # uncorrected tests with an unqualified trend claim when residual serial dependence is present.
+    enough_points = len(vals) >= 10
+    numbers["minimum_sample_threshold_met"] = enough_points
+    if len(vals) < 10:
+        caveats.append(f"Only {len(vals)} aggregated time points are available; trend estimates have limited power. Ten or more points is a screening threshold, not a guarantee of adequate power.")
+    if abs(autocorr_1) >= 0.2:
+        caveats.append(f"Trend residuals show lag-1 autocorrelation ({autocorr_1:.2f}); significance claims require caution even with HAC standard errors.")
+    if grain == "month" and len(frame) < 24:
+        caveats.append("Fewer than 24 monthly points: a full seasonal cycle cannot be estimated reliably.")
+
+    # Descriptive distribution changes: spread of the observed period series, with early/late
+    # spreads only when each segment is large enough to make quartiles minimally informative.
+    q10, q25, q75, q90 = [float(v) for v in np.percentile(vals, [10, 25, 75, 90])]
+    numbers["overall_iqr"] = q75 - q25
+    numbers["overall_p90_p10_spread"] = q90 - q10
+    early_late_spread = None
+    segment_n = len(vals) // 4
+    if segment_n >= 4:
+        early = vals[:segment_n]
+        late = vals[-segment_n:]
+        early_iqr = float(np.percentile(early, 75) - np.percentile(early, 25))
+        late_iqr = float(np.percentile(late, 75) - np.percentile(late, 25))
+        early_range = float(np.percentile(early, 90) - np.percentile(early, 10))
+        late_range = float(np.percentile(late, 90) - np.percentile(late, 10))
+        early_late_spread = {"segment_points": segment_n, "early_iqr": early_iqr, "late_iqr": late_iqr,
+                             "iqr_change": late_iqr - early_iqr,
+                             "early_p90_p10_spread": early_range, "late_p90_p10_spread": late_range,
+                             "p90_p10_spread_change": late_range - early_range}
+        numbers["early_late_distribution_change"] = early_late_spread
+    else:
+        caveats.append("There are too few points per early/late segment to estimate a reliable change in spread; overall spread is reported instead.")
+
+    # Conservatively mark a monotonic trend only when robust and HAC checks agree and the
+    # residual series does not exhibit material lag-1 dependence. The raw test values remain visible.
+    inference_p = hac_p
+    serial_dependence = abs(autocorr_1) >= 0.2
+    sig = bool(enough_points and inference_p is not None and inference_p < ALPHA
+               and np.isfinite(tau_p) and tau_p < ALPHA and not serial_dependence)
     word = _AGG_WORD[agg]
     first_lbl, last_lbl = str(frame.index[0]), str(frame.index[-1])
-    numbers = {"grain": grain, "periods": len(frame), "slope_per_period": float(lr.slope), "slope_p": float(lr.pvalue),
-               "kendall_tau": float(tau), "kendall_p": float(tau_p), "start_level": start_lvl, "end_level": end_lvl,
-               "pct_change": float(pct_change) if pct_change == pct_change else None}
+    ci_low, ci_high = hac_ci_low, hac_ci_high
     if sig:
-        direction = "up" if lr.slope > 0 else "down"
-        headline = (f"{target} ({word} per {grain}) is trending {direction}: {_signed(lr.slope)} per {grain} (95% CI {_signed(lr.slope - ci)} to {_signed(lr.slope + ci)}, {_p(float(lr.pvalue))}; "
-                    f"Kendall tau={tau:.2f}), from about {_num(start_lvl)} to {_num(end_lvl)}"
-                    + (f" ({_signed(pct_change * 100)}%)" if pct_change == pct_change else "") + f" across {len(frame)} {grain}s ({first_lbl} to {last_lbl}).")
-        finding = "positive" if lr.slope > 0 else "negative"
+        direction = "up" if sen_slope > 0 else "down"
+        hac_text = f"; HAC OLS 95% CI { _signed(ci_low) } to { _signed(ci_high)}" if hac_available else "; HAC inference unavailable"
+        headline = (f"{target} ({word} per {grain}) shows a statistically detectable {direction} monotonic trend: Sen slope { _signed(sen_slope) } per {grain} (rank-based 95% interval { _signed(sen_ci_low) } to { _signed(sen_ci_high) }){hac_text}; "
+                    f"from about {_num(start_lvl)} to {_num(end_lvl)} ({_signed(pct_change * 100)}%) across {len(frame)} {grain}s ({first_lbl} to {last_lbl}).")
+        finding = "positive" if sen_slope > 0 else "negative"
     else:
-        headline = (f"No statistically detectable trend in {target} ({word} per {grain}): slope {_signed(lr.slope)} per {grain} (95% CI {_signed(lr.slope - ci)} to {_signed(lr.slope + ci)}, {_p(float(lr.pvalue))}) "
-                    f"across {len(frame)} {grain}s ({first_lbl} to {last_lbl}).")
+        hac_text = (
+            f"HAC OLS slope { _signed(hac_slope) } (95% CI { _signed(ci_low) } to { _signed(ci_high)}; {_p(float(inference_p))})"
+            if hac_available and inference_p is not None else
+            f"OLS slope { _signed(float(lr.slope)) } (non-robust raw p={float(lr.pvalue):.4g}; robust uncertainty unavailable)"
+        )
+        p_summary = _p(float(inference_p)) if inference_p is not None else "robust p unavailable"
+        headline = (f"Trend estimate for {target} ({word} per {grain}): Sen slope { _signed(sen_slope) } per {grain} (rank-based 95% interval { _signed(sen_ci_low) } to { _signed(sen_ci_high)}); "
+                    f"{hac_text}. A statistically detectable monotonic trend was not established under the conservative checks "
+                    f"(n={len(frame)}, {p_summary} HAC, Kendall raw {_p(float(tau_p)) if np.isfinite(tau_p) else 'p unavailable'}; observed coverage {first_lbl} to {last_lbl}).")
         finding = "none"
+
     details = []
-    resid_sd = float(np.std(vals - (lr.intercept + lr.slope * idx), ddof=2)) if len(vals) > 2 else float("nan")
-    if resid_sd == resid_sd and abs(vals.mean()) > 0:
-        details.append(f"Typical {grain}-to-{grain} noise around the trend is about {_num(resid_sd)} ({_pct(resid_sd / abs(vals.mean()))} of the mean).")
-    months = len(frame) if grain == "month" else 0
-    if grain == "month" and months < 24:
-        caveats.append("Under 24 months of history: seasonality cannot be separated from trend.")
-    is_powered = len(frame) >= 6
-    numbers["adequate_power"] = is_powered
+    resid_sd = float(np.std(residuals, ddof=2)) if len(vals) > 2 else float("nan")
+    if np.isfinite(resid_sd) and abs(vals.mean()) > 0:
+        details.append(f"Typical {grain}-to-{grain} variation around the fitted linear trend is about {_num(resid_sd)} ({_pct(resid_sd / abs(vals.mean()))} of the mean).")
+    details.append(f"Distribution spread: overall IQR {_num(numbers['overall_iqr'])}; 90th-to-10th percentile range {_num(numbers['overall_p90_p10_spread'])}.")
+    if early_late_spread:
+        details.append(f"Early-to-late IQR change: {_signed(early_late_spread['iqr_change'])}; 90th-to-10th spread change: {_signed(early_late_spread['p90_p10_spread_change'])}.")
     next_steps: List[str] = []
     if sig:
-        next_steps.append(f"Project future run-rate and evaluate whether operational capacity matches the {direction} trend.")
+        next_steps.append(f"Continue monitoring the {direction} trend and validate stability on later observations before forecasting.")
     else:
-        next_steps.append(f"Monitor subsequent periods to confirm whether the series remains stationary.")
+        next_steps.append("Review data coverage, seasonality, and autocorrelation; gather more observations before making a strong trend claim.")
 
-    # Principal Data Analyst Intelligence Enrichments:
-    # 1. Predictive run-rate extrapolation (next period projection with 95% PI)
+    # Extrapolation is kept explicitly separate from the observed trend and is never described as
+    # a validated forecast. Only expose the projection when the conservative trend checks pass.
+    run_rate_proj = None
     n_pts = len(vals)
     x_next = (idx[-1] + 1.0) if len(idx) > 0 else float(n_pts)
-    y_next = lr.intercept + lr.slope * x_next
+    y_next = float(lr.intercept + lr.slope * x_next)
     x_bar = float(np.mean(idx))
     ss_x = float(np.sum((idx - x_bar) ** 2))
-    se_pred = resid_sd * math.sqrt(1.0 + (1.0 / n_pts) + (((x_next - x_bar) ** 2) / ss_x)) if (resid_sd == resid_sd and ss_x > 0) else 0.0
+    se_pred = resid_sd * math.sqrt(1.0 + (1.0 / n_pts) + (((x_next - x_bar) ** 2) / ss_x)) if (np.isfinite(resid_sd) and ss_x > 0) else 0.0
     t_crit = sps.t.ppf(0.975, max(1, n_pts - 2)) if n_pts > 2 else 1.96
-    pi_lo = y_next - t_crit * se_pred
-    pi_hi = y_next + t_crit * se_pred
-    run_rate_proj = {
-        "next_period_index": int(round(x_next)),
-        "projected_value": round(float(y_next), 2),
-        "pi_low": round(float(pi_lo), 2),
-        "pi_high": round(float(pi_hi), 2),
-    }
-    numbers["run_rate_projection"] = run_rate_proj
+    pi_lo, pi_hi = y_next - t_crit * se_pred, y_next + t_crit * se_pred
     if sig:
-        details.append(
-            f"Run-rate extrapolation: projected next {grain} value is {_num(y_next)} "
-            f"(95% prediction interval {_num(pi_lo)} to {_num(pi_hi)})."
-        )
-
-    # 2. Time-series dynamics: Autocorrelation & Volatility
-    cv = (resid_sd / abs(vals.mean())) if (resid_sd == resid_sd and vals.mean() != 0) else 0.0
-    numbers["coefficient_of_variation"] = round(float(cv), 3)
-    if n_pts >= 5:
-        diffs = vals - np.mean(vals)
-        denom_ac = float(np.sum(diffs ** 2))
-        autocorr_1 = float(np.sum(diffs[:-1] * diffs[1:]) / denom_ac) if denom_ac > 0 else 0.0
-        numbers["autocorrelation_lag1"] = round(autocorr_1, 3)
-        if abs(autocorr_1) >= 0.4:
-            nature = "strong trend momentum / persistence" if autocorr_1 > 0 else "mean-reverting oscillation"
-            details.append(f"Persistence dynamics: lag-1 autocorrelation is {autocorr_1:.2f} ({nature}).")
-
-    # 3. Distribution profile of historical periods
-    dist_prof = _distribution_profile(pd.Series(vals))
-    numbers["distribution_profile"] = dist_prof
-
-    # 4. Scenario sensitivity
-    cum_3 = 3 * lr.slope
-    scenario_sens = {
-        "projected_next_value": round(float(y_next), 2),
-        "three_period_cumulative_slope": round(float(cum_3), 2),
+        run_rate_proj = {"next_period_index": int(round(x_next)), "projected_value": round(y_next, 2),
+                         "pi_low": round(float(pi_lo), 2), "pi_high": round(float(pi_hi), 2),
+                         "status": "UNVALIDATED_EXTRAPOLATION"}
+        details.append(f"Exploratory run-rate extrapolation only (not a validated forecast): next {grain} value {_num(y_next)}; naive prediction interval {_num(pi_lo)} to {_num(pi_hi)}.")
+    numbers["run_rate_projection"] = run_rate_proj
+    cv = (resid_sd / abs(vals.mean())) if (np.isfinite(resid_sd) and vals.mean() != 0) else None
+    numbers["coefficient_of_variation"] = round(float(cv), 3) if cv is not None else None
+    numbers["distribution_profile"] = _distribution_profile(pd.Series(vals))
+    numbers["scenario_sensitivity"] = {
+        "projected_next_value": round(y_next, 2) if sig else None,
+        "three_period_cumulative_slope": round(float(3 * sen_slope), 2),
+        "forecast_validation": "NOT_PERFORMED",
     }
-    numbers["scenario_sensitivity"] = scenario_sens
-
-    # 5. Strategic playbook & Executive summary
+    chart_rows = []
+    for period_label, row in frame.iterrows():
+        chart_rows.append({"time": str(period_label), "value": float(row["value"]), "n": int(row["n"])})
+    numbers["trend_chart"] = {
+        "chart_id": f"trend_{re.sub(r'[^a-zA-Z0-9_]+', '_', str(target)).strip('_').lower()}",
+        "chart_type": "line", "title": f"{target} over time", "x_axis": {"field": "time", "type": "temporal", "label": str(time_col)},
+        "y_axis": {"field": "value", "type": "quantitative", "label": str(target)},
+        "data": chart_rows,
+        "metadata": {"source_method": "trend_analysis", "time_window": window_label,
+                     "observation_count": used, "aggregation": agg, "period_grain": grain,
+                     "trend_line_included": False, "data_source": "observed time-bin aggregates"},
+    }
+    numbers["adequate_power"] = bool(enough_points)
+    numbers["trend_inference"] = {
+        "method": "theil_sen_plus_hac_ols_cross_check", "alpha": ALPHA,
+        "horizon_requested": window_requested, "statistically_detectable": sig,
+        "serial_dependence_caution": serial_dependence,
+        "p_values": {"ols_naive_raw": float(lr.pvalue), "hac_ols": hac_p,
+                     "kendall_raw": float(tau_p) if np.isfinite(tau_p) else None},
+    }
     strat_playbook = _build_strategic_playbook("TREND", finding, target, numbers)
     numbers["strategic_playbook"] = strat_playbook
-    exec_summary = (
-        f"{target} is trending {direction} by {_signed(lr.slope)} per {grain} ({_p(float(lr.pvalue))})."
-        if sig
-        else f"No statistically detectable trend in {target} across {len(frame)} {grain}s."
-    )
-
+    exec_summary = headline
     return AnalystResult(
         "TREND", headline, details, caveats, numbers, finding=finding, next_steps=next_steps,
-        executive_summary=exec_summary,
-        distribution_profile=dist_prof,
-        scenario_sensitivity=scenario_sens,
-        strategic_playbook=strat_playbook,
+        executive_summary=exec_summary, distribution_profile=numbers["distribution_profile"],
+        scenario_sensitivity=numbers["scenario_sensitivity"], strategic_playbook=strat_playbook,
     )
+
+
+def _benjamini_hochberg(pvalues: Sequence[float]) -> List[float]:
+    """Benjamini-Hochberg false-discovery-rate adjustment, preserving input order."""
+    ps = [min(1.0, max(0.0, float(p))) for p in pvalues]
+    m = len(ps)
+    if not m:
+        return []
+    order = sorted(range(m), key=lambda i: ps[i])
+    adjusted = [1.0] * m
+    running = 1.0
+    for rank0 in range(m - 1, -1, -1):
+        idx = order[rank0]
+        rank = rank0 + 1
+        running = min(running, ps[idx] * m / rank)
+        adjusted[idx] = min(1.0, running)
+    return adjusted
+
+
+def _trend_multiple_outcomes(
+    q: str, df: pd.DataFrame, time_col: str, agg_default: Optional[str], group_col: Optional[str] = None,
+) -> Optional[AnalystResult]:
+    """Run a disclosed exploratory trend scan over all eligible numeric indicators.
+
+    This is used when the question names a domain (e.g. climate/performance) but not a
+    specific measured outcome. Identifier columns and the time axis are excluded, and the
+    p-values are adjusted across outcomes so scanning more columns cannot silently inflate
+    the significance claims.
+    """
+    if time_col not in df.columns:
+        return None
+    id_pattern = re.compile(r"(?:^|[_\s-])(id|key|uuid|guid|pk|fk|index|row|sequence|seq)(?:$|[_\s-])", re.I)
+    candidates = []
+    for col in df.columns:
+        name = str(col)
+        if col == time_col or col == group_col or id_pattern.search(name):
+            continue
+        if not _is_numeric_like(df[col]) or df[col].nunique(dropna=True) < 2:
+            continue
+        # Explicit IDs are rejected by name; otherwise permit high-cardinality continuous
+        # measures because temperatures, prices and scores often vary on every row.
+        candidates.append(name)
+    q_low = str(q or "").lower()
+    domain_hints = {
+        "climate": ("temp", "precip", "rain", "snow", "humidity", "pressure", "wind", "sea_level", "sea level", "ice", "glacier", "co2", "ghg", "emission", "drought", "storm", "heatwave", "heat wave", "aqi", "pm2.5", "pm25", "pm10"),
+        "weather": ("temp", "precip", "rain", "snow", "humidity", "pressure", "wind", "storm", "sunshine", "cloud", "dew_point", "dew point"),
+        "environment": ("temp", "precip", "rain", "snow", "humidity", "pressure", "wind", "sea_level", "sea level", "ice", "glacier", "co2", "ghg", "emission", "pollution", "aqi", "pm2.5", "pm25", "pm10", "water_quality"),
+        "air quality": ("aqi", "pm2.5", "pm25", "pm10", "pollution", "no2", "so2", "ozone", "co", "air_quality"),
+        "business": ("sales", "revenue", "profit", "margin", "cost", "price", "orders", "customers", "conversion", "churn", "retention", "users", "units", "volume", "spend", "growth"),
+        "financial": ("revenue", "sales", "profit", "margin", "cost", "price", "spend", "expense", "income", "wage", "salary", "inflation", "unemployment", "gdp", "interest", "rate", "debt"),
+        "health": ("case", "incidence", "mortality", "hospital", "vaccin", "diagnos", "patient", "life_expectancy", "life expectancy", "bmi", "blood_pressure", "blood pressure", "heart_rate", "heart rate"),
+    }
+    requested_domain = next((domain for domain in domain_hints if re.search(rf"\b{re.escape(domain)}\b", q_low)), None)
+    if requested_domain:
+        hints = domain_hints[requested_domain]
+        domain_candidates = [c for c in candidates if any(hint in c.lower().replace("_", " ") for hint in hints)]
+        candidates = domain_candidates
+    if not candidates:
+        relevant_numeric = [str(c) for c in df.columns if c != time_col and c != group_col and _is_numeric_like(df[c]) and not id_pattern.search(str(c))]
+        domain_note = (f"No indicator column clearly matched the requested {requested_domain} domain. " if requested_domain else "No eligible numeric indicator columns were found. ")
+        return AnalystResult(
+            kind="INSUFFICIENT_EVIDENCE", headline="No eligible numeric indicators were found for a trend scan.",
+            details=[domain_note + f"Name the numeric outcome explicitly. Other numeric column candidates: {', '.join(relevant_numeric[:12]) or 'none'}."],
+            numbers={"time_column": time_col, "analysis": "trend_analysis_multiple_outcomes", "requested_domain": requested_domain, "available_numeric_candidates": relevant_numeric},
+            descriptive=False, finding="none",
+        )
+    results = []
+    failures = []
+    for col in candidates:
+        item = (
+            _trend_comparison_groups(q, df, col, time_col, group_col, agg_default)
+            if group_col and group_col in df.columns
+            else _trend(q, df, col, time_col, agg_default)
+        )
+        if item is None:
+            failures.append(col)
+        else:
+            results.append(item)
+    if not results:
+        return AnalystResult(
+            kind="INSUFFICIENT_EVIDENCE", headline="No eligible indicator produced a usable trend estimate.",
+            details=["Check the time coverage, selected window, missingness and number of observations."],
+            caveats=[f"Eligible numeric indicators: {', '.join(candidates)}."],
+            numbers={"time_column": time_col, "candidate_outcomes": candidates, "failed_outcomes": failures},
+            descriptive=False, finding="none",
+        )
+
+    # Conservative screening p-value per outcome: the larger of the robust HAC trend p-value
+    # and raw rank-trend p-value, and never smaller than either component.
+    screening_ps = []
+    for item in results:
+        n = item.numbers or {}
+        if item.kind == "TREND_COMPARISON":
+            contrasts = list(n.get("slope_comparisons") or [])
+            vals = [c.get("p_value") for c in contrasts]
+            screening_ps.append(max(float(v) for v in vals) if vals and all(v is not None and np.isfinite(v) for v in vals) else 1.0)
+        else:
+            vals = [v for v in (n.get("hac_slope_p"), n.get("kendall_p_raw")) if v is not None and np.isfinite(v)]
+            screening_ps.append(max(vals) if len(vals) == 2 else 1.0)
+    adjusted = _benjamini_hochberg(screening_ps)
+    charts = []
+    summaries = []
+    details = []
+    caveats = [
+        "No single outcome was named; every eligible numeric non-identifier column was treated as a candidate indicator.",
+        "Trend p-values were adjusted across the scanned indicators using Benjamini-Hochberg; exploratory scans remain sensitive to variable selection and data quality.",
+        "Observed trends are descriptive and do not explain causes or provide validated forecasts.",
+    ]
+    for item, p_adj, p_screen in zip(results, adjusted, screening_ps):
+        numbers = item.numbers
+        numbers["scan_p_bh_adjusted"] = p_adj
+        numbers["multiple_testing"] = "Benjamini-Hochberg false-discovery rate across scanned outcomes"
+        if item.kind == "TREND_COMPARISON":
+            numbers["scan_p_screening_conservative"] = p_screen
+            numbers["scan_significance_gate"] = "outcome-level; inspect per-contrast BH-adjusted p-values separately"
+        else:
+            detectable = bool(item.finding in ("positive", "negative") and p_adj < ALPHA and numbers.get("hac_inference_available") and not numbers.get("trend_inference", {}).get("serial_dependence_caution"))
+            numbers.setdefault("trend_inference", {})["statistically_detectable_after_multiple_testing"] = detectable
+            numbers["trend_inference"]["p_screening_conservative"] = p_screen
+            numbers["trend_inference"]["p_bh_adjusted"] = p_adj
+            if item.finding in ("positive", "negative") and not detectable:
+                item.finding = "none"
+                item.headline = (
+                    f"Trend estimate for {numbers.get('target_column', 'indicator')}: Sen slope "
+                    f"{_signed(float(numbers.get('sen_slope_per_period', 0.0)))} per {numbers.get('grain', 'period')}; "
+                    f"the trend did not meet the conservative detection rule after scanning multiple indicators "
+                    f"(BH-adjusted p={p_adj:.4g})."
+                )
+        item.details.append(f"Outcome-scan screening p={p_screen:.4g}; Benjamini-Hochberg adjusted p={p_adj:.4g}.")
+        details.append(item.headline)
+        summaries.append({
+            "outcome": numbers.get("target_column", numbers.get("outcome")), "finding": item.finding,
+            "sen_slope_per_period": numbers.get("sen_slope_per_period"),
+            "group_slopes": numbers.get("group_slopes"), "slope_comparisons": numbers.get("slope_comparisons"),
+            "sen_slope_ci_low": numbers.get("sen_slope_ci_low"),
+            "sen_slope_ci_high": numbers.get("sen_slope_ci_high"),
+            "hac_slope_p": numbers.get("hac_slope_p"), "kendall_p_raw": numbers.get("kendall_p_raw"),
+            "p_screening_conservative": p_screen, "p_bh_adjusted": p_adj,
+            "time_window": numbers.get("time_window"), "n_periods": numbers.get("periods"),
+        })
+        if numbers.get("trend_chart"):
+            charts.append(numbers["trend_chart"])
+        if numbers.get("trend_slope_chart"):
+            charts.append(numbers["trend_slope_chart"])
+        caveats.extend(item.caveats[:2])
+    window = results[0].numbers.get("time_window", "the requested window")
+    headline = f"Exploratory trend scan across {len(results)} numeric indicators ({window})" + (f", compared over time by {group_col}." if group_col else ".")
+    if failures:
+        caveats.append(f"Trend estimates could not be produced for: {', '.join(failures)}.")
+    return AnalystResult(
+        kind="TREND", headline=headline, details=details, caveats=list(dict.fromkeys(caveats)),
+        numbers={
+            "analysis": "trend_analysis_multiple_outcomes", "time_column": str(time_col),
+            "candidate_outcomes": candidates, "failed_outcomes": failures, "group_column": group_col,
+            "trend_results": summaries, "trend_charts": charts,
+            "multiple_testing": "Benjamini-Hochberg false-discovery rate across scanned outcomes",
+            "time_window": window, "causal_identification": False,
+        },
+        descriptive=True, finding="none", executive_summary=headline,
+        next_steps=["Inspect the individual indicator trends and confirm which indicators are relevant to the question before deeper analysis."],
+    )
+
+
+def _trend_comparison_groups(q, df, target, time_col, group_col, agg_default) -> Optional[AnalystResult]:
+    """Compare temporal slopes across explicit categorical groups.
+
+    The inferential comparison is an interaction model. For panel-like observations, use
+    group-aware HAC covariance; if that estimator is unavailable, retain descriptive slopes
+    but do not claim inferentially significant differences.
+    """
+    if any(c not in df.columns for c in (target, time_col, group_col)):
+        return None
+    dates_all = _parse_dates(df[time_col])
+    if dates_all is None:
+        return None
+    binary = _binary_values(df[target])
+    y_all = binary if binary is not None else _to_numeric(df[target])
+    mask, window_label, _ = _resolve_trend_window(q, dates_all)
+    if not bool(mask.any()):
+        return None
+
+    scoped = pd.DataFrame({
+        "time": dates_all.loc[mask],
+        "value": y_all.loc[mask],
+        "group": df.loc[mask, group_col],
+    }).dropna(subset=["time", "value", "group"])
+    if scoped.empty:
+        return None
+    agg = _choose_agg(q, agg_default, binary is not None, target=target)
+    if agg == "rate":
+        agg = "mean"
+
+    target_unit = None
+    if re.search(r"\b(year|years|annual|annually|yearly|decade)\b", q, re.I):
+        target_unit = "year"
+    elif re.search(r"\b(quarter|quarterly)\b", q, re.I):
+        target_unit = "quarter"
+    elif re.search(r"\b(month|monthly)\b", q, re.I):
+        target_unit = "month"
+    elif re.search(r"\b(week|weekly)\b", q, re.I):
+        target_unit = "week"
+    elif re.search(r"\b(day|daily)\b", q, re.I):
+        target_unit = "day"
+    _, grain = _period_frame(scoped["time"], scoped["value"], agg, target_unit=target_unit)
+    freq = {"year": "Y", "quarter": "Q", "month": "M", "week": "W", "day": "D"}.get(grain, "Y")
+    scoped["period"] = scoped["time"].dt.to_period(freq)
+    if agg == "sum":
+        grouped = scoped.groupby(["group", "period"], observed=True)["value"].agg(value="sum", n="count").reset_index()
+    elif agg == "count":
+        grouped = scoped.groupby(["group", "period"], observed=True)["value"].agg(value="count", n="count").reset_index()
+    elif agg == "median":
+        grouped = scoped.groupby(["group", "period"], observed=True)["value"].agg(value="median", n="count").reset_index()
+    else:
+        grouped = scoped.groupby(["group", "period"], observed=True)["value"].agg(value="mean", n="count").reset_index()
+
+    all_levels = list(dict.fromkeys(grouped["group"].tolist()))
+    mention_order = [value for _, value in _mentioned_levels(q, all_levels)]
+    # When two or more levels are explicitly mentioned, compare precisely those and fail closed
+    # if any requested level could not be resolved. Otherwise compare the observed groups.
+    explicit_group_cues = bool(re.search(r"\b(?:compare|versus|vs\.?|between|across|by|per)\b", q, re.I))
+    if len(mention_order) >= 2:
+        levels = mention_order
+    else:
+        levels = all_levels[:MAX_GROUPS_REPORTED]
+    caveats = _hygiene(scoped, [time_col, target, group_col], len(scoped))
+    caveats.append(f"Temporal comparison window: {window_label}.")
+    if len(all_levels) > MAX_GROUPS_REPORTED and len(mention_order) < 2:
+        caveats.append(f"The dataset contains {len(all_levels)} groups; only the first {MAX_GROUPS_REPORTED} encountered groups were analysed. Name the groups to compare a different subset.")
+    if not explicit_group_cues:
+        return None
+    if len(levels) < 2:
+        return None
+
+    counts_by_group = grouped.groupby("group", observed=True).size().to_dict()
+    usable_levels = [g for g in levels if int(counts_by_group.get(g, 0)) >= 5]
+    if len(usable_levels) < 2:
+        return AnalystResult(
+            kind="TREND_COMPARISON", headline=f"Insufficient time points to compare {target} trends by {group_col}.",
+            details=[f"At least two groups need five or more aggregated time points; available groups: " + ", ".join(f"{g} ({counts_by_group.get(g, 0)})" for g in levels) + "."],
+            caveats=caveats + ["No slope-difference inference was performed because the minimum series length was not met."],
+            numbers={"outcome": target, "group_column": group_col, "time_window": window_label, "trend_chart": None},
+            descriptive=True, finding="none",
+        )
+
+    # Keep observations grouped by panel then chronologically ordered for the panel-HAC covariance.
+    grouped = grouped[grouped["group"].isin(usable_levels)].copy()
+    period_ordinals = sorted({int(period.ordinal) for period in grouped["period"]})
+    center = float(np.mean(period_ordinals)) if period_ordinals else 0.0
+    nonbaseline = usable_levels[1:]
+    model_rows, response, panel_codes, model_points = [], [], [], []
+    slope_by_group_rows: Dict[Any, List[Tuple[float, float]]] = {}
+    for gi, level in enumerate(usable_levels):
+        sub = grouped[grouped["group"] == level].sort_values("period")
+        slope_by_group_rows[level] = [(float(int(row.period.ordinal)), float(row.value)) for row in sub.itertuples()]
+        for row in sub.itertuples():
+            period_code = float(int(row.period.ordinal))
+            t_centered = period_code - center
+            dummies = [1.0 if level == other else 0.0 for other in nonbaseline]
+            interactions = [t_centered if level == other else 0.0 for other in nonbaseline]
+            model_rows.append([1.0, t_centered] + dummies + interactions)
+            response.append(float(row.value))
+            panel_codes.append(gi)
+            model_points.append({"time": str(row.period), "value": float(row.value), "group": str(level), "n": int(row.n)})
+
+    X = np.asarray(model_rows, dtype=float)
+    y = np.asarray(response, dtype=float)
+    n, k = X.shape
+    if n <= k or np.linalg.matrix_rank(X) < k:
+        return AnalystResult(
+            kind="TREND_COMPARISON", headline=f"Group-specific slopes for {target} cannot be compared reliably.",
+            details=["The interaction design matrix is rank-deficient or has insufficient residual degrees of freedom."],
+            caveats=caveats + ["No slope-difference inference was reported."],
+            numbers={"outcome": target, "group_column": group_col, "time_window": window_label},
+            descriptive=True, finding="none",
+        )
+
+    covariance = None
+    pvalues = None
+    model = None
+    max_lag = max(1, min(max(counts_by_group.get(g, 0) for g in usable_levels) - 1,
+                         int(math.floor(4.0 * (n / 100.0) ** (2.0 / 9.0)))))
+    try:
+        import statsmodels.api as sm
+        model = sm.OLS(y, X).fit(cov_type="hac-panel", cov_kwds={
+            "groups": np.asarray(panel_codes), "maxlags": max_lag, "use_correction": "hac",
+        })
+        covariance = np.asarray(model.cov_params(), dtype=float)
+        pvalues = np.asarray(model.pvalues, dtype=float)
+    except Exception as exc:
+        caveats.append(f"Group-aware HAC inference could not be calculated ({type(exc).__name__}); group slopes are descriptive only.")
+
+    beta = np.asarray(model.params, dtype=float) if model is not None else np.linalg.lstsq(X, y, rcond=None)[0]
+    dof = n - k
+    tcrit = float(sps.t.ppf(0.975, dof)) if dof > 0 else None
+    interaction_start = 2 + len(nonbaseline)
+    slopes = []
+    slope_chart_rows = []
+    base_p = float(pvalues[1]) if pvalues is not None else None
+    for idx, level in enumerate(usable_levels):
+        slope = float(beta[1]) if idx == 0 else float(beta[1] + beta[interaction_start + idx - 1])
+        se = low = high = None
+        if covariance is not None and tcrit is not None:
+            if idx == 0:
+                variance = float(covariance[1, 1])
+            else:
+                interaction_index = interaction_start + idx - 1
+                variance = float(covariance[1, 1] + covariance[interaction_index, interaction_index] + 2 * covariance[1, interaction_index])
+            if variance >= 0 and np.isfinite(variance):
+                se = math.sqrt(variance)
+                low, high = slope - tcrit * se, slope + tcrit * se
+        entry = {"group": str(level), "slope": slope, "standard_error": se, "ci_low": low, "ci_high": high,
+                 "n_periods": int(counts_by_group.get(level, 0)), "baseline": idx == 0}
+        slopes.append(entry)
+        bar = {"group": str(level), "slope": slope}
+        if low is not None and high is not None:
+            bar["ci_low"], bar["ci_high"] = low, high
+        slope_chart_rows.append(bar)
+
+    # Interaction p-values are corrected for the number of requested group-slope contrasts.
+    comparisons = []
+    contrast_ps = []
+    for idx, level in enumerate(usable_levels[1:]):
+        int_idx = interaction_start + idx
+        delta = float(beta[int_idx])
+        se_delta = math.sqrt(float(covariance[int_idx, int_idx])) if covariance is not None and covariance[int_idx, int_idx] >= 0 else None
+        ci_delta = (delta - tcrit * se_delta, delta + tcrit * se_delta) if se_delta is not None and tcrit is not None else None
+        pvalue = float(pvalues[int_idx]) if pvalues is not None else None
+        contrast_ps.append(pvalue if pvalue is not None and np.isfinite(pvalue) else 1.0)
+        comparisons.append({"group": str(level), "baseline": str(usable_levels[0]), "slope_difference": delta,
+                            "standard_error": se_delta, "ci_low": ci_delta[0] if ci_delta else None,
+                            "ci_high": ci_delta[1] if ci_delta else None, "p_value": pvalue})
+    # Benjamini-Hochberg correction without a dependency on statsmodels.stats.multitest.
+    adjusted_ps = [None] * len(contrast_ps)
+    order = sorted(range(len(contrast_ps)), key=lambda i: contrast_ps[i])
+    running = 1.0
+    for rank0 in range(len(order) - 1, -1, -1):
+        j = order[rank0]
+        running = min(running, contrast_ps[j] * len(order) / (rank0 + 1))
+        adjusted_ps[j] = min(1.0, running)
+    for item, adjusted in zip(comparisons, adjusted_ps):
+        item["p_bh_adjusted"] = adjusted if item["p_value"] is not None else None
+
+    slope_phrases = [f"{row['group']}: {row['slope']:+.5g} per {grain}" for row in slopes]
+    contrast_phrases = []
+    for item in comparisons:
+        phrase = f"{item['group']} minus {item['baseline']} slope difference {item['slope_difference']:+.5g} per {grain}"
+        if item["ci_low"] is not None and item["ci_high"] is not None:
+            phrase += f" (HAC-panel 95% CI {item['ci_low']:+.5g} to {item['ci_high']:+.5g})"
+        if item["p_bh_adjusted"] is not None:
+            phrase += f", BH-adjusted p={item['p_bh_adjusted']:.4g}"
+        contrast_phrases.append(phrase)
+    headline = f"Trend comparison for {target} by {group_col}: " + "; ".join(slope_phrases) + "."
+    details = ["Trend slopes are estimates per aggregated time unit and are based on observed group-period values."]
+    if contrast_phrases:
+        details.append("Formal slope contrasts against baseline " + str(usable_levels[0]) + ": " + "; ".join(contrast_phrases) + ".")
+    if any(row["n_periods"] < 10 for row in slopes):
+        caveats.append("At least one group has fewer than 10 time points; statistical power for slope comparisons is limited.")
+    caveats.append("Slope differences describe observed associations. They do not establish why groups differ or imply causal effects.")
+    chart = {
+        "chart_id": f"trend_{re.sub(r'[^a-zA-Z0-9_]+', '_', str(target)).strip('_').lower()}_by_{re.sub(r'[^a-zA-Z0-9_]+', '_', str(group_col)).strip('_').lower()}",
+        "chart_type": "multi_line", "title": f"{target} over time by {group_col}",
+        "x_axis": {"field": "time", "type": "temporal", "label": str(time_col)},
+        "y_axis": {"field": "value", "type": "quantitative", "label": str(target)},
+        "series_field": "group", "data": model_points,
+        "metadata": {"source_method": "trend_comparison_groups", "time_window": window_label,
+                     "aggregation": agg, "period_grain": grain, "trend_line_included": False,
+                     "data_source": "observed group-period aggregates"},
+    }
+    numbers = {
+        "outcome": str(target), "time_column": str(time_col), "group_column": str(group_col),
+        "time_window": window_label, "grain": grain, "aggregation": agg,
+        "group_slopes": slopes, "slope_comparisons": comparisons,
+        "inference": {"covariance": "HAC-panel" if model is not None else None,
+                      "max_lag": max_lag, "degrees_of_freedom": dof,
+                      "multiple_comparison_correction": "Benjamini-Hochberg",
+                      "causal_identification": False},
+        "trend_chart": chart,
+        "trend_slope_chart": {
+            "chart_id": f"slopes_{re.sub(r'[^a-zA-Z0-9_]+', '_', str(target)).strip('_').lower()}_by_{re.sub(r'[^a-zA-Z0-9_]+', '_', str(group_col)).strip('_').lower()}",
+            "chart_type": "bar", "title": f"Estimated {target} trend by {group_col}",
+            "x_axis": {"field": "group", "type": "nominal", "label": str(group_col)},
+            "y_axis": {"field": "slope", "type": "quantitative", "label": f"Slope per {grain}"},
+            "data": slope_chart_rows, "metadata": {"source_method": "trend_comparison_groups", "shows_ci": True,
+                                                       "ci_low_field": "ci_low", "ci_high_field": "ci_high"},
+        },
+    }
+    return AnalystResult(
+        kind="TREND_COMPARISON", headline=headline, details=details, caveats=caveats, numbers=numbers,
+        descriptive=True, finding="none", executive_summary=headline,
+        next_steps=["Review the group-level series and sensitivity of slope estimates before making operational decisions."],
+    )
+
+
+def _trend_comparison_periods(q, df, target, time_col, agg_default) -> Optional[AnalystResult]:
+    """Piecewise trend comparison around a user-specified year, centered at that boundary."""
+    boundary_match = re.search(r"\b(?:before|after|around|since|from|at)\s+(?P<year>(?:19|20)\d{2})\b", q, re.I)
+    paired_phrase = bool(re.search(r"\b(?:before\s+(?:and|vs\.?|versus|&)\s+after|pre\s*(?:vs\.?|versus|/)\s*post|before\s+and\s+post)\b", q, re.I))
+    if not paired_phrase or not boundary_match or target not in df.columns or time_col not in df.columns:
+        return None
+    boundary_year = int(boundary_match.group("year"))
+    dates_all = _parse_dates(df[time_col])
+    if dates_all is None:
+        return None
+    binary = _binary_values(df[target])
+    y_all = binary if binary is not None else _to_numeric(df[target])
+    window_mask, window_label, _ = _resolve_trend_window(q, dates_all)
+    if not bool(window_mask.any()):
+        return None
+    dates = dates_all.loc[window_mask]
+    values = y_all.loc[window_mask]
+    agg = _choose_agg(q, agg_default, binary is not None, target=target)
+    if agg == "rate":
+        agg = "mean"
+    target_unit = "year" if re.search(r"\b(year|annual|decade)\b", q, re.I) else None
+    frame, grain = _period_frame(dates, values, agg, target_unit=target_unit)
+    if len(frame) < 8:
+        return None
+    from packages.analytics_core.src.statistics.analytical_math import canonical_time_coordinates
+    idx = canonical_time_coordinates(frame.index, length=len(frame), target_unit=grain)
+    labels = [str(x) for x in frame.index]
+    years = []
+    for period in frame.index:
+        try:
+            years.append(int(period.year))
+        except Exception:
+            years.append(pd.to_datetime(str(period), errors="coerce").year)
+    if any(y is None or pd.isna(y) for y in years):
+        return None
+    post = np.asarray([1.0 if int(year) > boundary_year else 0.0 for year in years], dtype=float)
+    pre_n, post_n = int((post == 0).sum()), int((post == 1).sum())
+    if pre_n < 4 or post_n < 4:
+        return None
+    # Center at the boundary: coefficient beta_post is then the level shift *at* the boundary,
+    # not an uninterpretable post coefficient at time zero.
+    boundary_t = float(np.median([idx[i] for i, year in enumerate(years) if int(year) == boundary_year])) if any(int(year) == boundary_year for year in years) else float(np.interp(boundary_year, years, idx))
+    tc = np.asarray(idx, dtype=float) - boundary_t
+    X = np.column_stack([np.ones(len(tc)), tc, post, tc * post])
+    y = frame["value"].to_numpy(float)
+    if np.linalg.matrix_rank(X) < X.shape[1] or len(y) <= X.shape[1]:
+        return None
+    import statsmodels.api as sm
+    max_lag = max(1, min(len(y) - 2, int(math.floor(4.0 * (len(y) / 100.0) ** (2.0 / 9.0)))))
+    try:
+        fit = sm.OLS(y, X).fit(cov_type="HAC", cov_kwds={"maxlags": max_lag, "use_correction": True})
+        cov = np.asarray(fit.cov_params(), dtype=float)
+        ci = np.asarray(fit.conf_int(alpha=0.05), dtype=float)
+    except Exception:
+        return None
+    names = [(2, "level_shift", "level shift at boundary"), (3, "slope_change", "change in slope after boundary")]
+    values_out = {}
+    details = []
+    for coef_idx, key, description in names:
+        estimate = float(fit.params[coef_idx])
+        values_out[key] = {"estimate": estimate, "standard_error": float(fit.bse[coef_idx]),
+                           "ci_low": float(ci[coef_idx, 0]), "ci_high": float(ci[coef_idx, 1]),
+                           "p_value": float(fit.pvalues[coef_idx])}
+        details.append(f"{description.capitalize()}: {estimate:+.5g} (HAC 95% CI {ci[coef_idx,0]:+.5g} to {ci[coef_idx,1]:+.5g}; p={float(fit.pvalues[coef_idx]):.4g}).")
+    caveats = _hygiene(df.loc[window_mask], [time_col, target], int(frame["n"].sum()))
+    caveats.append(f"The specified boundary is {boundary_year}; time was centered at the boundary. Window: {window_label}.")
+    caveats.append("This is a descriptive discontinuity in the observed series, not causal attribution. Other events at the boundary are not separated.")
+    data_rows = [{"time": labels[i], "value": float(y[i]), "period": "pre" if post[i] == 0 else "post", "n": int(frame.iloc[i]["n"])} for i in range(len(frame))]
+    numbers = {
+        "outcome": str(target), "time_column": str(time_col), "time_window": window_label,
+        "boundary_year": boundary_year, "boundary_explicit": True, "grain": grain,
+        "pre_period_count": pre_n, "post_period_count": post_n,
+        "piecewise_coefficients": values_out, "inference": {"covariance": "HAC/Newey-West", "max_lag": max_lag, "causal_identification": False},
+        "trend_chart": {
+            "chart_id": f"trend_{re.sub(r'[^a-zA-Z0-9_]+', '_', str(target)).strip('_').lower()}_before_after_{boundary_year}",
+            "chart_type": "multi_line", "title": f"{target} before and after {boundary_year}",
+            "x_axis": {"field": "time", "type": "temporal", "label": str(time_col)},
+            "y_axis": {"field": "value", "type": "quantitative", "label": str(target)},
+            "series_field": "period", "data": data_rows,
+            "metadata": {"source_method": "trend_comparison_periods", "boundary_year": boundary_year,
+                         "data_source": "observed period aggregates", "trend_line_included": False},
+        },
+    }
+    headline = f"Pre/post trend comparison for {target} at {boundary_year}: " + " ".join(details)
+    return AnalystResult(kind="TREND_COMPARISON_PERIODS", headline=headline, details=details, caveats=caveats,
+                         numbers=numbers, descriptive=True, finding="none", executive_summary=headline,
+                         next_steps=["Investigate other events at the boundary before interpreting the shift as an effect."])
 
 
 # --------------------------------------------------------------------------- PERIOD CHANGE
@@ -3186,6 +3859,169 @@ def _period_change(q, df, target, time_col, dims, agg_default) -> Optional[Analy
     )
 
 
+
+def _insufficient_adjustment(question: str, target: str, requested: Sequence[str], unresolved: Sequence[str], reason: str) -> AnalystResult:
+    requested_txt = ", ".join(str(x) for x in requested) or "the requested controls"
+    details = [reason, "No unadjusted substitute was used because the question explicitly requested an adjusted analysis."]
+    numbers = {
+        "target_column": str(target),
+        "requested_controls": [str(x) for x in requested],
+        "unresolved_controls": [str(x) for x in unresolved],
+        "adjustment_executed": False,
+        "causal_identification": False,
+    }
+    return AnalystResult(
+        kind="INSUFFICIENT_EVIDENCE",
+        headline=f"The requested adjusted analysis for {target} could not be completed.",
+        details=details,
+        caveats=[f"Requested controls: {requested_txt}."],
+        numbers=numbers,
+        descriptive=False,
+        finding="none",
+        executive_summary=f"No adjusted estimate was produced for {target}.",
+    )
+
+
+def _explicit_adjusted_association(
+    question: str,
+    df: pd.DataFrame,
+    target: str,
+    exposures: Sequence[str],
+    controls: Sequence[str],
+) -> Optional[AnalystResult]:
+    """Fit a schema-resolved, explicitly controlled OLS association model.
+
+    Numeric predictors stay numeric. Categorical predictors are one-hot encoded with a
+    reference level. HC3 robust covariance is used for cross-sectional heteroskedasticity;
+    this is an association analysis, not causal identification.
+    """
+    controls = list(dict.fromkeys(c for c in controls if c in df.columns and c != target))
+    exposures = list(dict.fromkeys(c for c in exposures if c in df.columns and c != target and c not in controls))
+    if not controls:
+        return None
+    if not exposures:
+        return _insufficient_adjustment(
+            question, target, controls, [],
+            "The adjustment variables were resolved, but the question did not resolve an exposure/predictor to estimate separately from those controls.",
+        )
+    if target not in df.columns or not _is_numeric_like(df[target]):
+        return _insufficient_adjustment(
+            question, target, controls, [],
+            f"Outcome '{target}' is not a usable numeric outcome for the requested adjusted OLS analysis.",
+        )
+
+    selected = list(dict.fromkeys([target] + exposures + controls))
+    work = df[selected].copy()
+    y = _binary_values(work[target])
+    if y is None:
+        y = _to_numeric(work[target])
+    work[target] = y
+    feature_map: Dict[str, List[str]] = {}
+    pieces: List[pd.DataFrame] = []
+    for col in exposures + controls:
+        series = work[col]
+        if _is_numeric_like(series):
+            numeric = _to_numeric(series)
+            if numeric.nunique(dropna=True) < 2:
+                return _insufficient_adjustment(
+                    question, target, controls, [],
+                    f"Predictor/control '{col}' is constant or has fewer than two usable values, so an adjusted coefficient cannot be estimated.",
+                )
+            pieces.append(pd.DataFrame({str(col): numeric}, index=work.index))
+            feature_map[col] = [str(col)]
+        else:
+            clean = series.astype("string").str.strip()
+            if clean.nunique(dropna=True) < 2:
+                return _insufficient_adjustment(
+                    question, target, controls, [],
+                    f"Categorical predictor/control '{col}' has fewer than two usable levels.",
+                )
+            dummies = pd.get_dummies(clean, prefix=str(col), drop_first=True, dtype=float)
+            if dummies.shape[1] == 0:
+                return _insufficient_adjustment(question, target, controls, [], f"Could not encode categorical predictor/control '{col}'.")
+            dummies.columns = [str(c) for c in dummies.columns]
+            pieces.append(dummies)
+            feature_map[col] = list(dummies.columns)
+
+    design = pd.concat([pd.Series(1.0, index=work.index, name="intercept")] + pieces, axis=1)
+    joined = pd.concat([work[[target]], design], axis=1).replace([np.inf, -np.inf], np.nan).dropna()
+    if joined.empty:
+        return _insufficient_adjustment(question, target, controls, [], "No complete rows remain after aligning the outcome, exposure and requested controls.")
+    yv = joined[target].to_numpy(float)
+    X = joined[design.columns].to_numpy(float)
+    if len(yv) <= X.shape[1] + 2:
+        return _insufficient_adjustment(
+            question, target, controls, [],
+            f"Only {len(yv)} complete observations remain for {X.shape[1]} model parameters; too few residual degrees of freedom remain.",
+        )
+    if np.linalg.matrix_rank(X) < X.shape[1]:
+        return _insufficient_adjustment(
+            question, target, controls, [],
+            "The adjusted design matrix is rank-deficient (for example, because variables are redundant or perfectly collinear).",
+        )
+    try:
+        import statsmodels.api as sm
+        fit = sm.OLS(yv, X).fit(cov_type="HC3", use_t=True)
+        ci = np.asarray(fit.conf_int(alpha=0.05), dtype=float)
+        params = np.asarray(fit.params, dtype=float)
+        se = np.asarray(fit.bse, dtype=float)
+        pv = np.asarray(fit.pvalues, dtype=float)
+    except Exception as exc:
+        return _insufficient_adjustment(
+            question, target, controls, [],
+            f"Robust adjusted regression could not be estimated ({type(exc).__name__}).",
+        )
+
+    col_index = {str(name): i for i, name in enumerate(design.columns)}
+    exposure_features = [feature for col in exposures for feature in feature_map.get(col, [])]
+    if not exposure_features or any(feature not in col_index for feature in exposure_features):
+        return _insufficient_adjustment(question, target, controls, [], "No estimable coefficients remained for the requested exposure/predictor.")
+    coefficients = {}
+    significant_features = []
+    for feature in exposure_features:
+        i = col_index[feature]
+        item = {
+            "estimate": float(params[i]), "standard_error_hc3": float(se[i]),
+            "ci_low": float(ci[i, 0]), "ci_high": float(ci[i, 1]), "p_value": float(pv[i]),
+        }
+        coefficients[feature] = item
+        if float(pv[i]) < ALPHA:
+            significant_features.append(feature)
+    ctrl_features = [feature for col in controls for feature in feature_map.get(col, [])]
+    coeff_lines = []
+    for feature, item in coefficients.items():
+        coeff_lines.append(
+            f"{feature}: adjusted coefficient {_signed(item['estimate'])} "
+            f"(HC3 95% CI {_signed(item['ci_low'])} to {_signed(item['ci_high'])}; {_p(item['p_value'])})"
+        )
+    controls_render = ", ".join(controls)
+    headline = (
+        f"Adjusted association model for {target} using {', '.join(exposures)}, controlling for {controls_render} "
+        f"(complete-case n={len(joined)}): " + "; ".join(coeff_lines) + "."
+    )
+    caveats = [
+        "Coefficients are conditional associations, not causal effects. Controlling for the named columns does not prove that all confounding has been removed.",
+        "Categorical predictors were dummy-encoded against a reference level; their coefficients compare levels with that reference.",
+        "HC3 standard errors address heteroskedasticity but do not automatically correct time-series autocorrelation, clustering, selection bias or model misspecification.",
+    ]
+    numbers = {
+        "target_column": target, "exposure_columns": exposures, "requested_controls": controls,
+        "used_controls": controls, "control_features": ctrl_features, "coefficients": coefficients,
+        "n": int(len(joined)), "parameter_count": int(X.shape[1]),
+        "r_squared": float(fit.rsquared), "adjusted_r_squared": float(fit.rsquared_adj),
+        "robust_covariance": "HC3", "adjustment_executed": True,
+        "causal_identification": False, "robust": False,
+        "p": min(float(pv[col_index[f]]) for f in exposure_features),
+    }
+    return AnalystResult(
+        kind="ASSOCIATION", headline=headline,
+        details=["Exposure coefficients: " + "; ".join(coeff_lines) + ".",
+                 f"Model covariates: {', '.join(exposures + controls)}."],
+        caveats=caveats, numbers=numbers, descriptive=False, finding="none",
+        executive_summary=headline,
+    )
+
+
 # --------------------------------------------------------------------------- entry point
 # DEFECT-040 (session 22): a *pure* descriptive breakdown request -- "What is the churn
 # rate by plan type?" / "What is the average tenure by department?" -- asks for per-group
@@ -3415,6 +4251,22 @@ def _execute_canonical_descriptive_contract(contract: Any, df: pd.DataFrame) -> 
                        "matches": True,
                        "shares_match": shares_verified if contract.share_of_total else None,
                    }}
+        if contract.ranking_direction and items:
+            numbers["top"] = str(items[0][0])
+            numbers["top_value"] = float(items[0][1])
+            numbers["ranking_direction"] = contract.ranking_direction
+            # The user asked which group is highest/lowest: state that first; the ranked table
+            # (already verified above) follows as supporting evidence rather than being the answer.
+            _order = "lowest" if contract.ranking_direction == "ASC" else "highest"
+            _word = {"SUM": "total", "MEAN": "average", "MIN": "minimum", "MAX": "maximum", "MEDIAN": "median",
+                     "RATE": "rate of", "COUNT": "count of", "ROW_COUNT": "row count of"}.get(operation, "")
+            _measure = f"{_word} {target}".strip() if target else "row count"
+            _leaders = sorted(str(k) for k, v in items if v == items[0][1])
+            if len(_leaders) > 1:
+                _lead = f"{' and '.join(_leaders[:3])} are tied for the {_order} {_measure}: {_fmt(items[0][1])}."
+            else:
+                _lead = f"{items[0][0]} has the {_order} {_measure}: {_fmt(items[0][1])} (n={table[items[0][0]]['n']:,})."
+            numbers["leaders"] = _leaders
         if contract.share_of_total:
             numbers["share_of_total"] = {
                 "denominator": total,
@@ -3455,6 +4307,8 @@ def _execute_canonical_descriptive_contract(contract: Any, df: pd.DataFrame) -> 
         if small:
             caveats.append(f"Groups with fewer than {MIN_GROUP_N} rows ({', '.join(str(s) for s in small[:5])}) are not reliable.")
 
+        if contract.ranking_direction and items:
+            details.append(_lead)
         if headline:
             details.append(headline)
         return AnalystResult("DESCRIPTIVE", headline, details, numbers=numbers, descriptive=True, finding="distribution", caveats=caveats)
@@ -3483,6 +4337,9 @@ def build_analyst_result(
     default_aggregation: Optional[str] = None,
     candidate_dimensions: Optional[Sequence[str]] = None,
     approved_contract: Optional[Any] = None,
+    explicit_controls: Optional[Sequence[str]] = None,
+    unresolved_controls: Optional[Sequence[str]] = None,
+    target_explicit: Optional[bool] = None,
 ) -> Optional[AnalystResult]:
     """Return the numbers-first answer for the resolved question, or ``None`` if the question
     shape is not one this layer can answer faithfully.  Never raises."""
@@ -3497,7 +4354,15 @@ def build_analyst_result(
         # never accept a graph attached to an unapproved parse or a fresh freeform request.
         if getattr(canonical_contract, "operation_graph", None) is not None and approved_contract is None:
             return None
-        canonical_result = _execute_canonical_descriptive_contract(canonical_contract, df)
+        _trend_query = bool(_TREND_RE.search(question or "")) and not bool(_PERIOD_CHANGE_RE.search(question or ""))
+        _paired_period_query = bool(re.search(
+            r"\b(?:before\s+(?:and|&|vs\.?|versus)\s+after|pre\s*(?:vs\.?|versus|/)\s*post|before\s+and\s+post)\b",
+            question or "", re.I,
+        ))
+        _explicit_control_query = bool(re.search(
+            r"\b(?:controlling for|holding|after accounting for|adjusting for)\b", question or "", re.I
+        ))
+        canonical_result = None if (_trend_query or _paired_period_query or _explicit_control_query) else _execute_canonical_descriptive_contract(canonical_contract, df)
         if canonical_result is not None:
             return canonical_result
         if approved_contract is not None and canonical_contract.family in {"COUNT", "SIMPLE_AGGREGATE"}:
@@ -3505,9 +4370,38 @@ def build_analyst_result(
         # An attempted count/simple aggregate with unresolved material semantics
         # must not fall through to the legacy heuristic answer path: that would
         # report a plausible number while silently ignoring the instruction.
-        if canonical_contract.family in {"COUNT", "SIMPLE_AGGREGATE"} and canonical_contract.completeness != "COMPLETE":
+        if (canonical_contract.family in {"COUNT", "SIMPLE_AGGREGATE"}
+                and canonical_contract.completeness != "COMPLETE"
+                and not (_trend_query or _paired_period_query or _explicit_control_query)):
             return None
+        _question_is_trend = bool(_TREND_RE.search(question or "")) and not bool(_PERIOD_CHANGE_RE.search(question or ""))
+        _target_normalized = re.sub(r"[^a-z0-9]+", " ", str(target or "").lower()).strip()
+        _question_normalized = re.sub(r"[^a-z0-9]+", " ", str(question or "").lower()).strip()
+        _target_named_in_question = bool(
+            _target_normalized and re.search(rf"(?<!\w){re.escape(_target_normalized)}(?!\w)", _question_normalized)
+        )
+        _target_explicitly_selected = bool(target_explicit) if target_explicit is not None else _target_named_in_question
+        if _question_is_trend and not _target_explicitly_selected and (explicit_controls or unresolved_controls):
+            return _insufficient_adjustment(
+                question, str(target or "the requested outcome"), [*(explicit_controls or []), *(unresolved_controls or [])], list(unresolved_controls or []),
+                "A broad multi-indicator trend scan cannot be combined safely with explicit controls without a named numeric outcome.",
+            )
+        if _question_is_trend and not _target_explicitly_selected and time_col in df.columns and _parse_dates(df[time_col]) is not None:
+            _has_grouped_trend_cue = bool(group and group in df.columns and re.search(r"\b(?:by|across|among|between|per|compare|versus|vs\.?)\b", question, re.I))
+            return _trend_multiple_outcomes(question, df, time_col, default_aggregation, group_col=group if _has_grouped_trend_cue else None)
         if not target or target not in df.columns:
+            if explicit_controls or unresolved_controls:
+                return _insufficient_adjustment(
+                    question, str(target or "the requested outcome"), [*(explicit_controls or []), *(unresolved_controls or [])], list(unresolved_controls or []),
+                    "The requested outcome could not be resolved, so the specified adjustment could not be executed.",
+                )
+            if _question_is_trend:
+                return AnalystResult(
+                    kind="INSUFFICIENT_EVIDENCE", headline="A specific trend outcome could not be resolved.",
+                    details=["Name the numeric indicator to analyse, or provide a dataset with eligible numeric indicator columns and a parseable time column."],
+                    numbers={"target_column": target, "time_column": time_col, "analysis": "trend_analysis"},
+                    descriptive=False, finding="none",
+                )
             return None
         if group is None:
             from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
@@ -3604,6 +4498,21 @@ def build_analyst_result(
                         executive_summary=headline,
                     )
         expl = [c for c in (explanatory or []) if c in df.columns and c != target]
+        requested_controls = list(dict.fromkeys(str(c) for c in (explicit_controls or []) if str(c) in df.columns and str(c) != target))
+        unresolved_requested_controls = list(dict.fromkeys(str(c) for c in (unresolved_controls or [])))
+        has_adjustment_clause = bool(requested_controls or unresolved_requested_controls)
+        if has_adjustment_clause:
+            if unresolved_requested_controls:
+                return _insufficient_adjustment(
+                    question, str(target), [*requested_controls, *unresolved_requested_controls], unresolved_requested_controls,
+                    "One or more explicitly requested control variables could not be matched uniquely to columns in the analysis dataset.",
+                )
+            compare_group_as_exposure = bool(group and group in df.columns and group not in requested_controls
+                and re.search(r"\b(?:compare|difference|differ|between|across|versus|vs\.?)\b", question, re.I))
+            exposures = [group] if compare_group_as_exposure else [c for c in expl if c not in requested_controls]
+            if not exposures and compare_group_as_exposure and group:
+                exposures = [group]
+            return _explicit_adjusted_association(question, df, str(target), exposures, requested_controls)
         is_count_rank = (group == target) and bool(re.search(r"\b(most|least|fewest|count|which)\b", question, re.I))
         group = group if (group in df.columns and (group != target or is_count_rank)) else None
         time_col = time_col if (time_col in df.columns and time_col != target) else None
@@ -3611,6 +4520,28 @@ def build_analyst_result(
         period = parse_period(question, dates) if dates is not None else None
         kind = classify_question(question, has_time=dates is not None, has_group=group is not None or bool(expl),
                                  has_explanatory=bool(expl), period=period)
+        _pre_post_phrase = bool(re.search(
+            r"\b(?:before\s+(?:and|&|vs\.?|versus)\s+after|pre\s*(?:vs\.?|versus|/)\s*post|before\s+and\s+post)\b",
+            question or "", re.I,
+        ))
+        if _pre_post_phrase:
+            period_comparison = _trend_comparison_periods(question, df, target, time_col, default_aggregation) if time_col else None
+            if period_comparison is not None:
+                return period_comparison
+            boundary = re.search(r"\b(?:before|after|around|since|from|at)\s+(?P<year>(?:19|20)\d{2})\b", question or "", re.I)
+            reason = (
+                "A valid boundary year was not identified; specify the year that separates the pre- and post-periods."
+                if boundary is None else
+                "The requested pre/post trend model could not be fit with the available dates, observations, or model rank."
+            )
+            return AnalystResult(
+                kind="INSUFFICIENT_EVIDENCE",
+                headline=f"The before/after trend comparison for {target} could not be completed.",
+                details=[reason],
+                caveats=["No midpoint or data-selected breakpoint was substituted automatically."],
+                numbers={"target_column": target, "time_column": time_col, "analysis": "trend_comparison_periods", "causal_identification": False},
+                descriptive=False, finding="none",
+            )
         if kind == "NONE":
             return None
         if kind == "PERIOD_CHANGE":
@@ -3658,7 +4589,34 @@ def build_analyst_result(
                 if res is not None:
                     return res
         if kind == "TREND":
-            return _trend(question, df, target, time_col, default_aggregation)
+            if not time_col or time_col not in df.columns or _parse_dates(df[time_col]) is None:
+                return AnalystResult(
+                    kind="INSUFFICIENT_EVIDENCE",
+                    headline=f"A time column could not be resolved for the requested trend in {target}.",
+                    details=["Name the date/year column or provide a dataset with a parseable time axis. No aggregate-only substitute was used."],
+                    numbers={"target_column": target, "time_column": time_col, "analysis": "trend_analysis", "causal_identification": False},
+                    descriptive=False, finding="none",
+                )
+            _q_norm_for_target = re.sub(r"[^a-z0-9]+", " ", str(question or "").lower()).strip()
+            _target_norm_for_target = re.sub(r"[^a-z0-9]+", " ", str(target or "").lower()).strip()
+            _target_named_directly = bool(_target_norm_for_target and re.search(rf"(?<!\w){re.escape(_target_norm_for_target)}(?!\w)", _q_norm_for_target))
+            if target_explicit is False or (target_explicit is None and not _target_named_directly):
+                return _trend_multiple_outcomes(question, df, time_col, default_aggregation)
+            if group and group in df.columns and group != target and re.search(r"\b(?:by|across|among|between|per|compare|versus|vs\.?)\b", question, re.I):
+                grouped_trend = _trend_comparison_groups(question, df, target, time_col, group, default_aggregation)
+                if grouped_trend is not None:
+                    return grouped_trend
+            result = _trend(question, df, target, time_col, default_aggregation)
+            if result is not None:
+                return result
+            return AnalystResult(
+                kind="INSUFFICIENT_EVIDENCE",
+                headline=f"A defensible trend estimate for {target} could not be produced.",
+                details=["The requested time window may be unresolved, contain no observations, or leave too few valid points for analysis."],
+                caveats=["No full-history or unrelated aggregate answer was substituted for the requested trend."],
+                numbers={"target_column": target, "time_column": time_col, "analysis": "trend_analysis", "causal_identification": False},
+                descriptive=False, finding="none",
+            )
         if kind == "ASSOCIATION":
             res = _association(question, df, target, expl)
             if res is not None:

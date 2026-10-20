@@ -80,8 +80,8 @@ class TestForecastMetricSemantics(unittest.TestCase):
             is_compositional=True, valid_aggregations=[AggregationType.RATE], semantic_resolution_status="RESOLVED",
         )
         expr = MetricSemanticsResolver.sql_aggregation_expression(md, "conversion_rate")
-        self.assertIn("SUM(conversions)", expr)
-        self.assertIn("NULLIF(SUM(sessions), 0)", expr)
+        self.assertIn('SUM("conversions")', expr)
+        self.assertIn('NULLIF(SUM("sessions"), 0)', expr)
 
 
 if __name__ == "__main__":

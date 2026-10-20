@@ -1,325 +1,45 @@
 {
-  "phase": "release",
-  "status": "PASS",
-  "release_decision": "RELEASE-CANDIDATE",
   "checks": {
-    "compileall": {
-      "id": "compileall",
-      "result": "PASS",
-      "detail": "",
-      "exit_code": 0,
-      "duration_s": 9.812999999999988
+    "focused_remediation_compound_and_plan_intent_tests": {
+      "detail": "33 passed",
+      "result": "PASS"
     },
-    "alembic_upgrade_head": {
-      "id": "alembic_upgrade_head",
-      "result": "PASS",
-      "detail": "s_with_migrations\nINFO  [alembic.runtime.migration] Running upgrade 9c1c76a818a4 -> 3e8b6e5b4d1a, add durable autonomous analysis contract and data readiness\nINFO  [alembic.runtime.migration] Running upgrade 3e8b6e5b4d1a -> 4f2e9d1a7c11, harden contract authority and durable analytical phase state\nINFO  [alembic.runtime.migration] Running upgrade 4f2e9d1a7c11 -> b7e6f1a4c2d9, add canonical evidence identity\nINFO  [alembic.runtime.migration] Running upgrade b7e6f1a4c2d9 -> d2a7c4e9f105, Add durable canonical hypothesis identity and consolidate historical duplicates.\nINFO  [alembic.runtime.migration] Running upgrade d2a7c4e9f105 -> f2a91e8b5c70, add content-addressed dataset identity and lineage metadata\nINFO  [alembic.runtime.migration] Running upgrade f2a91e8b5c70 -> 8c1d2e4f7a90, add durable dataset transformation lineage\nINFO  [alembic.runtime.migration] Running upgrade 8c1d2e4f7a90 -> 6f8c4a1cb67a, sync experiment scope authority and dataset scoping columns\nINFO  [alembic.runtime.migration] Running upgrade 6f8c4a1cb67a -> a1b2c3d4e5f6, Add explicit Bayes-factor storage and remove epistemic confidence defaults.\nINFO  [alembic.runtime.migration] Running upgrade a1b2c3d4e5f6 -> c7f5a1d2e8b4, add persisted deterministic Claim Gate decisions\nINFO  [alembic.runtime.migration] Running upgrade c7f5a1d2e8b4 -> e5c3a9b71d24, v20-C4.2.3 analytical contract authority: final contract + deterministic identities\nINFO  [alembic.runtime.migration] Running upgrade e5c3a9b71d24 -> f4b7c2d9e1a0, Scope/contract hardening for compound investigations.\nINFO  [alembic.runtime.migration] Running upgrade f4b7c2d9e1a0 -> 9d7e5b3c1a2f, Enforce one PRIMARY experiment per analytical identity.\nINFO  [alembic.runtime.migration] Running upgrade 9d7e5b3c1a2f -> a2b3c4d5e6f7, Add foreign key constraint on projects.org_id to organizations.id.\nINFO  [alembic.runtime.migration] Running upgrade a2b3c4d5e6f7 -> bd7a3f2e91c4, Persist alert evaluation provenance, lifecycle, and versioned profile evidence.",
-      "exit_code": 0,
-      "duration_s": 4.1089999999999804
+    "full_statistical_end_to_end": {
+      "detail": "The existing end-to-end tests import code paths requiring duckdb.",
+      "result": "BLOCKED_ENVIRONMENT"
     },
-    "alembic_no_drift": {
-      "id": "alembic_no_drift",
-      "result": "PASS",
-      "detail": "storical duplicates.\nINFO  [alembic.runtime.migration] Running upgrade d2a7c4e9f105 -> f2a91e8b5c70, add content-addressed dataset identity and lineage metadata\nINFO  [alembic.runtime.migration] Running upgrade f2a91e8b5c70 -> 8c1d2e4f7a90, add durable dataset transformation lineage\nINFO  [alembic.runtime.migration] Running upgrade 8c1d2e4f7a90 -> 6f8c4a1cb67a, sync experiment scope authority and dataset scoping columns\nINFO  [alembic.runtime.migration] Running upgrade 6f8c4a1cb67a -> a1b2c3d4e5f6, Add explicit Bayes-factor storage and remove epistemic confidence defaults.\nINFO  [alembic.runtime.migration] Running upgrade a1b2c3d4e5f6 -> c7f5a1d2e8b4, add persisted deterministic Claim Gate decisions\nINFO  [alembic.runtime.migration] Running upgrade c7f5a1d2e8b4 -> e5c3a9b71d24, v20-C4.2.3 analytical contract authority: final contract + deterministic identities\nINFO  [alembic.runtime.migration] Running upgrade e5c3a9b71d24 -> f4b7c2d9e1a0, Scope/contract hardening for compound investigations.\nINFO  [alembic.runtime.migration] Running upgrade f4b7c2d9e1a0 -> 9d7e5b3c1a2f, Enforce one PRIMARY experiment per analytical identity.\nINFO  [alembic.runtime.migration] Running upgrade 9d7e5b3c1a2f -> a2b3c4d5e6f7, Add foreign key constraint on projects.org_id to organizations.id.\nINFO  [alembic.runtime.migration] Running upgrade a2b3c4d5e6f7 -> bd7a3f2e91c4, Persist alert evaluation provenance, lifecycle, and versioned profile evidence.\nINFO  [alembic.runtime.migration] Context impl SQLiteImpl.\nINFO  [alembic.runtime.migration] Will assume non-transactional DDL.\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\migrations\\env.py:88: SAWarning: Cannot correctly sort tables; there are unresolvable cycles between tables \"investigation_contracts, investigations\", which is usually caused by mutually dependent foreign key constraints.  Foreign key constraints involving these tables will not be considered; this warning may raise an error in a future release.\n  context.run_migrations()",
-      "exit_code": 0,
-      "duration_s": 4.062999999999988
+    "full_suite": {
+      "detail": "Collection stopped because python-jose, duckdb, and polars are unavailable; package installation could not reach the package index.",
+      "result": "BLOCKED_ENVIRONMENT"
     },
-    "independent_release_suite": {
-      "id": "independent_release_suite",
-      "result": "PASS",
-      "detail": "ect_015_forensic_completion.py: 55 warnings\ntests/independent_release/test_defect_015_scientific_calibration.py: 143 warnings\ntests/independent_release/test_session22_correlation_and_descriptive_breakdown.py: 59 warnings\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\scipy\\stats\\_axis_nan_policy.py:573: UserWarning: scipy.stats.shapiro: Input data has range zero. The results may not be accurate.\n    res = hypotest_fun_out(*samples, **kwds)\n\ntests/independent_release/test_root_cause_confounder_rigor.py::TestRootCauseConfounderRigor::test_categorical_confounder_discovery_and_dummy_adjustment\ntests/independent_release/test_root_cause_confounder_rigor.py::TestRootCauseConfounderRigor::test_surrogate_exclusion_prevents_recoded_duplicate_confounders\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\engines\\analyst_answer.py:1388: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.\n    sizes = sub.groupby(group)[target].count()\n\ntests/independent_release/test_root_cause_confounder_rigor.py::TestRootCauseConfounderRigor::test_categorical_confounder_discovery_and_dummy_adjustment\ntests/independent_release/test_root_cause_confounder_rigor.py::TestRootCauseConfounderRigor::test_surrogate_exclusion_prevents_recoded_duplicate_confounders\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\engines\\analyst_answer.py:2150: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.\n    grp = sub.groupby(group)[target]\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1072 passed, 1 skipped, 668 warnings in 618.15s (0:10:18)",
-      "exit_code": 0,
-      "duration_s": 621.672
+    "modified_python_modules_compile": {
+      "detail": "py_compile passed",
+      "result": "PASS"
     },
-    "analytics_core_suite": {
-      "id": "analytics_core_suite",
-      "result": "PASS",
-      "detail": "........................................................................ [ 70%]\n..............................                                           [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\npackages/analytics_core/tests/test_m1_controller_two_table_autonomous.py: 3 warnings\npackages/analytics_core/tests/test_p0a_churn_event_ambiguity.py: 7 warnings\npackages/analytics_core/tests/test_verification_none_secondary_failclosed.py: 3 warnings\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\main.py:193: DeprecationWarning: In future, it will be an error for 'np.bool_' scalars to be interpreted as an index\n    self.__pydantic_validator__.validate_python(data, self_instance=self)\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n102 passed, 14 warnings in 21.36s",
-      "exit_code": 0,
-      "duration_s": 23.390999999999963
+    "release_decision": {
+      "detail": "Mandatory gates are not all verified.",
+      "result": "BLOCKED"
     },
-    "top_level_test_suite": {
-      "id": "top_level_test_suite",
-      "result": "PASS",
-      "detail": "tually dependent foreign key constraints.  Foreign key constraints involving these tables will not be considered; this warning may raise an error in a future release.\n    tables = list(metadata.sorted_tables)\n\ntests/test_cloud_backup.py::test_encrypted_backup_round_trip_and_migration_shape\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\backup\\portable_backup.py:800: SAWarning: Cannot correctly sort tables; there are unresolvable cycles between tables \"investigation_contracts, investigations\", which is usually caused by mutually dependent foreign key constraints.  Foreign key constraints involving these tables will not be considered; this warning may raise an error in a future release.\n    table_map = {t.name: t for t in metadata.sorted_tables}\n\ntests/test_dataset_question_discovery.py: 8 warnings\ntests/test_semantic_boundaries.py: 6 warnings\ntests/test_semantic_planner.py: 4 warnings\ntests/test_session17_deterministic_question_resolution.py: 3 warnings\ntests/test_state_machine_authority.py: 1 warning\ntests/test_unseen_business_questions.py: 1 warning\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\main.py:193: DeprecationWarning: In future, it will be an error for 'np.bool_' scalars to be interpreted as an index\n    self.__pydantic_validator__.validate_python(data, self_instance=self)\n\ntests/test_forecasting_temporal_consistency.py::TestForecastingTemporalConsistency::test_forecast_metric_fails_closed_on_invalid_temporal_axis\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\forecasting\\engine.py:297: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n    work[date_column] = pd.to_datetime(work[date_column], errors=\"coerce\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n420 passed, 27 warnings in 320.08s (0:05:20)",
-      "exit_code": 0,
-      "duration_s": 322.21900000000005
+    "review_layer_regressions_without_dependency_blocked_tests": {
+      "detail": "15 passed, 4 deselected",
+      "result": "PASS"
     },
-    "controller_primary_invariant": {
-      "id": "controller_primary_invariant",
-      "result": "PASS",
-      "detail": "..                                                                       [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n2 passed, 1 warning in 7.77s",
-      "exit_code": 0,
-      "duration_s": 9.375
-    },
-    "identity_repeatability": {
-      "id": "identity_repeatability",
-      "result": "PASS",
-      "detail": "..                                                                       [100%]\n============================== warnings summary ===============================\ntests/independent_release/test_identity_repeatability.py::test_same_contract_is_byte_identical\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n2 passed, 1 warning in 6.75s",
-      "exit_code": 0,
-      "duration_s": 8.218000000000075
-    },
-    "verification_estimand_equivalence": {
-      "id": "verification_estimand_equivalence",
-      "result": "PASS",
-      "detail": "...                                                                      [100%]\n============================== warnings summary ===============================\ntests/independent_release/test_verification_estimand_equivalence.py::test_same_estimand_population_grain_and_parameters_are_comparable\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n3 passed, 1 warning in 5.05s",
-      "exit_code": 0,
-      "duration_s": 6.390999999999849
-    },
-    "fail_open_closure": {
-      "id": "fail_open_closure",
-      "result": "PASS",
-      "detail": "..                                                                       [100%]\n============================== warnings summary ===============================\ntests/independent_release/test_fail_open_closure.py::test_missing_verification_never_allows_positive_association_claim\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n2 passed, 1 warning in 4.85s",
-      "exit_code": 0,
-      "duration_s": 6.156000000000176
-    },
-    "stopping_composition": {
-      "id": "stopping_composition",
-      "result": "PASS",
-      "detail": "..                                                                       [100%]\n============================== warnings summary ===============================\ntests/independent_release/test_stopping_composition.py::test_missingness_gate_survives_max_iteration_stop\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n2 passed, 1 warning in 5.07s",
-      "exit_code": 0,
-      "duration_s": 6.4379999999998745
-    },
-    "claim_gate_authority": {
-      "id": "claim_gate_authority",
-      "result": "PASS",
-      "detail": "..                                                                       [100%]\n============================== warnings summary ===============================\ntests/independent_release/test_claim_gate_authority.py::test_refuse_structured_gate_cannot_be_positive\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n2 passed, 1 warning in 5.00s",
-      "exit_code": 0,
-      "duration_s": 6.358999999999924
-    },
-    "canonical_serialization_audit": {
-      "id": "canonical_serialization_audit",
-      "result": "PASS",
-      "detail": "CANONICAL_SERIALIZATION_AUDIT: PASS (187 files scanned)",
-      "exit_code": 0,
-      "duration_s": 2.3910000000000764
-    },
-    "dependency_lock_integrity": {
-      "id": "dependency_lock_integrity",
-      "result": "PASS",
-      "detail": "DEPENDENCY_LOCK_AUDIT: PASS (76 pinned distributions and hashes declared)",
-      "exit_code": 0,
-      "duration_s": 0.42200000000002547
-    },
-    "release_status_agreement": {
-      "id": "release_status_agreement",
-      "result": "PASS",
-      "detail": "RELEASE_STATUS_AUDIT: PASS (docs/AAOS_V40_RELEASE_STATUS.md)",
-      "exit_code": 0,
-      "duration_s": 0.18699999999989814
-    },
-    "autonomous_controller_messy_input": {
-      "id": "autonomous_controller_messy_input",
-      "result": "PASS",
-      "detail": "-> Hypothesis posteriors: [1.0, 0.0, 0.0]\n -> Experiments executed: 2 -> ['EXP-CONC-HYP-01', 'EXP-CONFOUND']\n -> Evidence records: 2\n -> Dual-engine verifications: 2 -> ['VERIFIED', 'VERIFIED']\n -> Belief updates: 2\n -> Step trace (8 steps): ['OBJECTIVE_DECOMPOSITION', 'ASSUMPTION_LEDGER', 'HYPOTHESIS_GENERATION', 'ASSUMPTION_LEDGER_PATCH', 'EXPERIMENT_EXECUTION', 'EXPERIMENT_EXECUTION', 'ADVERSARIAL_CHALLENGE', 'VERDICT_FORMULATION']\n -> Ground-truth top segment: Enterprise (share=0.9437)\n -> Controller verdict: DIAGNOSED (confidence=1.0000)\n -> Controller direct_answer: \"Change in cost_metric is concentrated within specific high-volume categories of tier_segment. Specifically, 'Enterprise' accounts for 94.4% of the observed cost_metric. (Posterior belief: 100.0%) [Multiverse Robustness: 100.0% across specifications]\"\n -> Controller verdict justification: 'Diagnostic criteria satisfied: posterior 1.00 exceeded threshold with verified dual-engine calculations (Variance: SATISFIED). Stopping reason: DECISIVE_SIGNAL_RESOLVED.'\n -> Provenance manifest hash: 7db5df4f28d1edee0723f25fd77caf511ec3e7cb93f681f799c4a8c0d798530e\n================================================================================\n================================================================================\nAUTONOMOUS CONTROLLER VERIFIED AGAINST MESSY INPUT (REAL PIPELINE)\n================================================================================\n\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n\nYou may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n  warnings.warn(\ntest_controller_autonomously_diagnoses_messy_csv (__main__.TestAutonomousControllerMessyInput.test_controller_autonomously_diagnoses_messy_csv) ... ok\n\n----------------------------------------------------------------------\nRan 1 test in 3.430s\n\nOK",
-      "exit_code": 0,
-      "duration_s": 9.375
-    },
-    "multi_dataset_scope": {
-      "id": "multi_dataset_scope",
-      "result": "PASS",
-      "detail": "......                                                                   [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\ntests/independent_release/test_multi_dataset_scope.py: 14 warnings\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\main.py:193: DeprecationWarning: In future, it will be an error for 'np.bool_' scalars to be interpreted as an index\n    self.__pydantic_validator__.validate_python(data, self_instance=self)\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n6 passed, 15 warnings in 4.68s",
-      "exit_code": 0,
-      "duration_s": 5.969000000000051
-    },
-    "complex_objective_planner": {
-      "id": "complex_objective_planner",
-      "result": "PASS",
-      "detail": "....                                                                     [100%]\n============================== warnings summary ===============================\ntests/independent_release/test_complex_objective_planner.py::test_multiple_metrics_by_dimension_expand_into_independent_objectives\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 5.24s",
-      "exit_code": 0,
-      "duration_s": 6.5620000000001255
-    },
-    "multivariate_controlled_association": {
-      "id": "multivariate_controlled_association",
-      "result": "PASS",
-      "detail": "...                                                                      [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n3 passed, 1 warning in 7.00s",
-      "exit_code": 0,
-      "duration_s": 8.4849999999999
-    },
-    "cross_dataset_human_review": {
-      "id": "cross_dataset_human_review",
-      "result": "PASS",
-      "detail": "...                                                                      [100%]\n============================== warnings summary ===============================\ntests/independent_release/test_cross_dataset_human_review.py::test_verified_cross_dataset_review_requires_relational_plan_and_independent_verification\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n3 passed, 1 warning in 4.94s",
-      "exit_code": 0,
-      "duration_s": 6.2650000000001
-    },
-    "defect_020_rbac_ast_fail_closed": {
-      "id": "defect_020_rbac_ast_fail_closed",
-      "result": "PASS",
-      "detail": ".....                                                                    [100%]\n============================== warnings summary ===============================\ntests/test_governance_rls_ast_fail_closed.py::test_nested_subquery_never_receives_first_where_string_injection\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n5 passed, 1 warning in 5.37s",
-      "exit_code": 0,
-      "duration_s": 6.6720000000000255
-    },
-    "zero_ai_local_autonomy": {
-      "id": "zero_ai_local_autonomy",
-      "result": "PASS",
-      "detail": "..                                                                       [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\ntests/independent_release/test_zero_ai_local_autonomy.py::TestZeroAILocalAutonomy::test_01_real_controller_investigation_completes_with_network_blocked\ntests/independent_release/test_zero_ai_local_autonomy.py::TestZeroAILocalAutonomy::test_02_multi_group_numeric_comparison_on_messy_data_with_network_blocked\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\main.py:193: DeprecationWarning: In future, it will be an error for 'np.bool_' scalars to be interpreted as an index\n    self.__pydantic_validator__.validate_python(data, self_instance=self)\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n2 passed, 3 warnings in 18.83s",
-      "exit_code": 0,
-      "duration_s": 20.625
-    },
-    "p0_ai_gate_authority": {
-      "id": "p0_ai_gate_authority",
-      "result": "PASS",
-      "detail": "...........                                                              [100%]\n============================== warnings summary ===============================\ntests/independent_release/test_ai_enabled_gate_authority.py::TestAIEnabledGateAuthority::test_01_ai_enabled_false_overrides_named_provider_at_manager_level\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n11 passed, 1 warning in 7.47s",
-      "exit_code": 0,
-      "duration_s": 8.8599999999999
-    },
-    "p0_security_tenant_isolation": {
-      "id": "p0_security_tenant_isolation",
-      "result": "PASS",
-      "detail": "..................                                                       [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n18 passed, 1 warning in 12.02s",
-      "exit_code": 0,
-      "duration_s": 13.358999999999924
-    },
-    "p0_security_static": {
-      "id": "p0_security_static",
-      "result": "PASS",
-      "detail": ".............                                                            [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n13 passed, 1 warning in 4.90s",
-      "exit_code": 0,
-      "duration_s": 6.1870000000001255
-    },
-    "ssrf_pinned_target": {
-      "id": "ssrf_pinned_target",
-      "result": "PASS",
-      "detail": ".....................                                                    [100%]\n============================== warnings summary ===============================\ntests/independent_release/test_ssrf_pinned_target.py::TestResolvePinnedTargetRejectsUnsafeEndpoints::test_rejects_cloud_metadata_ip_literal\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n21 passed, 1 warning in 6.96s",
-      "exit_code": 0,
-      "duration_s": 8.437999999999874
-    },
-    "human_analyst_depth": {
-      "id": "human_analyst_depth",
-      "result": "PASS",
-      "detail": "...............................                                          [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\ntests/independent_release/test_session10_analyst_answer.py::TestEndToEnd::test_plain_correlation_question_runs_instead_of_authority_conflict\ntests/independent_release/test_session10_analyst_answer.py::TestEndToEnd::test_ranking_is_answered_and_observed\ntests/independent_release/test_session10_analyst_answer.py::TestMultiGroupPowerRegression::test_multi_group_numeric_comparison_end_to_end_controller\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\main.py:193: DeprecationWarning: In future, it will be an error for 'np.bool_' scalars to be interpreted as an index\n    self.__pydantic_validator__.validate_python(data, self_instance=self)\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n31 passed, 4 warnings in 24.13s",
-      "exit_code": 0,
-      "duration_s": 25.85900000000015
-    },
-    "p1_epistemic_provenance": {
-      "id": "p1_epistemic_provenance",
-      "result": "PASS",
-      "detail": "...                                                                      [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n3 passed, 1 warning in 6.81s",
-      "exit_code": 0,
-      "duration_s": 8.265999999999849
-    },
-    "stress_verifier_raw_32": {
-      "id": "stress_verifier_raw_32",
-      "result": "PASS",
-      "detail": "ol)[target_metric_col].mean()\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\engines\\belief.py:607: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.\n  group_means = clean.groupby(group_col)[target_col].mean()\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\engines\\belief.py:608: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.\n  group_counts = clean.groupby(group_col)[target_col].count()\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\semantic\\missingness_sensitivity.py:233: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.\n  for g, sub in df.groupby(group_col, dropna=False):\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\engines\\analyst_answer.py:1265: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.\n  grp = sub.groupby(group)[target]\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\engines\\analyst_answer.py:723: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.\n  for lv, vals in sub.groupby(group)[target]:",
-      "exit_code": 0,
-      "duration_s": 144.95299999999997
-    },
-    "stress_verifier_clean_32": {
-      "id": "stress_verifier_clean_32",
-      "result": "PASS",
-      "detail": "e\")\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\semantic\\world_model.py:249: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  parsed = pd.to_datetime(series.head(50), errors=\"coerce\")\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\semantic\\world_model.py:249: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  parsed = pd.to_datetime(series.head(50), errors=\"coerce\")\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\semantic\\world_model.py:249: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  parsed = pd.to_datetime(series.head(50), errors=\"coerce\")\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\scipy\\stats\\_axis_nan_policy.py:573: UserWarning: scipy.stats.shapiro: Input data has range zero. The results may not be accurate.\n  res = hypotest_fun_out(*samples, **kwds)\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\semantic\\world_model.py:249: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  parsed = pd.to_datetime(series.head(50), errors=\"coerce\")\nC:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\packages\\analytics_core\\src\\semantic\\world_model.py:249: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  parsed = pd.to_datetime(series.head(50), errors=\"coerce\")",
-      "exit_code": 0,
-      "duration_s": 137.1880000000001
-    },
-    "adversarial_stress_verifier_suite": {
-      "id": "adversarial_stress_verifier_suite",
-      "result": "PASS",
-      "detail": "........                                                                 [100%]\n============================== warnings summary ===============================\ntests/test_stress_verifier.py::test_every_question_has_a_spec\n  C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Lib\\site-packages\\pydantic\\_internal\\_fields.py:161: UserWarning: Field \"model_fidelity\" has conflict with protected namespace \"model_\".\n  \n  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n8 passed, 1 warning in 8.45s",
-      "exit_code": 0,
-      "duration_s": 9.92100000000005
-    },
-    "intent_contract_patch_lifecycle": {
-      "id": "intent_contract_patch_lifecycle",
-      "result": "PASS",
-      "detail": "18 passed in 11.78s",
-      "exit_code": 0,
-      "duration_s": 11.78
-    },
-    "analytical_operation_registry": {
-      "id": "analytical_operation_registry",
-      "result": "PASS",
-      "detail": "16 passed in 8.18s",
-      "exit_code": 0,
-      "duration_s": 8.18
-    },
-    "common_descriptive_intent_expansion": {
-      "id": "common_descriptive_intent_expansion",
-      "result": "PASS",
-      "detail": "19 passed in 14.26s",
-      "exit_code": 0,
-      "duration_s": 14.26
-    },
-    "estimand_compatible_evidence": {
-      "id": "estimand_compatible_evidence",
-      "result": "PASS",
-      "detail": "17 passed in 32.83s",
-      "exit_code": 0,
-      "duration_s": 32.83
-    },
-    "release_harness_portability": {
-      "id": "release_harness_portability",
-      "result": "PASS",
-      "detail": "Dynamic repository root confirmed; no hardcoded paths.",
-      "exit_code": 0,
-      "duration_s": 0.15
+    "windows_clean_install": {
+      "detail": "Not verified in this environment.",
+      "result": "NOT_RUN"
     }
   },
-  "failed_checks": [],
-  "missing_checks": [],
-  "manifest_check_count": 36,
-  "checks_executed": 36,
-  "release_status": {
-    "module": "scripts.audit_release_status",
-    "exit_code": 0,
-    "passed": true,
-    "stdout_tail": "RELEASE_STATUS_AUDIT: PASS (docs/AAOS_V40_RELEASE_STATUS.md)\n",
-    "stderr_tail": ""
-  },
-  "serialization_audit": {
-    "module": "scripts.audit_canonical_serialization",
-    "exit_code": 0,
-    "passed": true,
-    "stdout_tail": "CANONICAL_SERIALIZATION_AUDIT: PASS (187 files scanned)\n",
-    "stderr_tail": ""
-  },
-  "dependency_lock": {
-    "module": "scripts.audit_dependency_lock",
-    "exit_code": 0,
-    "passed": true,
-    "stdout_tail": "DEPENDENCY_LOCK_AUDIT: PASS (76 pinned distributions and hashes declared)\n",
-    "stderr_tail": ""
-  },
-  "frontend_lock": {
-    "module": "scripts.audit_frontend_lock",
-    "exit_code": 0,
-    "passed": true,
-    "stdout_tail": "FRONTEND_LOCK_AUDIT: PASS (next=15.5.26)\n",
-    "stderr_tail": ""
-  },
-  "migration_drift": {
-    "declared_in_manifest": true,
-    "passed": true,
-    "result": "PASS"
-  },
-  "clean_room": {
-    "verified": true,
-    "checks": {
-      "marker_env_set": true,
-      "inside_virtual_environment": true,
-      "lockfile_present": true,
-      "lockfile_nonempty": true,
-      "lockfile_has_sha256_hashes": true,
-      "pip_check_passed": true,
-      "frontend_lock_verified": true
-    },
-    "note": "Clean room verified: marker, virtual environment, non-empty lockfile, sha256 lock hashes, pip check, and frontend lock verification are all verified."
-  },
-  "environment": {
-    "python": "3.12.10",
-    "executable": "C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only\\.venv\\Scripts\\python.exe",
-    "os": "Windows",
-    "arch": "AMD64",
-    "root": "C:\\Users\\bhask\\Downloads\\MindEd_AAOS_source_only"
-  },
-  "versions": {
-    "duckdb": "1.1.0",
-    "polars": "1.6.0",
-    "pyarrow": "17.0.0",
-    "pydantic": "2.8.2",
-    "sqlalchemy": "2.0.31",
-    "alembic": "1.13.2"
-  },
-  "timestamp": "2026-10-15T22:46:00.000000+00:00"
+  "created_at": "2026-10-18",
+  "environment_blockers": [
+    "python-jose",
+    "duckdb",
+    "polars"
+  ],
+  "limitations": [
+    "No Windows packaging test was performed.",
+    "Full release gates remain mandatory before certification."
+  ],
+  "release_decision": "BLOCKED",
+  "schema": 1,
+  "summary": "Focused remediation tests pass. Full-suite collection and release certification are blocked by missing environment dependencies."
 }

@@ -1,0 +1,1540 @@
+{
+  "$defs": {
+    "AnalysisQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "minLength": 1,
+          "title": "Question Id",
+          "type": "string"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "decision_to_inform": {
+          "minLength": 1,
+          "title": "Decision To Inform",
+          "type": "string"
+        },
+        "hypotheses": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Hypotheses",
+          "type": "array"
+        }
+      },
+      "required": [
+        "question_id",
+        "question",
+        "decision_to_inform"
+      ],
+      "title": "AnalysisQuestion",
+      "type": "object"
+    },
+    "Appendix": {
+      "additionalProperties": false,
+      "properties": {
+        "queries_or_code": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Queries Or Code",
+          "type": "array"
+        },
+        "data_dictionary": {
+          "items": {
+            "$ref": "#/$defs/DataDictionaryEntry"
+          },
+          "minItems": 1,
+          "title": "Data Dictionary",
+          "type": "array"
+        },
+        "full_tables": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Full Tables",
+          "type": "array"
+        },
+        "version_history": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Version History",
+          "type": "array"
+        }
+      },
+      "required": [
+        "data_dictionary",
+        "version_history"
+      ],
+      "title": "Appendix",
+      "type": "object"
+    },
+    "AxisDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "unit": {
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "unit"
+      ],
+      "title": "AxisDefinition",
+      "type": "object"
+    },
+    "CausalSupport": {
+      "additionalProperties": false,
+      "properties": {
+        "design": {
+          "enum": [
+            "randomized_experiment",
+            "credible_quasi_experiment",
+            "controlled_analysis",
+            "observational_only",
+            "none"
+          ],
+          "title": "Design",
+          "type": "string"
+        },
+        "supports_causal_claim": {
+          "title": "Supports Causal Claim",
+          "type": "boolean"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "assumption_checks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumption Checks",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "design",
+        "supports_causal_claim",
+        "limitations"
+      ],
+      "title": "CausalSupport",
+      "type": "object"
+    },
+    "CleaningStep": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "minLength": 1,
+          "title": "Operation",
+          "type": "string"
+        },
+        "rows_affected": {
+          "minimum": 0,
+          "title": "Rows Affected",
+          "type": "integer"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "disclosed_in_report": {
+          "title": "Disclosed In Report",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation",
+        "rows_affected",
+        "reason",
+        "disclosed_in_report"
+      ],
+      "title": "CleaningStep",
+      "type": "object"
+    },
+    "ComputedFact": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_id": {
+          "minLength": 1,
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value"
+        },
+        "unit": {
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        },
+        "lineage_id": {
+          "minLength": 1,
+          "title": "Lineage Id",
+          "type": "string"
+        },
+        "source_path": {
+          "minLength": 1,
+          "title": "Source Path",
+          "type": "string"
+        },
+        "calculation_id": {
+          "minLength": 1,
+          "title": "Calculation Id",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "verified": {
+          "title": "Verified",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "fact_id",
+        "value",
+        "unit",
+        "lineage_id",
+        "source_path",
+        "calculation_id",
+        "evidence_refs",
+        "verified"
+      ],
+      "title": "ComputedFact",
+      "type": "object"
+    },
+    "Conclusion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "minLength": 1,
+          "title": "Question Id",
+          "type": "string"
+        },
+        "answer": {
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "fact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "question_id",
+        "answer",
+        "fact_ids",
+        "evidence_refs"
+      ],
+      "title": "Conclusion",
+      "type": "object"
+    },
+    "ConfidenceInterval": {
+      "additionalProperties": false,
+      "properties": {
+        "lower": {
+          "title": "Lower",
+          "type": "number"
+        },
+        "upper": {
+          "title": "Upper",
+          "type": "number"
+        },
+        "level": {
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0,
+          "title": "Level",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lower",
+        "upper",
+        "level"
+      ],
+      "title": "ConfidenceInterval",
+      "type": "object"
+    },
+    "DataDictionaryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "minLength": 1,
+          "title": "Field",
+          "type": "string"
+        },
+        "definition": {
+          "minLength": 1,
+          "title": "Definition",
+          "type": "string"
+        },
+        "data_type": {
+          "minLength": 1,
+          "title": "Data Type",
+          "type": "string"
+        },
+        "units_or_values": {
+          "minLength": 1,
+          "title": "Units Or Values",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "definition",
+        "data_type",
+        "units_or_values"
+      ],
+      "title": "DataDictionaryEntry",
+      "type": "object"
+    },
+    "DataPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value"
+        },
+        "fact_id": {
+          "minLength": 1,
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "n": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "N"
+        }
+      },
+      "required": [
+        "label",
+        "value",
+        "fact_id"
+      ],
+      "title": "DataPoint",
+      "type": "object"
+    },
+    "DataQuality": {
+      "additionalProperties": false,
+      "properties": {
+        "missing_value_percentages": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Missing Value Percentages",
+          "type": "object"
+        },
+        "duplicate_count": {
+          "minimum": 0,
+          "title": "Duplicate Count",
+          "type": "integer"
+        },
+        "duplicate_handling": {
+          "minLength": 1,
+          "title": "Duplicate Handling",
+          "type": "string"
+        },
+        "outlier_handling": {
+          "minLength": 1,
+          "title": "Outlier Handling",
+          "type": "string"
+        },
+        "reconciliation_checks": {
+          "items": {
+            "$ref": "#/$defs/ReconciliationCheck"
+          },
+          "minItems": 1,
+          "title": "Reconciliation Checks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "missing_value_percentages",
+        "duplicate_count",
+        "duplicate_handling",
+        "outlier_handling",
+        "reconciliation_checks"
+      ],
+      "title": "DataQuality",
+      "type": "object"
+    },
+    "DataSource": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "extraction_time": {
+          "minLength": 1,
+          "title": "Extraction Time",
+          "type": "string"
+        },
+        "row_count": {
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "known_limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Known Limitations",
+          "type": "array"
+        },
+        "owner": {
+          "minLength": 1,
+          "title": "Owner",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "extraction_time",
+        "row_count",
+        "known_limitations",
+        "owner"
+      ],
+      "title": "DataSource",
+      "type": "object"
+    },
+    "EvidenceRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_id": {
+          "minLength": 1,
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "VERIFIED",
+            "PASSED",
+            "UNVERIFIED",
+            "FAILED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "source": {
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "calculation_id": {
+          "minLength": 1,
+          "title": "Calculation Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "status",
+        "source",
+        "calculation_id",
+        "description"
+      ],
+      "title": "EvidenceRecord",
+      "type": "object"
+    },
+    "ExecutiveSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "answer": {
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "key_numbers": {
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Key Numbers",
+          "type": "array"
+        },
+        "non_metric_numeric_tokens": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Non Metric Numeric Tokens",
+          "type": "array"
+        },
+        "recommended_action": {
+          "minLength": 1,
+          "title": "Recommended Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "question",
+        "answer",
+        "key_numbers",
+        "recommended_action"
+      ],
+      "title": "ExecutiveSummary",
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {
+          "minLength": 1,
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "headline": {
+          "minLength": 1,
+          "title": "Headline",
+          "type": "string"
+        },
+        "analysis_type": {
+          "enum": [
+            "descriptive",
+            "comparative",
+            "diagnostic",
+            "predictive",
+            "exploratory",
+            "data_quality",
+            "experimental",
+            "causal"
+          ],
+          "title": "Analysis Type",
+          "type": "string"
+        },
+        "interpretation": {
+          "minLength": 1,
+          "title": "Interpretation",
+          "type": "string"
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "moderate",
+            "low",
+            "unknown"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "confidence_explanation": {
+          "minLength": 1,
+          "title": "Confidence Explanation",
+          "type": "string"
+        },
+        "metric_names": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Metric Names",
+          "type": "array"
+        },
+        "fact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "chart_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Chart Refs",
+          "type": "array"
+        },
+        "table_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Table Refs",
+          "type": "array"
+        },
+        "sample_size": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Size"
+        },
+        "predictive_output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PredictiveOutput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "finding_id",
+        "headline",
+        "analysis_type",
+        "interpretation",
+        "confidence",
+        "confidence_explanation",
+        "metric_names",
+        "fact_ids",
+        "evidence_refs"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "GlossaryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "term": {
+          "minLength": 1,
+          "title": "Term",
+          "type": "string"
+        },
+        "definition": {
+          "minLength": 1,
+          "title": "Definition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "term",
+        "definition"
+      ],
+      "title": "GlossaryEntry",
+      "type": "object"
+    },
+    "Methodology": {
+      "additionalProperties": false,
+      "properties": {
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Tools",
+          "type": "array"
+        },
+        "cleaning_steps": {
+          "items": {
+            "$ref": "#/$defs/CleaningStep"
+          },
+          "title": "Cleaning Steps",
+          "type": "array"
+        },
+        "statistical_methods": {
+          "items": {
+            "$ref": "#/$defs/StatisticalMethod"
+          },
+          "title": "Statistical Methods",
+          "type": "array"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "metrics_computation": {
+          "minLength": 1,
+          "title": "Metrics Computation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tools",
+        "cleaning_steps",
+        "assumptions",
+        "metrics_computation"
+      ],
+      "title": "Methodology",
+      "type": "object"
+    },
+    "MetricDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "definition": {
+          "minLength": 1,
+          "title": "Definition",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "numerator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Numerator"
+        },
+        "denominator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Denominator"
+        }
+      },
+      "required": [
+        "name",
+        "definition"
+      ],
+      "title": "MetricDefinition",
+      "type": "object"
+    },
+    "NumericReference": {
+      "additionalProperties": false,
+      "properties": {
+        "literal": {
+          "minLength": 1,
+          "title": "Literal",
+          "type": "string"
+        },
+        "fact_id": {
+          "minLength": 1,
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "semantic_role": {
+          "minLength": 1,
+          "title": "Semantic Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "literal",
+        "fact_id",
+        "semantic_role"
+      ],
+      "title": "NumericReference",
+      "type": "object"
+    },
+    "PredictiveOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "point_forecast": {
+          "title": "Point Forecast",
+          "type": "number"
+        },
+        "lower_bound": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lower Bound"
+        },
+        "upper_bound": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Upper Bound"
+        },
+        "interval_level": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1,
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interval Level"
+        },
+        "uncertainty_explanation": {
+          "minLength": 1,
+          "title": "Uncertainty Explanation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "point_forecast",
+        "uncertainty_explanation"
+      ],
+      "title": "PredictiveOutput",
+      "type": "object"
+    },
+    "Recommendation": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "minLength": 1,
+          "title": "Action",
+          "type": "string"
+        },
+        "priority": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "none"
+          ],
+          "title": "Priority",
+          "type": "string"
+        },
+        "expected_impact": {
+          "minLength": 1,
+          "title": "Expected Impact",
+          "type": "string"
+        },
+        "finding_refs": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Finding Refs",
+          "type": "array"
+        },
+        "numeric_refs": {
+          "items": {
+            "$ref": "#/$defs/NumericReference"
+          },
+          "title": "Numeric Refs",
+          "type": "array"
+        },
+        "non_metric_numeric_tokens": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Non Metric Numeric Tokens",
+          "type": "array"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        }
+      },
+      "required": [
+        "action",
+        "priority",
+        "expected_impact",
+        "finding_refs"
+      ],
+      "title": "Recommendation",
+      "type": "object"
+    },
+    "ReconciliationCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "observed": {
+          "title": "Observed"
+        },
+        "expected": {
+          "title": "Expected"
+        },
+        "tolerance": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tolerance"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "exception_explanation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exception Explanation"
+        }
+      },
+      "required": [
+        "name",
+        "observed",
+        "expected",
+        "passed"
+      ],
+      "title": "ReconciliationCheck",
+      "type": "object"
+    },
+    "ReportClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "claim_type": {
+          "enum": [
+            "descriptive",
+            "associational",
+            "causal",
+            "recommendation",
+            "methodological"
+          ],
+          "title": "Claim Type",
+          "type": "string"
+        },
+        "fact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "numeric_refs": {
+          "items": {
+            "$ref": "#/$defs/NumericReference"
+          },
+          "title": "Numeric Refs",
+          "type": "array"
+        },
+        "non_metric_numeric_tokens": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Non Metric Numeric Tokens",
+          "type": "array"
+        },
+        "causal_support": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CausalSupport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "claim_id",
+        "text",
+        "claim_type"
+      ],
+      "title": "ReportClaim",
+      "type": "object"
+    },
+    "ReportMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "author_or_system": {
+          "minLength": 1,
+          "title": "Author Or System",
+          "type": "string"
+        },
+        "generated_at": {
+          "minLength": 1,
+          "title": "Generated At",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        },
+        "data_as_of": {
+          "minLength": 1,
+          "title": "Data As Of",
+          "type": "string"
+        },
+        "request_id": {
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "stakeholder": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stakeholder"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        }
+      },
+      "required": [
+        "title",
+        "author_or_system",
+        "generated_at",
+        "version",
+        "data_as_of",
+        "request_id"
+      ],
+      "title": "ReportMetadata",
+      "type": "object"
+    },
+    "ResultTable": {
+      "additionalProperties": false,
+      "properties": {
+        "table_id": {
+          "minLength": 1,
+          "title": "Table Id",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/DataPoint"
+          },
+          "minItems": 1,
+          "title": "Rows",
+          "type": "array"
+        },
+        "source_note": {
+          "minLength": 1,
+          "title": "Source Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "table_id",
+        "title",
+        "rows",
+        "source_note"
+      ],
+      "title": "ResultTable",
+      "type": "object"
+    },
+    "Scope": {
+      "additionalProperties": false,
+      "properties": {
+        "time_range": {
+          "minLength": 1,
+          "title": "Time Range",
+          "type": "string"
+        },
+        "population": {
+          "minLength": 1,
+          "title": "Population",
+          "type": "string"
+        },
+        "exclusions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Exclusions",
+          "type": "array"
+        },
+        "metric_definitions": {
+          "items": {
+            "$ref": "#/$defs/MetricDefinition"
+          },
+          "minItems": 1,
+          "title": "Metric Definitions",
+          "type": "array"
+        },
+        "glossary": {
+          "items": {
+            "$ref": "#/$defs/GlossaryEntry"
+          },
+          "title": "Glossary",
+          "type": "array"
+        }
+      },
+      "required": [
+        "time_range",
+        "population",
+        "metric_definitions"
+      ],
+      "title": "Scope",
+      "type": "object"
+    },
+    "StatisticalMethod": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "inference_type": {
+          "enum": [
+            "descriptive",
+            "inferential",
+            "forecast"
+          ],
+          "title": "Inference Type",
+          "type": "string"
+        },
+        "assumptions_checked": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions Checked",
+          "type": "array"
+        },
+        "fallback_used": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Used"
+        },
+        "sample_size": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Size"
+        },
+        "p_value": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P Value"
+        },
+        "effect_size": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effect Size"
+        },
+        "confidence_interval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfidenceInterval"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "rationale",
+        "inference_type"
+      ],
+      "title": "StatisticalMethod",
+      "type": "object"
+    },
+    "Visualization": {
+      "additionalProperties": false,
+      "properties": {
+        "chart_id": {
+          "minLength": 1,
+          "title": "Chart Id",
+          "type": "string"
+        },
+        "chart_type": {
+          "enum": [
+            "bar",
+            "line",
+            "scatter",
+            "histogram",
+            "box",
+            "waterfall",
+            "heatmap",
+            "forest",
+            "none"
+          ],
+          "title": "Chart Type",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "x_axis": {
+          "$ref": "#/$defs/AxisDefinition"
+        },
+        "y_axis": {
+          "$ref": "#/$defs/AxisDefinition"
+        },
+        "source_note": {
+          "minLength": 1,
+          "title": "Source Note",
+          "type": "string"
+        },
+        "data": {
+          "items": {
+            "$ref": "#/$defs/DataPoint"
+          },
+          "title": "Data",
+          "type": "array"
+        }
+      },
+      "required": [
+        "chart_id",
+        "chart_type",
+        "title",
+        "x_axis",
+        "y_axis",
+        "source_note"
+      ],
+      "title": "Visualization",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0",
+      "default": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/ReportMetadata"
+    },
+    "executive_summary": {
+      "$ref": "#/$defs/ExecutiveSummary"
+    },
+    "objective": {
+      "items": {
+        "$ref": "#/$defs/AnalysisQuestion"
+      },
+      "minItems": 1,
+      "title": "Objective",
+      "type": "array"
+    },
+    "scope": {
+      "$ref": "#/$defs/Scope"
+    },
+    "data_sources": {
+      "items": {
+        "$ref": "#/$defs/DataSource"
+      },
+      "minItems": 1,
+      "title": "Data Sources",
+      "type": "array"
+    },
+    "methodology": {
+      "$ref": "#/$defs/Methodology"
+    },
+    "data_quality": {
+      "$ref": "#/$defs/DataQuality"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/EvidenceRecord"
+      },
+      "minItems": 1,
+      "title": "Evidence",
+      "type": "array"
+    },
+    "facts": {
+      "items": {
+        "$ref": "#/$defs/ComputedFact"
+      },
+      "minItems": 1,
+      "title": "Facts",
+      "type": "array"
+    },
+    "claims": {
+      "items": {
+        "$ref": "#/$defs/ReportClaim"
+      },
+      "minItems": 1,
+      "title": "Claims",
+      "type": "array"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "minItems": 1,
+      "title": "Findings",
+      "type": "array"
+    },
+    "result_tables": {
+      "items": {
+        "$ref": "#/$defs/ResultTable"
+      },
+      "title": "Result Tables",
+      "type": "array"
+    },
+    "visualizations": {
+      "items": {
+        "$ref": "#/$defs/Visualization"
+      },
+      "title": "Visualizations",
+      "type": "array"
+    },
+    "conclusions": {
+      "items": {
+        "$ref": "#/$defs/Conclusion"
+      },
+      "minItems": 1,
+      "title": "Conclusions",
+      "type": "array"
+    },
+    "recommendations": {
+      "items": {
+        "$ref": "#/$defs/Recommendation"
+      },
+      "minItems": 1,
+      "title": "Recommendations",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Limitations",
+      "type": "array"
+    },
+    "causation_caveat": {
+      "minLength": 1,
+      "title": "Causation Caveat",
+      "type": "string"
+    },
+    "unanswered_questions": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Unanswered Questions",
+      "type": "array"
+    },
+    "appendix": {
+      "$ref": "#/$defs/Appendix"
+    }
+  },
+  "required": [
+    "metadata",
+    "executive_summary",
+    "objective",
+    "scope",
+    "data_sources",
+    "methodology",
+    "data_quality",
+    "evidence",
+    "facts",
+    "claims",
+    "findings",
+    "conclusions",
+    "recommendations",
+    "limitations",
+    "causation_caveat",
+    "unanswered_questions",
+    "appendix"
+  ],
+  "title": "MindEd Real-World Analysis Report Benchmark Contract",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://minded.local/schemas/report-benchmark-1.0.0.json"
+}

@@ -290,3 +290,20 @@ def test_frontend_lock_next15_closure_is_consistent() -> None:
     swc = {k: v["version"] for k, v in pkgs.items() if k.startswith("node_modules/@next/swc-")}
     assert swc and set(swc.values()) == {nxt}, swc
     assert pkgs["node_modules/@next/env"]["version"] == nxt
+
+
+def test_desktop_startup_requires_http_health_not_tcp_connect_only() -> None:
+    text = (ROOT / "packaging/windows/minded_entry.py").read_text(encoding="utf-8")
+    assert 'HTTPConnection(host, port, timeout=1.0)' in text
+    assert 'conn.request("GET", "/health"' in text
+    assert 'response.status == 200' in text
+    assert "Startup thread diagnostics enabled" in text
+    assert "desktop_thread_dump.log" in text
+
+
+def test_api_startup_logs_schema_retention_and_worker_phases_for_desktop() -> None:
+    text = (ROOT / "apps/api/src/main.py").read_text(encoding="utf-8")
+    assert "Database schema initialization started." in text
+    assert "Database schema initialization completed" in text
+    assert "Local storage retention scan started." in text
+    assert "API lifespan startup completed." in text

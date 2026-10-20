@@ -25,13 +25,18 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import pandas as pd
-from packages.analytics_core.src.intelligence.canonical_question_contract import canonical_json_dumps
+from packages.analytics_core.src.intelligence.canonical_question_contract import (
+    canonical_json_dumps,
+    has_multiple_ranking_directives,
+)
 from packages.analytics_core.src.intelligence.intent_state import (
     apply_contract_intent_patch,
     enrich_contract_intent_state,
+    compact_resolution_candidates,
     infer_intent_patch_from_answer,
+    objective_statements,
     normalize_guidance_payload,
     normalize_intent_patch,
 )
@@ -312,6 +317,21 @@ def _normalize_guidance_aggregation(value: Optional[str]) -> Optional[str]:
     return result
 
 
+def _strip_outer_instruction_quotes(value: Any) -> str:
+    """Accept the quoted examples shown in the review UI as ordinary instructions."""
+    cleaned = " ".join(str(value or "").strip().split())
+    quote_pairs = (("'", "'"), ('"', '"'), ("“", "”"), ("‘", "’"), ("`", "`"))
+    changed = True
+    while changed and len(cleaned) >= 2:
+        changed = False
+        for opening, closing in quote_pairs:
+            if cleaned.startswith(opening) and cleaned.endswith(closing):
+                cleaned = cleaned[len(opening):len(cleaned) - len(closing)].strip()
+                changed = True
+                break
+    return cleaned
+
+
 def _parse_guidance_instruction(text: str) -> Dict[str, Any]:
     """Parse the bounded, deterministic human-guidance instruction vocabulary."""
     parsed: Dict[str, Any] = {
@@ -326,7 +346,7 @@ def _parse_guidance_instruction(text: str) -> Dict[str, Any]:
     }
     if not text:
         return parsed
-    cleaned = " ".join(text.strip().split())
+    cleaned = _strip_outer_instruction_quotes(text)
     lower = cleaned.casefold()
 
     if re.search(r"\b(?:rows?|records?|observations?)\b", lower) and re.search(
@@ -405,6 +425,222 @@ def _parse_guidance_instruction(text: str) -> Dict[str, Any]:
         parsed["recognized"] = True
 
     return parsed
+
+
+def parse_relational_literal(val_str: str) -> Any:
+    val_str = val_str.strip()
+    if val_str.startswith("'") and val_str.endswith("'"):
+        return val_str[1:-1].replace("''", "'")
+    if val_str.startswith('"') and val_str.endswith('"'):
+        return val_str[1:-1].replace('""', '"')
+    if val_str.casefold() in {"true", "false"}:
+        return val_str.casefold() == "true"
+    if val_str.casefold() in {"null", "none"}:
+        return None
+    # Strict numeric grammar (matches the UI builder): plain ints stay ints, decimals and
+    # scientific notation become floats. Bare float() is avoided so "nan"/"inf" stay text.
+    if re.fullmatch(r"[-+]?\d+", val_str):
+        return int(val_str)
+    if re.fullmatch(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", val_str):
+        return float(val_str)
+    return val_str
+
+
+def parse_relational_filters(
+    raw_filter: str,
+    columns: Sequence[str],
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Parse generalized relational SQL filter predicates into validated conditions."""
+    from packages.analytics_core.src.intelligence.canonical_question_contract import resolve_phrase_to_column
+
+    text = (raw_filter or "").strip()
+    if not text:
+        return [], None
+
+    if any(k in text for k in (";", "--", "/*", "*/")):
+        return [], "Semicolons and SQL comment markers are not permitted in filter expressions."
+    if re.search(r"\b(drop|delete|update|insert|alter|exec|truncate)\b", text, re.I):
+        return [], "DDL and DML expressions are not permitted."
+
+    # Reject unsupported top-level OR clauses outside quotes and parens, guiding toward IN (...)
+    in_s_quote = False
+    in_d_quote = False
+    p_depth = 0
+    toks = re.split(r"(\s+OR\s+|'|\"|\(|\))", text, flags=re.I)
+    has_top_level_or = False
+    for t in toks:
+        if not t:
+            continue
+        if t == "'" and not in_d_quote:
+            in_s_quote = not in_s_quote
+        elif t == '"' and not in_s_quote:
+            in_d_quote = not in_d_quote
+        elif t == '(' and not in_s_quote and not in_d_quote:
+            p_depth += 1
+        elif t == ')' and not in_s_quote and not in_d_quote:
+            p_depth = max(0, p_depth - 1)
+        elif re.fullmatch(r"\s+OR\s+", t, re.I) and not in_s_quote and not in_d_quote and p_depth == 0:
+            has_top_level_or = True
+            break
+    if has_top_level_or:
+        return [], "Use supported column predicates (comparisons, IN/NOT IN, BETWEEN, IS NULL, IS NOT NULL) joined with AND. OR and arbitrary SQL expressions are not supported in this filter field."
+
+    # Strip optional leading WHERE / FILTER BY / FILTER TO / FILTER
+    text = re.sub(r"^(?:where|filter\s+by|filter\s+to|filter)\s+", "", text, flags=re.I).strip()
+
+    # Split top-level conditions by AND or comma (not inside quotes, parentheses, or BETWEEN ... AND)
+    parts = []
+    current = []
+    in_single_quote = False
+    in_double_quote = False
+    paren_depth = 0
+    in_between = False
+
+    tokens = re.split(r"(\s+AND\s+|\s*,\s*|\bBETWEEN\b|'|\"|\(|\))", text, flags=re.I)
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if not tok:
+            i += 1
+            continue
+        if tok == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            current.append(tok)
+        elif tok == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            current.append(tok)
+        elif tok == '(' and not in_single_quote and not in_double_quote:
+            paren_depth += 1
+            current.append(tok)
+        elif tok == ')' and not in_single_quote and not in_double_quote:
+            paren_depth = max(0, paren_depth - 1)
+            current.append(tok)
+        elif tok.upper() == "BETWEEN" and not in_single_quote and not in_double_quote and paren_depth == 0:
+            in_between = True
+            current.append(tok)
+        elif (re.fullmatch(r"\s+AND\s+", tok, re.I) or re.fullmatch(r"\s*,\s*", tok)) and not in_single_quote and not in_double_quote and paren_depth == 0:
+            if in_between and re.fullmatch(r"\s+AND\s+", tok, re.I):
+                in_between = False
+                current.append(tok)
+            else:
+                part = "".join(current).strip()
+                if part:
+                    parts.append(part)
+                current = []
+                in_between = False
+        else:
+            current.append(tok)
+        i += 1
+
+    last_part = "".join(current).strip()
+    if last_part:
+        parts.append(last_part)
+
+    if not parts:
+        return [], "Empty filter expression."
+
+    parsed_conditions: List[Dict[str, Any]] = []
+
+    for part in parts:
+        part_clean = part.strip()
+
+        # 1. Check IS NOT NULL / IS NULL
+        m_null = re.fullmatch(
+            r"[`\"']?([a-zA-Z0-9_][a-zA-Z0-9_. -]*?)[`\"']?\s+(is\s+not\s+null|is\s+null)\b",
+            part_clean,
+            re.I,
+        )
+        if m_null:
+            col_phrase = m_null.group(1).strip()
+            op_phrase = m_null.group(2).strip().upper()
+            resolved_col = resolve_phrase_to_column(col_phrase, columns)
+            if not resolved_col:
+                return [], f"The filter field did not resolve to a dataset column."
+            op = "IS NOT NULL" if "NOT" in op_phrase else "IS NULL"
+            parsed_conditions.append({"column": resolved_col, "operator": op})
+            continue
+
+        # 2. Check NOT IN / IN: `col [NOT] IN (...)`
+        m_in = re.fullmatch(
+            r"[`\"']?([a-zA-Z0-9_][a-zA-Z0-9_. -]*?)[`\"']?\s+(not\s+in|in)\s*\(\s*(.*?)\s*\)",
+            part_clean,
+            re.I,
+        )
+        if m_in:
+            col_phrase = m_in.group(1).strip()
+            op_phrase = m_in.group(2).strip().upper()
+            items_str = m_in.group(3).strip()
+            resolved_col = resolve_phrase_to_column(col_phrase, columns)
+            if not resolved_col:
+                return [], f"The filter field did not resolve to a dataset column."
+
+            items = []
+            for item in re.split(r",\s*(?=(?:[^'\"]*['\"][^'\"]*['\"])*[^'\"]*$)", items_str):
+                item = item.strip()
+                if item:
+                    items.append(parse_relational_literal(item))
+            if not items:
+                return [], f"Filter operator '{op_phrase}' requires at least one value."
+            if any(item is None for item in items):
+                return [], "IN/NOT IN lists cannot contain NULL; use IS NULL or IS NOT NULL as a separate predicate."
+            op = "NOT IN" if "NOT" in op_phrase else "IN"
+            parsed_conditions.append({"column": resolved_col, "operator": op, "value": items})
+            continue
+
+        # 3. Check BETWEEN: `col BETWEEN val1 AND val2`
+        m_between = re.fullmatch(
+            r"[`\"']?([a-zA-Z0-9_][a-zA-Z0-9_. -]*?)[`\"']?\s+between\s+(.+?)\s+and\s+(.+)",
+            part_clean,
+            re.I,
+        )
+        if m_between:
+            col_phrase = m_between.group(1).strip()
+            v1_str = m_between.group(2).strip()
+            v2_str = m_between.group(3).strip()
+            resolved_col = resolve_phrase_to_column(col_phrase, columns)
+            if not resolved_col:
+                return [], f"The filter field did not resolve to a dataset column."
+            v1 = parse_relational_literal(v1_str)
+            v2 = parse_relational_literal(v2_str)
+            parsed_conditions.append({"column": resolved_col, "operator": "BETWEEN", "value": [v1, v2]})
+            continue
+
+        # 4. Standard comparison operator: =, ==, !=, <>, <=, >=, <, >, is not, is, equals
+        m_comp = re.fullmatch(
+            r"[`\"']?([a-zA-Z0-9_][a-zA-Z0-9_. -]*?)[`\"']?\s*(==|!=|<>|<=|>=|<|>|=|is\s+not\b|is\b|equals?\b)\s*(.+)",
+            part_clean,
+            re.I,
+        )
+        if m_comp:
+            col_phrase = m_comp.group(1).strip()
+            raw_op = m_comp.group(2).strip().lower()
+            raw_val = m_comp.group(3).strip()
+
+            resolved_col = resolve_phrase_to_column(col_phrase, columns)
+            if not resolved_col:
+                return [], f"The filter field did not resolve to a dataset column."
+
+            val = parse_relational_literal(raw_val)
+
+            if raw_op in {"is", "is not"} and val is None:
+                op = "IS NOT NULL" if raw_op == "is not" else "IS NULL"
+                parsed_conditions.append({"column": resolved_col, "operator": op})
+                continue
+            if val is None and raw_op in {"=", "==", "!=", "<>"}:
+                return [], "Use IS NULL or IS NOT NULL for missing values; SQL '= NULL' comparisons never match as expected."
+
+            op_map = {
+                "=": "=", "==": "=", "is": "=", "equal": "=", "equals": "=",
+                "!=": "!=", "<>": "!=", "is not": "!=",
+                "<": "<", "<=": "<=", ">": ">", ">=": ">=",
+            }
+            op = op_map.get(raw_op, "=")
+            parsed_conditions.append({"column": resolved_col, "operator": op, "value": val})
+            continue
+
+        return [], "Use supported column predicates (comparisons, IN/NOT IN, BETWEEN, IS NULL, IS NOT NULL) joined with AND. OR and arbitrary SQL expressions are not supported in this filter field."
+
+    return parsed_conditions, None
 
 
 def _apply_filter_instruction(
@@ -494,6 +730,59 @@ def _apply_filter_instruction(
     return {"column": column, "operator": operator, "value": value}, None
 
 
+def _filter_instruction_already_covered(
+    phrase: str, mode: str, filters: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Recognize a redundant natural-language exclusion already in the canonical filters.
+
+    The review UI's instruction box can contain a repeated phrase such as
+    ``'Exclude returns and cancellations'`` after those same exclusions were already
+    extracted from the question. Do not reinterpret that redundant note against every
+    possible status/flag column and turn a complete plan back into clarification.
+    This is a no-op only when every named lifecycle condition is visibly covered by
+    an existing typed exclusion predicate.
+    """
+    if str(mode).casefold() != "exclude":
+        return False
+    normalized = _norm(_strip_outer_instruction_quotes(phrase))
+    terms: List[str] = []
+    if re.search(r"\b(?:return|returns|returned|returning)\b", normalized):
+        terms.append("return")
+    if re.search(r"\b(?:cancel|cancels|cancelled|canceled|cancellation|cancellations|cancelation|cancelations)\b", normalized):
+        terms.append("cancel")
+    if not terms:
+        return False
+
+    def values_for(item: Mapping[str, Any]) -> List[Any]:
+        value = item.get("value")
+        return list(value) if isinstance(value, (list, tuple, set)) else [value]
+
+    for term in terms:
+        covered = False
+        for item in filters:
+            column = str(item.get("column") or "").casefold()
+            operator = str(item.get("operator") or "").upper()
+            values = values_for(item)
+            normalized_values = {_norm(value) for value in values if value is not None}
+            if operator in {"!=", "<>", "NOT IN"}:
+                if term == "return" and normalized_values.intersection({"return", "returns", "returned", "returning"}):
+                    covered = True
+                if term == "cancel" and normalized_values.intersection({"cancel", "cancels", "cancelled", "canceled", "cancellation", "cancellations", "cancelation", "cancelations"}):
+                    covered = True
+            # A false/zero flag is an equivalent exclusion when the field itself names
+            # the lifecycle state (e.g. returned = 0 or is_cancelled = false).
+            if operator == "=" and any(value in (0, False, "0", "false", "False", "no", "No") for value in values):
+                if term == "return" and re.search(r"return", column):
+                    covered = True
+                if term == "cancel" and re.search(r"cancel", column):
+                    covered = True
+            if covered:
+                break
+        if not covered:
+            return False
+    return True
+
+
 def _apply_human_guidance_to_contract_impl(
     question: str,
     data_context: Any,
@@ -509,12 +798,12 @@ def _apply_human_guidance_to_contract_impl(
     )
 
     instruction = " ".join(
-        value.strip()
-        for value in (
-            str(guidance.get("clarification_response") or ""),
-            str(guidance.get("custom_instruction") or ""),
+        cleaned
+        for cleaned in (
+            _strip_outer_instruction_quotes(guidance.get("clarification_response")),
+            _strip_outer_instruction_quotes(guidance.get("custom_instruction")),
         )
-        if value and value.strip()
+        if cleaned
     )
     parsed = _parse_guidance_instruction(instruction)
     structured_aggregation = _normalize_guidance_aggregation(guidance.get("selected_aggregation"))
@@ -611,6 +900,11 @@ def _apply_human_guidance_to_contract_impl(
     dataset_name = candidate_names[0] if len(candidate_names) == 1 else next(iter(frames))
     frame = frames[dataset_name]
     base = previous_contract if isinstance(previous_contract, CanonicalQuestionContract) else candidate_results[dataset_name]
+    # Use the same explicit default aggregation as the pre-analysis preview before
+    # calculating unresolved slots. Previously the preview bound SUM, but this resolver
+    # checked for a missing aggregation first and returned NEEDS_CLARIFICATION, so the
+    # identical question could be previewed as executable and rejected at creation.
+    base = bind_default_aggregation(base)
     columns = [str(column) for column in frame.columns]
     comparison_question = bool(
         re.search(r"\b(?:compare|comparison|versus|vs\.?|differ\w*|higher|lower|more|less)\b", question, re.I)
@@ -623,20 +917,24 @@ def _apply_human_guidance_to_contract_impl(
             "selected_group_dimension",
             "selected_dataset",
             "scope_filter",
+            "selected_scope_filter",
         )
     ) or bool(instruction)
     if comparison_question and not semantic_guidance:
-        return ResolverOutcome(
-            status=ResolverStatus.RESOLVED,
-            contract=replace(
-                base,
-                family="NONE",
-                completeness="NOT_ENFORCED",
-                unresolved_roles=(),
-                unresolved_semantics=(),
-            ),
-            schema_information={"dataset": dataset_name, "columns": columns},
-        )
+        if base.completeness == "COMPLETE" and base.target_column is not None:
+            pass
+        else:
+            return ResolverOutcome(
+                status=ResolverStatus.RESOLVED,
+                contract=replace(
+                    base,
+                    family="NONE",
+                    completeness="NOT_ENFORCED",
+                    unresolved_roles=(),
+                    unresolved_semantics=(),
+                ),
+                schema_information={"dataset": dataset_name, "columns": columns},
+            )
     predictive_question = bool(
         re.search(r"\b(likely to|risk of|probability of|predicted to|likelihood of)\s+(churn|attrition|cancel|default|convert|leave)\b", question, re.I)
         or re.search(r"\b(?:which|who)\s+(?:customers?|users?|accounts?)\s+(?:are\s+)?likely\s+to\b", question, re.I)
@@ -787,35 +1085,35 @@ def _apply_human_guidance_to_contract_impl(
         )
 
     filters = [dict(condition) for condition in base.filter_conditions]
-    raw_scope_filter = str(guidance.get("scope_filter") or "").strip()
+    raw_scope_filter = str(guidance.get("scope_filter") or guidance.get("selected_scope_filter") or "").strip()
     if raw_scope_filter:
-        filter_match = re.fullmatch(
-            r"\s*([a-zA-Z0-9_. -]+?)\s*(=|!=)\s*(?:'([^']*)'|\"([^\"]*)\"|([a-zA-Z0-9_.-]+))\s*",
-            raw_scope_filter,
-        )
-        if not filter_match:
+        parsed_scope_filters, scope_filter_err = parse_relational_filters(raw_scope_filter, columns)
+        if scope_filter_err:
+            if "did not resolve to a dataset column" in scope_filter_err:
+                return ResolverOutcome(
+                    status=ResolverStatus.NEEDS_CLARIFICATION,
+                    contract=base,
+                    unresolved_instruction=raw_scope_filter,
+                    reason=scope_filter_err,
+                    suggested_resolutions=tuple(columns),
+                    schema_information={"dataset": dataset_name, "columns": columns},
+                    original_instruction=raw_scope_filter,
+                )
             return ResolverOutcome(
                 status=ResolverStatus.UNSUPPORTED,
                 contract=base,
                 unresolved_instruction=raw_scope_filter,
-                reason="Only one equality or exclusion filter with a literal value is supported; SQL expressions are not accepted.",
+                reason=scope_filter_err,
                 original_instruction=raw_scope_filter,
             )
-        filter_column = resolve_phrase_to_column(filter_match.group(1).strip(), columns)
-        if not filter_column:
-            return ResolverOutcome(
-                status=ResolverStatus.NEEDS_CLARIFICATION,
-                contract=base,
-                unresolved_instruction=filter_match.group(1).strip(),
-                reason="The filter field did not resolve to a dataset column.",
-                suggested_resolutions=tuple(columns),
-                schema_information={"dataset": dataset_name, "columns": columns},
-                original_instruction=raw_scope_filter,
-            )
-        filter_value = next(value for value in filter_match.groups()[2:] if value is not None)
-        filters.append({"column": filter_column, "operator": filter_match.group(2), "value": filter_value})
+        filters.extend(parsed_scope_filters)
 
     for filter_spec in parsed["filters"]:
+        if _filter_instruction_already_covered(filter_spec["phrase"], filter_spec["mode"], filters):
+            # The question's canonical contract already contains this population
+            # exclusion. Treat the optional instruction as confirmation, not a second
+            # ambiguous interpretation of the same words.
+            continue
         resolved_filter, filter_error = _apply_filter_instruction(filter_spec["phrase"], filter_spec["mode"], frame)
         if filter_error:
             return ResolverOutcome(
@@ -830,6 +1128,23 @@ def _apply_human_guidance_to_contract_impl(
         if resolved_filter:
             filters.append(resolved_filter)
 
+    # If freeform instruction was not recognized by phrase patterns, check if it's a relational predicate
+    if instruction and not parsed["recognized"]:
+        freeform_filters, freeform_err = parse_relational_filters(instruction, columns)
+        if freeform_filters and not freeform_err:
+            filters.extend(freeform_filters)
+            parsed["recognized"] = True
+
+    # Deduplicate filters while preserving order
+    unique_filters = []
+    seen_filters = set()
+    for f in filters:
+        f_key = (f.get("column"), f.get("operator"), repr(f.get("value")))
+        if f_key not in seen_filters:
+            seen_filters.add(f_key)
+            unique_filters.append(f)
+    filters = unique_filters
+
     # Assumption acknowledgements and UI provenance are not semantic instructions. In
     # particular, confirmed_assumptions=[] (or a non-empty acknowledgement list) must not
     # change an otherwise executable contract into NEEDS_CLARIFICATION.
@@ -837,7 +1152,7 @@ def _apply_human_guidance_to_contract_impl(
         guidance.get(key) not in (None, "", [], {})
         for key in (
             "selected_metric", "selected_aggregation", "selected_group_dimension",
-            "selected_dataset", "scope_filter", "_canonical_intent_patch",
+            "selected_dataset", "scope_filter", "selected_scope_filter", "_canonical_intent_patch",
         )
     ) or bool(instruction)
     if not has_guidance and str(getattr(base, "task_family", "")).upper() == "RANKING":
@@ -1001,11 +1316,18 @@ def _apply_human_guidance_to_contract_impl(
     if parsed["group_phrase"] and not groups:
         unresolved.append("grouping")
     requested_aggregation = aggregation or base.requested_aggregation
-    task_family = "COUNT" if family == "COUNT" else "DESCRIPTIVE"
-    estimand = "count" if family == "COUNT" else {
+    # Structured review fields refine the measure/aggregation/dimension, but they must
+    # not erase the question's ranking operation. Doing so previously turned a
+    # "which group is highest/lowest" request into a Descriptive report, and caused the
+    # export's table/narrative to lose direction even though ranking_direction survived.
+    base_task_family = str(getattr(base, "task_family", "")).upper()
+    task_family = "COUNT" if family == "COUNT" else ("RANKING" if base_task_family == "RANKING" else "DESCRIPTIVE")
+    if task_family == "RANKING" and not groups and "grouping" not in unresolved:
+        unresolved.append("grouping")
+    estimand = "count" if family == "COUNT" else ("ranking" if task_family == "RANKING" else {
         "SUM": "sum", "MEAN": "mean", "MEDIAN": "median", "MIN": "minimum", "MAX": "maximum",
         "VARIANCE": "variance", "STDDEV": "stddev", "PERCENTILE": "percentile"
-    }.get(aggregation, base.estimand)
+    }.get(aggregation, base.estimand))
     completeness = "INCOMPLETE" if unresolved else "COMPLETE"
     updated = replace(
         base,
@@ -1060,6 +1382,37 @@ def _apply_human_guidance_to_contract_impl(
     )
 
 
+def _population_assumption(contract: Any, default: str = "Population: All available records with non-null values") -> str:
+    """Describe the population the contract actually filters to (never claim 'all records' when
+    filters are bound)."""
+    conditions = list(getattr(contract, "filter_conditions", ()) or ()) if contract is not None else []
+    if not conditions:
+        return default
+    parts = []
+    for item in conditions:
+        op = str(item.get("operator", "")).upper()
+        col, val = item.get("column"), item.get("value")
+        if op in {"IS NULL", "IS NOT NULL"}:
+            parts.append(f"{col} {op}")
+        elif isinstance(val, (list, tuple)):
+            parts.append(f"{col} {op} ({', '.join(map(str, val))})")
+        else:
+            parts.append(f"{col} {op} {val}")
+    return "Population: only rows where " + " AND ".join(parts)
+
+
+def _with_contract_filters(planned_sql: str, contract: Any) -> str:
+    """Prefer the contract-rendered SQL (which carries every bound filter) over a hand-built string."""
+    if contract is not None and getattr(contract, "filter_conditions", None):
+        try:
+            rendered = render_contract_preview_from_contract(contract)
+        except Exception:
+            rendered = None
+        if rendered:
+            return rendered
+    return planned_sql
+
+
 def apply_human_guidance_to_contract(
     question: str,
     data_context: Any,
@@ -1106,21 +1459,31 @@ def apply_human_guidance_to_contract(
                 original_instruction=str(freeform_answer),
             )
         try:
-            patch = normalize_intent_patch(infer_intent_patch_from_answer(str(freeform_answer), str(pending_slot), answer_frame))
+            patch = normalize_intent_patch(infer_intent_patch_from_answer(str(freeform_answer), str(pending_slot), answer_frame, question=question))
         except (TypeError, ValueError) as exc:
-            return ResolverOutcome(
-                status=ResolverStatus.NEEDS_CLARIFICATION,
-                contract=previous_contract,
-                unresolved_instruction=str(pending_slot),
-                reason=str(exc),
-                suggested_resolutions=tuple(map(str, answer_frame.columns)),
-                schema_information={"columns": list(map(str, answer_frame.columns))},
-                original_instruction=str(freeform_answer),
-            )
-        # The answer has been compiled to a typed patch. Do not run it through the unrelated
-        # general-purpose freeform parser as a second interpretation.
-        normalized.pop("custom_instruction", None)
-        normalized.pop("clarification_response", None)
+            # The free-text field is also used for additional instructions, not only for
+            # answering a pending slot. If a text answer is recognized by the bounded
+            # instruction parser (for example, a quoted "Exclude returns and cancellations"),
+            # let the normal resolver apply it. It must still resolve every required slot
+            # before the plan can execute. Truly unrecognized slot answers fail closed here.
+            if _parse_guidance_instruction(str(freeform_answer)).get("recognized"):
+                patch = None
+                pending_slot = None
+            else:
+                return ResolverOutcome(
+                    status=ResolverStatus.NEEDS_CLARIFICATION,
+                    contract=previous_contract,
+                    unresolved_instruction=str(pending_slot),
+                    reason=str(exc),
+                    suggested_resolutions=(tuple(objective_statements(question)) or compact_resolution_candidates(str(pending_slot), answer_frame, question)),
+                    schema_information={"columns": list(map(str, answer_frame.columns))},
+                    original_instruction=str(freeform_answer),
+                )
+        else:
+            # The answer has been compiled to a typed patch. Do not run it through the unrelated
+            # general-purpose freeform parser as a second interpretation.
+            normalized.pop("custom_instruction", None)
+            normalized.pop("clarification_response", None)
     if patch:
         # Simple UI slots also feed the existing resolver so conflicts with freeform instructions
         # are reported by its established conflict machinery. The complete patch is applied again
@@ -1161,6 +1524,11 @@ def apply_human_guidance_to_contract(
 
     # UI acknowledgement is provenance only and may be empty after normalization. It is never
     # allowed to make a deterministic question unresolved by itself.
+    if patch and patch.get("focus_objective"):
+        # The user picked which single question to answer: resolve from exactly that text, not from
+        # the original multi-part wording or the contract compiled from it.
+        question = str(patch["focus_objective"])
+        previous_contract = None
     outcome = _apply_human_guidance_to_contract_impl(
         question=question,
         data_context=data_context,
@@ -1201,7 +1569,7 @@ def apply_human_guidance_to_contract(
                 # The normal compound-intent gate remains authoritative if safe graph compilation fails.
                 pass
         contract, ledger, requirements, patches = enrich_contract_intent_state(
-            question=question,
+            question=(patch.get("focus_objective") if patch and patch.get("focus_objective") else question),
             contract=contract,
             frame=frame,
             guidance=normalized,
@@ -1213,7 +1581,7 @@ def apply_human_guidance_to_contract(
             contract=outcome.contract,
             unresolved_instruction=str(exc),
             reason=str(exc),
-            suggested_resolutions=tuple(map(str, frame.columns)) if frame is not None else (),
+            suggested_resolutions=compact_resolution_candidates("target_column", frame, question) if frame is not None else (),
             schema_information={**dict(outcome.schema_information or {}), "intent_patch_error": str(exc)},
             original_instruction=str(guidance.get("clarification_response") or guidance.get("custom_instruction") or ""),
         )
@@ -1236,7 +1604,7 @@ def apply_human_guidance_to_contract(
             contract=contract,
             unresolved_instruction="operation_graph",
             reason=reason,
-            suggested_resolutions=("Split the request into one analytical operation per investigation.",),
+            suggested_resolutions=(tuple(a.get("label") for a in patches) or tuple(objective_statements(question)) or ("Ask one question at a time.",)),
             schema_information=schema_info,
             original_instruction=outcome.original_instruction or question,
             suggested_patches=tuple(patches),
@@ -1246,7 +1614,13 @@ def apply_human_guidance_to_contract(
         open_slots = list(dict.fromkeys(str(item.get("slot")) for item in requirements))
         reason = "Some material parts of the question are not yet represented in the executable contract."
         details = "; ".join(
-            f"{item.get('slot')}: {item.get('reason')}" for item in requirements
+            (
+                f"The filter \"{item.get('text')}\" refers to '{item.get('field')}', which is not a column in this "
+                "dataset, so the population cannot be restricted as asked. Nothing was calculated without it."
+                if item.get("reason") == "filter_column_unavailable"
+                else f"{item.get('slot')}: {item.get('reason')}"
+            )
+            for item in requirements
         )
         if details:
             reason = f"{reason} {details}"
@@ -1255,7 +1629,7 @@ def apply_human_guidance_to_contract(
             contract=contract,
             unresolved_instruction=", ".join(open_slots) or ", ".join(contract.unresolved_roles),
             reason=reason,
-            suggested_resolutions=tuple(map(str, frame.columns)) if frame is not None else outcome.suggested_resolutions,
+            suggested_resolutions=(tuple(a.get("label") for a in patches) or compact_resolution_candidates((open_slots[0] if open_slots else "target_column"), frame, question)) if frame is not None else outcome.suggested_resolutions,
             schema_information=schema_info,
             conflict=outcome.conflict,
             original_instruction=outcome.original_instruction,
@@ -1460,16 +1834,36 @@ def _evaluate_guided_investigation_legacy(
 
     # 4. Extract Intended Grouping Dimension
     group_col: Optional[str] = None
-    group_match = re.search(r"\bwhich\s+([a-zA-Z0-9_ ]+?)\s+(?:has|have|shows?|with|is|had)\b", ql)
-    if group_match:
-        cand_group = _norm(group_match.group(1))
-        for c in categorical_cols:
-            if _norm(c) == cand_group or cand_group in _norm(c) or _norm(c) in cand_group:
-                group_col = c
-                break
+    from packages.analytics_core.src.intelligence.canonical_question_contract import extract_filter_conditions
+    filter_cols = {f["column"] for f in extract_filter_conditions(q_clean, cols)}
+
+    if canonical_contract is not None and getattr(canonical_contract, "grouping_columns", ()):
+        group_col = canonical_contract.grouping_columns[0]
+
+    if not group_col:
+        # Check explicit grouping prepositions first ("for each X", "by X", "per X")
+        by_prep_match = re.search(r"\b(?:by|per|across|within|for each|in each|for every|in every|grouped by|split by|broken down by)\s+([a-zA-Z0-9_ ]+?)(?:\s+after|\s+before|\s+with|\s+had|\s+has|\?|$|\.|\,)", ql)
+        if by_prep_match:
+            cand_p = _norm(by_prep_match.group(1))
+            for c in cols:
+                if _norm(c) == cand_p or cand_p in _norm(c) or _norm(c) in cand_p:
+                    group_col = c
+                    break
+
+    if not group_col:
+        group_match = re.search(r"\bwhich\s+([a-zA-Z0-9_ ]+?)\s+(?:has|have|shows?|with|is|had)\b", ql)
+        if group_match:
+            cand_group = _norm(group_match.group(1))
+            for c in categorical_cols:
+                if _norm(c) == cand_group or cand_group in _norm(c) or _norm(c) in cand_group:
+                    group_col = c
+                    break
+
     if not group_col and categorical_cols:
         # Check direct column name, token/stem match, or distinct value question
         for c in categorical_cols:
+            if c in filter_cols:
+                continue
             c_norm = _norm(c)
             c_lower = c.lower()
             if c_lower in ql or c_norm in ql or c_norm in _norm(ql):
@@ -1521,11 +1915,14 @@ def _evaluate_guided_investigation_legacy(
     # 5. Extract Intended Target Metric and Check Missing Data vs Multiple Plausible Metrics
     # Check for direct named column in question first (e.g. deals_closed, active_days, net_revenue)
     direct_named_col: Optional[str] = None
-    for c in cols:
-        cn = _norm(c)
-        if cn in ql or c.lower() in ql:
-            # Check if this column is a metric or group dimension
-            if c != group_col:
+    if canonical_contract is not None and getattr(canonical_contract, "target_column", None):
+        direct_named_col = canonical_contract.target_column
+    if not direct_named_col:
+        for c in cols:
+            if c == group_col or c in filter_cols:
+                continue
+            cn = _norm(c)
+            if cn in ql or c.lower() in ql:
                 direct_named_col = c
                 break
 
@@ -1544,7 +1941,10 @@ def _evaluate_guided_investigation_legacy(
     requested_concept: Optional[str] = None
     concept_candidates: List[str] = []
     for concept, synonyms in metric_concepts:
-        if any(re.search(rf"\b{re.escape(syn)}\b", ql) for syn in synonyms):
+        if any(
+            re.search(rf"\b{re.escape(syn)}\b(?!\s+(?:channel|rep|reps|team|region|person|manager|territory|segment|associate|staff|force))", ql)
+            for syn in synonyms
+        ):
             requested_concept = concept
             concept_candidates = synonyms
             break
@@ -1722,7 +2122,7 @@ def _evaluate_guided_investigation_legacy(
                 assumptions=[
                     f"Grouping dimension: `{group_col}`",
                     "Metric: Count of observations (`COUNT(*)`)",
-                    "Population: All available records",
+                    _population_assumption(locals().get("canonical_contract"), "Population: All available records"),
                 ],
                 ambiguity_status=AmbiguityStatus.CLEAR,
                 can_auto_proceed=True,
@@ -1751,6 +2151,13 @@ def _evaluate_guided_investigation_legacy(
             recommended_action="Auto-proceed with descriptive rate calculation.",
         )
 
+    # A compiled, COMPLETE contract is the authority for the measure and grouping: the heuristic
+    # column picks above must never relabel what the contract will actually compute.
+    _authoritative = locals().get("canonical_contract")
+    if _authoritative is not None and getattr(_authoritative, "completeness", None) == "COMPLETE" and getattr(_authoritative, "target_column", None):
+        target_metric = _authoritative.target_column
+        if getattr(_authoritative, "grouping_columns", None):
+            group_col = _authoritative.grouping_columns[0]
     if is_ranking and group_col and target_metric:
         # Use the contract's aggregation (never a hardcoded SUM) and bind the SUM default into
         # the contract so the approved plan, its hash and the controller gate all carry it.
@@ -1764,6 +2171,7 @@ def _evaluate_guided_investigation_legacy(
         else:
             agg_sql = f"{'AVG' if agg == 'MEAN' else agg}({target_metric})"
         planned_sql = f"SELECT {group_col}, {agg_sql} AS total_{target_metric}, COUNT(*) AS rows FROM data GROUP BY {group_col} ORDER BY total_{target_metric} DESC"
+        planned_sql = _with_contract_filters(planned_sql, canonical_contract)
         interpretation = f"Calculate {agg.lower().replace('_', ' ')} of {target_metric.replace('_', ' ')} for each {group_col.replace('_', ' ')}, rank from highest to lowest, and identify the top {group_col.replace('_', ' ')}."
         return ProposedInterpretation(
             question=q_clean,
@@ -1776,7 +2184,7 @@ def _evaluate_guided_investigation_legacy(
                 f"Grouping dimension: `{group_col}`",
                 f"Metric: `{target_metric}` aggregated with {agg}"
                 + (" (default; not stated in your question)" if defaulted else ""),
-                "Population: All available records with non-null values",
+                _population_assumption(locals().get("canonical_contract"), "Population: All available records with non-null values"),
             ],
             ambiguity_status=AmbiguityStatus.CLEAR,
             can_auto_proceed=True,
@@ -1850,6 +2258,7 @@ def _evaluate_guided_investigation_legacy(
             canonical_contract = bind_default_aggregation(canonical_contract)
             agg = canonical_contract.requested_aggregation or "SUM"
             planned_sql = f"SELECT {contract_group}, {agg}({contract_target}) AS total_{contract_target}, COUNT(*) AS rows FROM data GROUP BY {contract_group} ORDER BY total_{contract_target} DESC"
+            planned_sql = _with_contract_filters(planned_sql, canonical_contract)
             interpretation = f"Calculate total {contract_target.replace('_', ' ')} for each {contract_group.replace('_', ' ')}, rank from highest to lowest, and identify the top {contract_group.replace('_', ' ')}."
             return ProposedInterpretation(
                 question=q_clean,
@@ -1862,7 +2271,7 @@ def _evaluate_guided_investigation_legacy(
                     f"Grouping dimension: `{contract_group}`",
                     f"Metric: `{contract_target}` aggregated with {agg}"
                     + (" (default; not stated in your question)" if canonical_contract.resolution_evidence.get("defaulted_aggregation") else ""),
-                    "Population: All available records with non-null values",
+                    _population_assumption(locals().get("canonical_contract"), "Population: All available records with non-null values"),
                 ],
                 ambiguity_status=AmbiguityStatus.CLEAR,
                 can_auto_proceed=True,
@@ -2024,6 +2433,10 @@ def apply_human_review_decision(
 
 def render_contract_preview_from_contract(contract: Any) -> Optional[str]:
     """Render a review-only deterministic calculation from canonical contract fields."""
+    # An incomplete contract has dropped or unresolved intent; rendering it would show an
+    # executable-looking calculation for a question the system has not understood in full.
+    if getattr(contract, "completeness", None) == "INCOMPLETE" or getattr(contract, "unresolved_roles", ()):
+        return None
     graph_payload = getattr(contract, "operation_graph", None)
     if isinstance(graph_payload, dict) and graph_payload.get("nodes"):
         from dataclasses import replace as _replace_contract
@@ -2063,7 +2476,12 @@ def render_contract_preview_from_contract(contract: Any) -> Optional[str]:
         return None
     group = groups[0] if groups else None
     qident = lambda value: '"' + str(value).replace('"', '""') + '"'
-    if agg in {"ROW_COUNT", "COUNT"} and not target:
+    numeric_only_aggs = {"SUM", "MEAN", "MEDIAN", "VARIANCE", "STDDEV", "MIN", "MAX"}
+    if group and target and str(target) == str(group) and agg in numeric_only_aggs:
+        # "What are the different tiers?": the measured column IS the grouping dimension.
+        # SUM/AVG of a category over itself is meaningless; the coherent measure is a per-group row count.
+        measure = "COUNT(*)"
+    elif agg in {"ROW_COUNT", "COUNT"} and not target:
         measure = "COUNT(*)"
     elif agg == "COUNT_DISTINCT" and target:
         measure = f"COUNT(DISTINCT {qident(target)})"
@@ -2103,7 +2521,7 @@ def render_contract_preview_from_contract(contract: Any) -> Optional[str]:
             literals = []
             for item in value:
                 if item is None:
-                    return None  # SQL IN with NULL needs explicit three-valued-logic semantics.
+                    return None  # SQL IN with NULL is ambiguous under three-valued logic.
                 if isinstance(item, (int, float)) and not isinstance(item, bool):
                     literals.append(str(item))
                 elif isinstance(item, bool):
@@ -2111,17 +2529,50 @@ def render_contract_preview_from_contract(contract: Any) -> Optional[str]:
                 else:
                     literals.append("'" + str(item).replace("'", "''") + "'")
             where_parts.append(f"{col} {op} ({', '.join(literals)})")
+        elif op == "BETWEEN" and isinstance(value, (list, tuple)) and len(value) == 2:
+            literals = []
+            for item in value:
+                if item is None:
+                    return None
+                if isinstance(item, (int, float)) and not isinstance(item, bool):
+                    literals.append(str(item))
+                elif isinstance(item, bool):
+                    literals.append("TRUE" if item else "FALSE")
+                else:
+                    literals.append("'" + str(item).replace("'", "''") + "'")
+            where_parts.append(f"{col} BETWEEN {literals[0]} AND {literals[1]}")
         else:
             return None
+    time_range = getattr(contract, "time_range", None) or {}
+    time_column = getattr(contract, "time_column", None)
+    if (time_column and isinstance(time_range, dict) and time_range.get("start") and time_range.get("end")
+            and time_range.get("baseline_start") and time_range.get("baseline_end")):
+        def _date_lit(value: Any) -> str:
+            return "'" + str(value).replace("'", "''") + "'"
+        def _period_sql(label: str, start: Any, end: Any) -> str:
+            predicates = [*where_parts, f"CAST({qident(time_column)} AS VARCHAR) >= {_date_lit(start)}", f"CAST({qident(time_column)} AS VARCHAR) < {_date_lit(end)}"]
+            return f"SELECT '{label}' AS period, {measure} AS metric_value FROM data WHERE " + " AND ".join(predicates)
+        return _period_sql("current_period", time_range["start"], time_range["end"]) + " UNION ALL " + _period_sql("baseline_period", time_range["baseline_start"], time_range["baseline_end"])
+
     select_parts = [qident(item) for item in groups] + [f"{measure} AS metric_value"]
     sql = "SELECT " + ", ".join(select_parts) + " FROM data"
     if where_parts:
         sql += " WHERE " + " AND ".join(where_parts)
     if groups:
         sql += " GROUP BY " + ", ".join(qident(item) for item in groups)
-    if task == "RANKING" and groups:
-        direction = str(getattr(contract, "ranking_direction", None) or "DESC").upper()
+    explicit_direction = str(getattr(contract, "ranking_direction", None) or "").upper()
+    if groups and (task == "RANKING" or explicit_direction in {"ASC", "DESC"}):
+        # "Highest total sales by segment" carries an explicit direction even when the task family
+        # is descriptive; the preview must order like the approved executor does.
+        direction = explicit_direction or "DESC"
         sql += f" ORDER BY metric_value {'ASC' if direction == 'ASC' else 'DESC'}"
+    limit = getattr(contract, "ranking_limit", None)
+    if limit is not None:
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            return None
+        if not groups:
+            return None
+        sql += f" LIMIT {limit}"
     return sql
 
 
@@ -2161,6 +2612,26 @@ def evaluate_guided_investigation(
             compiled = compile_canonical_question_contract(question, df)
             contract = compiled
             contract = bind_default_aggregation(contract)
+            # A defaulted SUM over a categorical column is meaningless ("what are the different tiers?").
+            # Count rows per group instead, and record that this was a default.
+            _tgt = getattr(contract, "target_column", None)
+            if (
+                _tgt and _tgt in df.columns
+                and not re.search(r"(?:^|[_\W])(id|key|uuid|guid|identifier)(?:$|[_\W])|(?:_id|_key|_uuid|_guid)$", str(_tgt).casefold())
+                and not pd.api.types.is_numeric_dtype(df[_tgt])
+                and not pd.api.types.is_bool_dtype(df[_tgt])
+                and str(getattr(contract, "requested_aggregation", None) or "").upper() in {"", "SUM"}
+                and str(getattr(contract, "task_family", "")).upper() in {"DESCRIPTIVE", "RANKING"}
+            ):
+                contract = replace(
+                    contract,
+                    target_column=None,
+                    requested_aggregation="ROW_COUNT",
+                    resolution_evidence={
+                        **dict(getattr(contract, "resolution_evidence", {}) or {}),
+                        "defaulted_aggregation": "ROW_COUNT (target column is categorical; SUM is undefined)",
+                    },
+                )
             # Build a persisted graph only for the one verified compound grammar supported by
             # the operation engine. Other compound questions remain unresolved by the ledger.
             if not getattr(contract, "operation_graph", None):
@@ -2199,6 +2670,188 @@ def evaluate_guided_investigation(
             contract, ledger, requirements, option_patches = enrich_contract_intent_state(
                 question=question, contract=contract, frame=df, guidance={}
             )
+            # Deterministic repairs for explicitly named roles only. Never substitute a measure.
+            _q = " ".join(str(question or "").split()).strip()
+            _cols = [str(c) for c in df.columns]
+            from packages.analytics_core.src.intelligence.canonical_question_contract import resolve_phrase_to_column
+            _requirements = list(requirements or [])
+            _contract_updates = {}
+
+            # Unsupported compound / multi-ranking shapes remain blocked.
+            if has_multiple_ranking_directives(_q):
+                _contract_updates.update(
+                    completeness="INCOMPLETE", family="NONE",
+                    unresolved_roles=tuple(dict.fromkeys([*(getattr(contract, "unresolved_roles", ()) or ()), "operation_graph"])),
+                    unresolved_semantics=tuple(dict.fromkeys([*(getattr(contract, "unresolved_semantics", ()) or ()), "compound_ranking_not_supported"])),
+                )
+                _requirements.append({"slot": "operation_graph", "status": "UNRESOLVED", "reason": "compound_ranking_not_supported"})
+
+            # Out-of-bounds ranking limit (outside 1-100) must be blocked explicitly.
+            _raw_limit_match = re.search(r"\b(?:top|bottom)\s+(\d+)\b", _q, re.I)
+            if _raw_limit_match:
+                _raw_lim = int(_raw_limit_match.group(1))
+                if not (1 <= _raw_lim <= 100):
+                    _contract_updates.update(
+                        completeness="INCOMPLETE", family="NONE", ranking_limit=None,
+                        unresolved_roles=tuple(dict.fromkeys([*(getattr(contract, "unresolved_roles", ()) or ()), "ranking_limit"])),
+                        unresolved_semantics=tuple(dict.fromkeys([*(getattr(contract, "unresolved_semantics", ()) or ()), "ranking_limit_out_of_bounds"])),
+                    )
+                    _requirements.append({"slot": "ranking_limit", "status": "UNRESOLVED", "reason": "ranking_limit_out_of_bounds"})
+
+            # "Top region by gross_sales" means group=region and measure=gross_sales.
+            _rank_roles = re.match(
+                r"^(?:show\s+|find\s+|identify\s+)?(?P<direction>top|bottom|highest|lowest|best|worst)\s+(?:(?P<limit>\d{1,3})\s+)?(?P<group>.+?)\s+by\s+(?P<measure>[A-Za-z_][A-Za-z0-9_ ]*?)(?:\s+(?:for|within|during|over)\s+.+)?[?.!]*$",
+                _q, re.I,
+            )
+            if _rank_roles and len(re.findall(r"\b(?:top|bottom|highest|lowest|best|worst)\b", _q, re.I)) <= 1:
+                _lim_raw = _rank_roles.group("limit")
+                _lim_int = int(_lim_raw) if _lim_raw else getattr(contract, "ranking_limit", None)
+                if _lim_int is None or 1 <= _lim_int <= 100:
+                    _group_phrase = re.sub(r"^\d{1,3}\s+", "", _rank_roles.group("group").strip())
+                    _measure_phrase = _rank_roles.group("measure").strip()
+                    _group_col = resolve_phrase_to_column(_group_phrase, _cols)
+                    _measure_col = resolve_phrase_to_column(_measure_phrase, _cols)
+                    if _group_col and _measure_col and _group_col != _measure_col:
+                        _contract_updates.update(
+                            task_family="RANKING", target_column=_measure_col,
+                            grouping_columns=(_group_col,), requested_aggregation="SUM",
+                            ranking_direction="ASC" if _rank_roles.group("direction").casefold() in {"bottom", "lowest", "worst"} else "DESC",
+                            ranking_limit=_lim_int,
+                            family="SIMPLE_AGGREGATE", completeness="COMPLETE",
+                            unresolved_roles=tuple(r for r in (getattr(contract, "unresolved_roles", ()) or ()) if r not in {"target", "grouping", "ranking_limit"}),
+                            unresolved_semantics=tuple(r for r in (getattr(contract, "unresolved_semantics", ()) or ()) if "simple_aggregate_request_not_resolved" not in r and "ranking_limit" not in r),
+                            resolution_confidence=1.0,
+                            resolution_evidence={**dict(getattr(contract, "resolution_evidence", {}) or {}), "explicit_rank_roles": {"group": _group_col, "measure": _measure_col}},
+                        )
+
+            # Preserve explicit aggregate + equality filter; do not downgrade it to COUNT(*).
+            # Anchor to a single simple predicate, never replace an existing filter.
+            if not getattr(contract, "filter_conditions", ()):
+                _simple_filter_query = not re.search(r"\b(?:and|or|excluding|exclude|without|except|by|for\s+each)\b|,", _q, re.I)
+                _filter_match = re.match(
+                    r"^(?:please\s+)?(?:show|calculate|get|find|what is|compute)\s+(?:the\s+)?total\s+([A-Za-z_][A-Za-z0-9_ ]*?)\s+where\s+([A-Za-z_][A-Za-z0-9_ ]*?)\s*(=|equals|is)\s*['\"]?([A-Za-z0-9_.\-]+)['\"]?[?.!]*$",
+                    _q, re.I,
+                ) if _simple_filter_query else None
+                if _filter_match:
+                    _metric_col = resolve_phrase_to_column(_filter_match.group(1).strip(), _cols)
+                    _filter_col = resolve_phrase_to_column(_filter_match.group(2).strip(), _cols)
+                    _raw_value = _filter_match.group(4).strip()
+                    if _metric_col and _filter_col and _metric_col != _filter_col:
+                        _value = _raw_value
+                        if pd.api.types.is_numeric_dtype(df[_filter_col]):
+                            try: _value = float(_raw_value) if "." in _raw_value else int(_raw_value)
+                            except (TypeError, ValueError): pass
+                        _filters = [{"column": _filter_col, "operator": "=", "value": _value}]
+                        _contract_updates.update(
+                            task_family="DESCRIPTIVE", target_column=_metric_col, requested_aggregation="SUM",
+                            filter_conditions=tuple(_filters), family="SIMPLE_AGGREGATE", completeness="COMPLETE",
+                            unresolved_roles=tuple(r for r in (getattr(contract, "unresolved_roles", ()) or ()) if r not in {"target", "filter_conditions"}),
+                            unresolved_semantics=tuple(r for r in (getattr(contract, "unresolved_semantics", ()) or ()) if "simple_aggregate_request_not_resolved" not in r),
+                            resolution_confidence=1.0,
+                            resolution_evidence={**dict(getattr(contract, "resolution_evidence", {}) or {}), "explicit_aggregate_filter": {"measure": _metric_col, "filter_column": _filter_col, "operator": "="}},
+                        )
+
+            # A bare comparison is incomplete unless a dimension or two values are explicit.
+            _temporal_pair = bool(re.search(r"\b(?:this|current)\s+year\b.*\b(?:and|versus|vs\.?|compared with|against)\b.*\b(?:last|previous|prior)\s+year\b|\b(?:last|previous|prior)\s+year\b.*\b(?:and|versus|vs\.?|compared with|against)\b.*\b(?:this|current)\s+year\b", _q, re.I))
+
+            if re.search(r"\b(?:compare|comparison|contrast)\b", _q, re.I):
+                _groups = tuple(_contract_updates.get("grouping_columns", getattr(contract, "grouping_columns", ()) or ()))
+                _values = tuple(getattr(contract, "comparison_values", ()) or ())
+                if not _groups and len(_values) < 2 and not _temporal_pair and not getattr(contract, "operation_graph", None):
+                    _contract_updates.update(
+                        completeness="INCOMPLETE", family="NONE",
+                        unresolved_roles=tuple(dict.fromkeys([*(getattr(contract, "unresolved_roles", ()) or ()), "grouping_dimension_or_comparison_values"])),
+                        unresolved_semantics=tuple(dict.fromkeys([*(getattr(contract, "unresolved_semantics", ()) or ()), "comparison_requires_dimension_or_two_values"])),
+                    )
+                    _requirements.append({"slot": "grouping_dimension_or_comparison_values", "status": "UNRESOLVED", "reason": "comparison_requires_dimension_or_two_values"})
+
+            # AOV must never resolve to order_id. Bind to a real order-amount field only when
+            # the dataset's order grain is valid; otherwise fail closed.
+            if re.search(r"\b(?:average order value|aov)\b", _q, re.I):
+                _amount_priority = ("aov", "order_value", "total_amount", "order_total", "order_amount", "revenue", "sales_amount", "gross_sales", "sales", "amount", "total_sales", "net_sales")
+                _amount = None
+                for _cand in _amount_priority:
+                    _amount = next((c for c in _cols if re.sub(r"[^a-z0-9]+", "_", c.casefold()).strip("_") == _cand and pd.api.types.is_numeric_dtype(df[c])), None)
+                    if _amount:
+                        break
+                _order = next((c for c in _cols if re.sub(r"[^a-z0-9]+", "_", c.casefold()).strip("_") in {"order_id", "order_key", "transaction_id"}), None)
+                _customer = next((c for c in _cols if re.sub(r"[^a-z0-9]+", "_", c.casefold()).strip("_") in {"customer_id", "customer_key", "customer"}), None)
+                _order_grain_ok = (_order is not None and not df[_order].duplicated().any()) or (_order is None and not df.index.duplicated().any())
+                _by_customer = bool(re.search(r"\b(?:per\s+customer|by\s+customer|for\s+each\s+customer)\b", _q, re.I))
+
+                if _amount and _order_grain_ok:
+                    if _by_customer:
+                        if _customer:
+                            _aov_groups = (_customer,)
+                            _aov_unresolved_roles = ("target", "denominator_column", "grouping")
+                            _aov_complete = True
+                        else:
+                            _aov_groups = ()
+                            _aov_unresolved_roles = ("target", "denominator_column")
+                            _aov_complete = False
+                    else:
+                        _aov_groups = ()
+                        _aov_unresolved_roles = ("target", "denominator_column", "grouping")
+                        _aov_complete = True
+
+                    if _aov_complete:
+                        _contract_updates.update(
+                            target_column=_amount, grouping_columns=_aov_groups, requested_aggregation="MEAN", task_family="DESCRIPTIVE",
+                            family="SIMPLE_AGGREGATE", completeness="COMPLETE",
+                            unresolved_roles=tuple(r for r in (getattr(contract, "unresolved_roles", ()) or ()) if r not in _aov_unresolved_roles),
+                            unresolved_semantics=tuple(r for r in (getattr(contract, "unresolved_semantics", ()) or ()) if "denominator_column" not in r),
+                            resolution_confidence=1.0,
+                            resolution_evidence={**dict(getattr(contract, "resolution_evidence", {}) or {}), "aov_binding": {"amount_column": _amount, "customer_column": _customer if _by_customer else None, "order_grain_unique": True}},
+                        )
+                    else:
+                        _contract_updates.update(target_column=None, completeness="INCOMPLETE", family="NONE",
+                            unresolved_roles=tuple(dict.fromkeys([*(getattr(contract, "unresolved_roles", ()) or ()), "grouping_dimension_or_comparison_values"])),
+                            unresolved_semantics=tuple(dict.fromkeys([*(getattr(contract, "unresolved_semantics", ()) or ()), "customer_grouping_column_not_found"])))
+                        _requirements.append({"slot": "grouping_dimension_or_comparison_values", "status": "UNRESOLVED", "reason": "customer_grouping_column_not_found"})
+                else:
+                    _contract_updates.update(target_column=None, completeness="INCOMPLETE", family="NONE",
+                        unresolved_roles=tuple(dict.fromkeys([*(getattr(contract, "unresolved_roles", ()) or ()), "order_amount_and_grain"])),
+                        unresolved_semantics=tuple(dict.fromkeys([*(getattr(contract, "unresolved_semantics", ()) or ()), "aov_requires_order_amount_and_valid_order_grain"])))
+                    _requirements.append({"slot": "order_amount_and_grain", "status": "UNRESOLVED", "reason": "aov_requires_order_amount_and_valid_order_grain"})
+
+            # Current-vs-prior calendar years must preserve both windows in the contract.
+            if _temporal_pair:
+                _date_cols = [c for c in _cols if pd.api.types.is_datetime64_any_dtype(df[c]) or re.search(r"(?:date|time|timestamp|_at)$", c, re.I)]
+                if len(_date_cols) == 1:
+                    try:
+                        from packages.analytics_core.src.intelligence.intent_state import _relative_time_range
+                        _paired = _relative_time_range(_q, df, _date_cols[0])
+                    except Exception: _paired = None
+                    _time_metric = resolve_phrase_to_column("revenue", _cols) if re.search(r"\brevenue\b", _q, re.I) else None
+                    if _paired and _paired.get("type") == "absolute" and _paired.get("baseline_start") and _paired.get("baseline_end"):
+                        _contract_updates.update(time_column=_date_cols[0], time_range=_paired,
+                            target_column=_time_metric or getattr(contract, "target_column", None),
+                            requested_aggregation="SUM" if _time_metric else getattr(contract, "requested_aggregation", None),
+                            task_family="DESCRIPTIVE", family="SIMPLE_AGGREGATE", completeness="COMPLETE",
+                            unresolved_roles=tuple(r for r in (getattr(contract, "unresolved_roles", ()) or ()) if r not in {"time_range", "filter_instruction", "filter_conditions", "grouping_dimension_or_comparison_values", "target", "requested_aggregation"}),
+                            unresolved_semantics=tuple(r for r in (getattr(contract, "unresolved_semantics", ()) or ()) if not any(x in r for x in ("requested_time_scope_not_preserved", "comparison_requires_dimension_or_two_values", "filter_instruction"))),
+                            resolution_confidence=1.0 if _time_metric else getattr(contract, "resolution_confidence", 0.0),
+                            resolution_evidence={**dict(getattr(contract, "resolution_evidence", {}) or {}), "paired_time_range": _paired})
+                        _requirements = [r for r in _requirements if r.get("slot") not in {"time_range", "filter_instruction", "filter_conditions", "grouping_dimension_or_comparison_values"}]
+                    else:
+                        _requirements.append({"slot": "time_range", "status": "UNRESOLVED", "reason": "paired_calendar_year_range_not_resolved"})
+
+            # Top-N is executable only when the requested group and measure were explicitly
+            # bound. Unsupported compound shapes remain blocked instead of dropping the limit.
+            if re.search(r"\b(?:top|bottom)\s+\d+\b", _q, re.I) and not (_contract_updates.get("ranking_limit") or getattr(contract, "ranking_limit", None)):
+                _contract_updates.update(completeness="INCOMPLETE", family="NONE",
+                    unresolved_roles=tuple(dict.fromkeys([*(getattr(contract, "unresolved_roles", ()) or ()), "ranking_limit"])),
+                    unresolved_semantics=tuple(dict.fromkeys([*(getattr(contract, "unresolved_semantics", ()) or ()), "top_n_roles_not_bound_to_approved_plan"])))
+                _requirements.append({"slot": "ranking_limit", "status": "UNRESOLVED", "reason": "top_n_roles_not_bound_to_approved_plan"})
+
+            if _contract_updates:
+                contract = replace(contract, **_contract_updates)
+            if _contract_updates.get("resolution_evidence", {}).get("aov_binding", {}).get("order_grain_unique") is True:
+                _requirements = [r for r in _requirements if r.get("slot") != "denominator_column"]
+            requirements = _requirements
+            if _contract_updates.get("resolution_evidence", {}).get("aov_binding", {}).get("order_grain_unique") is True:
+                _requirements = [r for r in _requirements if r.get("slot") != "denominator_column"]
+            requirements = _requirements
         except Exception as exc:
             requirements = [{"slot": "contract", "status": "UNRESOLVED", "reason": f"contract_validation_error:{type(exc).__name__}"}]
             ledger, option_patches = [], []
@@ -2207,6 +2860,16 @@ def evaluate_guided_investigation(
         ledger, requirements, option_patches = [], [], []
 
     if contract is not None:
+        _paired_evidence = (getattr(contract, "resolution_evidence", {}) or {}).get("paired_time_range")
+        if _paired_evidence:
+            if getattr(contract, "time_column", None) and getattr(contract, "target_column", None):
+                requirements = [r for r in (requirements or []) if r.get("slot") not in {"filter_instruction", "filter_conditions", "time_range", "grouping_dimension_or_comparison_values"}]
+                if not getattr(contract, "unresolved_roles", ()) and getattr(contract, "completeness", "") == "COMPLETE":
+                    preview.ambiguity_status = AmbiguityStatus.CLEAR
+                    preview.clarification_prompt = None
+                    preview.can_auto_proceed = True
+            if _paired_evidence.get("partial_period_warning"):
+                preview.assumptions = [*preview.assumptions, _paired_evidence["partial_period_warning"]]
         preview.canonical_contract = contract
         preview.clarification_option_patches = option_patches
         preview.pending_intent_slot = next(
@@ -2233,14 +2896,24 @@ def evaluate_guided_investigation(
         if preview.ambiguity_status != AmbiguityStatus.CLEAR and not _material_intent_open:
             preview.can_auto_proceed = False
             preview.plan_hash = None
-            preview.planned_calculation = "Not executable: the existing ambiguity or safety gate has not cleared."
+            preview.planned_calculation = (
+                "Not executable: a requested measure is missing from the dataset; no substitute calculation was run."
+                if preview.ambiguity_status == AmbiguityStatus.MISSING_DATA
+                else "Not executable: the existing ambiguity or safety gate has not cleared."
+            )
             if not preview.clarification_prompt:
                 preview.clarification_prompt = "Resolve the existing safety or ambiguity gate before execution."
         # Always replace a heuristic calculation when the canonical contract has open material
         # intent, including MISSING_DATA/AMBIGUOUS_SCOPE previews (not only originally-CLEAR ones).
         if preview.ambiguity_status == AmbiguityStatus.CLEAR or _material_intent_open:
             if _material_intent_open:
+                _ambiguous_metric_candidates = list(
+                    (getattr(contract, "resolution_evidence", {}) or {}).get("ambiguous_target_candidates", ()) or ()
+                )
+                if _ambiguous_metric_candidates and not contract_target:
+                    preview.ambiguity_status = AmbiguityStatus.AMBIGUOUS_METRIC
                 _protected_statuses = {
+                    AmbiguityStatus.AMBIGUOUS_METRIC,
                     AmbiguityStatus.JOIN_FANOUT_RISK,
                     AmbiguityStatus.CAUSAL_ON_OBSERVATIONAL,
                     AmbiguityStatus.VERIFICATION_FAILED,
@@ -2256,11 +2929,29 @@ def evaluate_guided_investigation(
                 slots = list(dict.fromkeys(str(item.get("slot")) for item in requirements))
                 if getattr(contract, "unresolved_roles", ()):
                     slots.extend(str(item) for item in contract.unresolved_roles if str(item) not in slots)
-                if any(item.get("slot") == "operation_graph" for item in requirements):
+                if _ambiguous_metric_candidates and not contract_target:
+                    preview.clarification_prompt = (
+                        "Your question says 'revenue', but this dataset contains multiple revenue measures: "
+                        + ", ".join(_ambiguous_metric_candidates)
+                        + ". Choose the measure to rank by. The region grouping and the exclusions for returns and cancellations are retained."
+                    )
+                elif any(item.get("slot") == "operation_graph" for item in requirements):
                     preview.clarification_prompt = (
                         "This question contains multiple analytical operations, but the current approved intent "
                         "contract does not yet represent them as separate executable nodes. Split it into one "
                         "analytical question per operation; no partial calculation will be run."
+                    )
+                elif any(item.get("reason") == "filter_column_unavailable" for item in requirements):
+                    _fu = next(item for item in requirements if item.get("reason") == "filter_column_unavailable")
+                    preview.clarification_prompt = (
+                        f"Your question filters on '{_fu.get('field')}', but there is no such column in this dataset. "
+                        "I won't run it without that filter. Tell me which existing column you meant, or ask without the filter."
+                    )
+                elif any(item.get("reason") == "unmatched_value" for item in requirements):
+                    _um = next(item for item in requirements if item.get("reason") == "unmatched_value")
+                    preview.clarification_prompt = (
+                        f"I couldn't find \"{_um.get('text')}\" in your data. Pick the value you meant "
+                        "and I'll run the question as asked."
                     )
                 else:
                     preview.clarification_prompt = (
@@ -2281,10 +2972,45 @@ def evaluate_guided_investigation(
                             "Select the population filter to apply",
                             "Clarify the intended inclusion/exclusion condition",
                         ]
+                    elif requirements and any(item.get("slot") == "order_amount_and_grain" for item in requirements):
+                        _amount_candidates = [c for c in _cols if pd.api.types.is_numeric_dtype(df[c]) and re.search(r"(?:amount|revenue|sales|total|price|value)", c, re.I)]
+                        if _amount_candidates:
+                            preview.clarification_options = [f"Calculate average of {c}" for c in _amount_candidates[:3]]
+                        else:
+                            preview.clarification_options = [
+                                "Specify the order amount column to average",
+                                "Verify that each record represents a unique order",
+                            ]
+                    elif requirements and any(item.get("slot") == "grouping_dimension_or_comparison_values" for item in requirements):
+                        _tgt_col = str(getattr(contract, "target_column", None) or "").casefold()
+                        _dim_candidates = [
+                            c for c in _cols
+                            if not pd.api.types.is_numeric_dtype(df[c])
+                            and str(c).casefold() != _tgt_col
+                            and not re.search(r"(?:amount|revenue|sales|total|price|profit|margin|cost|expense|spend|discount|rate|ratio|percent|score|value)$", str(c), re.I)
+                        ]
+                        if _dim_candidates:
+                            preview.clarification_options = [f"Compare across {c}" for c in _dim_candidates[:3]]
+                            if len(preview.clarification_options) < 2:
+                                preview.clarification_options.append("Specify two specific values or segments to contrast")
+                        else:
+                            preview.clarification_options = [
+                                "Select a dimension to compare across",
+                                "Specify two specific values or segments to contrast",
+                            ]
+                    elif requirements and any(item.get("slot") == "ranking_limit" for item in requirements):
+                        preview.clarification_options = [
+                            "Show Top 5",
+                            "Show Top 10",
+                            "Specify a limit between 1 and 100",
+                        ]
                     else:
-                        preview.clarification_options = ["Clarify the unresolved analytical requirement"]
-                if any(item.get("slot") == "operation_graph" for item in requirements):
-                    preview.clarification_options = ["Split into separate single-operation questions"]
+                        preview.clarification_options = [
+                            "Specify the target metric or measure to calculate",
+                            "Select a grouping dimension or segment",
+                        ]
+                if any(item.get("slot") == "operation_graph" for item in requirements) and not option_patches:
+                    preview.clarification_options = ["Ask one question at a time"]
                     preview.clarification_option_patches = []
                 else:
                     preview.clarification_option_patches = option_patches
@@ -2302,6 +3028,21 @@ def evaluate_guided_investigation(
                     contract_groups = tuple(getattr(contract, "grouping_columns", ()) or ())
                     preview.group_dimension = ", ".join(contract_groups) if contract_groups else None
                     preview.planned_calculation = contract_sql
+                    if getattr(contract, "filter_conditions", ()):
+                        cond_strs = []
+                        for c in contract.filter_conditions:
+                            col_n = c.get("column", "")
+                            op_n = c.get("operator", "")
+                            val_n = c.get("value")
+                            if op_n in ("IS NULL", "IS NOT NULL"):
+                                cond_strs.append(f"{col_n} {op_n}")
+                            elif isinstance(val_n, str):
+                                cond_strs.append(f"{col_n} {op_n} '{val_n}'")
+                            else:
+                                cond_strs.append(f"{col_n} {op_n} {val_n}")
+                        preview.scope = " AND ".join(cond_strs)
+                    else:
+                        preview.scope = "All available records"
                     agg = getattr(contract, "requested_aggregation", None) or "SUM"
                     if contract_groups:
                         preview.proposed_interpretation = (

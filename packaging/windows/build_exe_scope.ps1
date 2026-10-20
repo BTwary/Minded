@@ -39,16 +39,23 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller is required in the isolated releas
 # Node/npm are build-time dependencies only. The end-user bundle contains no
 # Node requirement because the Next.js application is exported to static files.
 $StaticOut = Join-Path $Root 'apps\web\out'
-if (-not (Test-Path $StaticOut -PathType Container)) {
-  Push-Location (Join-Path $Root 'apps\web')
-  try {
-    if (Test-Path 'package-lock.json' -PathType Leaf) {
-      & npm ci --no-audit --ignore-scripts
-    }
-    & npm run build
-    if ($LASTEXITCODE -ne 0) { throw "Next.js production static export failed." }
-  } finally { Pop-Location }
+$WebRoot = Join-Path $Root 'apps\web'
+if (-not (Test-Path (Join-Path $WebRoot 'package-lock.json') -PathType Leaf)) {
+  throw "Frontend lockfile missing at apps\web\package-lock.json; refusing a non-reproducible desktop build."
 }
+# Never reuse apps/web/out from an earlier source revision. The desktop EXE embeds
+# this directory; a stale export silently ships old planner/filter UI even when the
+# Python source has been updated. Reinstall from the lock and rebuild every time.
+if (Test-Path $StaticOut -PathType Container) {
+  Remove-Item -Recurse -Force $StaticOut
+}
+Push-Location $WebRoot
+try {
+  & npm ci --no-audit --ignore-scripts
+  if ($LASTEXITCODE -ne 0) { throw "npm ci failed; refusing to package a frontend with uncertain dependencies." }
+  & npm run build
+  if ($LASTEXITCODE -ne 0) { throw "Next.js production static export failed." }
+} finally { Pop-Location }
 
 if (-not (Test-Path $StaticOut -PathType Container)) { throw "Static frontend output was not produced at apps\web\out." }
 
@@ -126,13 +133,23 @@ if (Test-Path $IconSrc -PathType Leaf) { Copy-Item $IconSrc (Join-Path $Bundle '
 Set-Content -Path (Join-Path $Bundle 'OFFLINE_MODE') -Value '1' -Encoding ascii
 
 # Certified local wheelhouse (required by scripts/offline_desktop_certification.py and install.ps1):
-# every wheel is fetched hash-verified from the two lock files, binary-only, for this build Python.
+# Most wheels are fetched hash-verified from the two lock files. proxy-tools 0.1.0
+# is published as a source archive, so its hash-verified sdist is built locally into a wheel.
 $Wheelhouse = Join-Path $Bundle 'wheelhouse'
 New-Item -ItemType Directory -Force -Path $Wheelhouse | Out-Null
 foreach ($Lock in @((Join-Path $Root 'requirements-lock.txt'), (Join-Path $PSScriptRoot 'requirements-desktop.txt'))) {
-  & $BuildPython -m pip download --require-hashes --only-binary=:all: --no-deps -r $Lock -d $Wheelhouse
+  # Exclude the source-only proxy-tools pin from the binary-only pass below.
+  $FilteredLock = Join-Path $PyInstallerWorkRoot ("wheelhouse-" + [guid]::NewGuid().ToString('N') + ".txt")
+  Get-Content $Lock | Where-Object { $_ -notmatch '^\s*proxy[-_]tools\s*==' } | Set-Content -Path $FilteredLock -Encoding ascii
+  & $BuildPython -m pip download --require-hashes --only-binary=:all: --no-deps -r $FilteredLock -d $Wheelhouse
   if ($LASTEXITCODE -ne 0) { throw "Could not build the certified wheelhouse from $Lock." }
 }
+# Build the source-only package from its hash-pinned archive using the already pinned setuptools
+# from this environment. pip verifies the source archive hash before invoking the build backend.
+$ProxyToolsLock = Join-Path $PyInstallerWorkRoot 'proxy-tools-source.txt'
+Set-Content -Path $ProxyToolsLock -Value 'proxy-tools==0.1.0 --hash=sha256:ccb3751f529c047e2d8a58440d86b205303cf0fe8146f784d1cbcd94f0a28010' -Encoding ascii
+& $BuildPython -m pip wheel --require-hashes --no-deps --no-build-isolation -r $ProxyToolsLock -w $Wheelhouse
+if ($LASTEXITCODE -ne 0) { throw "Could not build a verified proxy-tools wheel from its pinned source archive." }
 if (-not (Get-ChildItem -Path $Wheelhouse -Filter '*.whl' -File | Select-Object -First 1)) { throw "Wheelhouse is empty." }
 
 $TargetExe = Join-Path $Bundle 'MindedAAOS.exe'

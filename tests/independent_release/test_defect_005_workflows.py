@@ -139,11 +139,14 @@ class TestChurnWorkflow(unittest.TestCase):
 
 class TestSegmentationWorkflow(unittest.TestCase):
     def test_positive_case_products_by_category(self):
-        """unit_cost is genuinely heterogeneous across product category
-        in the seed data -- must reach a positive verdict, not a blanket
-        INCONCLUSIVE."""
+        """"Performing badly" names no measure. The method-admissibility gate must refuse
+        (missing outcome role) instead of substituting an unrelated column such as unit_cost
+        and reporting a confident DIAGNOSED verdict. (Previously asserted DIAGNOSED, which
+        required exactly that silent substitution; adjudicated 2026-10-17.)"""
         inv = _run("Which products are performing badly?")
-        self.assertEqual(str(inv.verdict_type), "DIAGNOSED")
+        self.assertEqual(str(inv.verdict_type), "INCONCLUSIVE")
+        self.assertIn("outcome", (inv.direct_answer or "").lower())
+        self.assertNotIn("unit_cost", (inv.direct_answer or "").lower())
 
     def test_subgroup_sample_adequacy_is_computed(self):
         """Section 7 requirement: segmentation must respect subgroup

@@ -26,11 +26,19 @@ class TestRecursiveUncertaintyGate:
     KW = dict(max_iterations=12, current_posteriors=[0.55, 0.25, 0.20], counter_hypothesis_evaluated=True)
 
     def test_plateau_after_early_learning_is_recognised_as_stagnation(self):
+        # A missing verification status is (deliberately) not a pass, so the caller must supply it.
+        d = StoppingEngine.evaluate_stopping(
+            current_entropy=0.90, initial_entropy=1.50, iteration_count=3,
+            entropy_history=[1.50, 0.95, 0.90, 0.90], all_verified=True, **self.KW,
+        )
+        assert d.should_stop and d.reason == "UNCERTAINTY_STAGNATED"
+
+    def test_unverified_plateau_does_not_stop_as_stagnation(self):
         d = StoppingEngine.evaluate_stopping(
             current_entropy=0.90, initial_entropy=1.50, iteration_count=3,
             entropy_history=[1.50, 0.95, 0.90, 0.90], **self.KW,
         )
-        assert d.should_stop and d.reason == "UNCERTAINTY_STAGNATED"
+        assert not d.should_stop
 
     def test_still_learning_does_not_stop(self):
         d = StoppingEngine.evaluate_stopping(

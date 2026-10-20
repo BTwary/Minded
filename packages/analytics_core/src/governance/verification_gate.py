@@ -58,3 +58,30 @@ def verification_gate_reason(
     if has_verified_evidence is not True:
         return "verification gate failed: no independently verified supporting evidence for the leading hypothesis"
     return None
+
+
+def analyst_group_comparison_dual_statistical_confirmation(kind: object, numbers: Mapping[str, object] | None, alpha: float = 0.05) -> bool:
+    """True only when an analyst-owned group-difference claim has dual statistical confirmation.
+
+    The hypothesis loop can test a different claim (e.g. concentration) than the question asked
+    ("does X differ by region?"), leaving the leading hypothesis without supporting evidence even
+    though the analyst layer recomputed the comparison itself. That recomputation counts as
+    verified support only if the parametric (ANOVA) and rank-based (Kruskal-Wallis) tests both
+    reject at ``alpha``, the outlier/robustness check held and power was adequate. Anything
+    missing, non-finite or unflagged is NOT verified (identity checks, as elsewhere in this module).
+    """
+    if str(kind or "").upper() != "GROUP_COMPARISON" or not isinstance(numbers, Mapping):
+        return False
+    try:
+        anova_p = float(numbers.get("anova_p"))
+        kruskal_p = float(numbers.get("kruskal_p"))
+    except (TypeError, ValueError):
+        return False
+    if not (0.0 <= anova_p < alpha and 0.0 <= kruskal_p < alpha):
+        return False
+    return numbers.get("robust") is True and numbers.get("adequate_power") is True
+
+
+# Backward compatibility alias
+analyst_group_comparison_independently_verified = analyst_group_comparison_dual_statistical_confirmation
+

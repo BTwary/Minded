@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -40,11 +40,23 @@ export default function InvestigationGraphView({
     hypotheses.length > 0 ? hypotheses[0] : null
   );
 
+  // Keep the inspector aligned with refreshed investigation results. The old
+  // one-time initializer could leave a stale selection after a new run completed.
+  useEffect(() => {
+    setSelectedHypothesis((current) => {
+      if (!hypotheses?.length) return null;
+      if (current && hypotheses.some((item) => item.id === current.id)) {
+        return hypotheses.find((item) => item.id === current.id) ?? current;
+      }
+      return hypotheses[0];
+    });
+  }, [hypotheses]);
+
   if (!hypotheses || hypotheses.length === 0) {
     return (
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-400">
         <Network className="w-8 h-8 text-slate-600 mx-auto mb-2 animate-pulse" />
-        No active Investigation Graph nodes initialized.
+        No investigation steps are available yet. Run an investigation to see its checks and findings.
       </div>
     );
   }
@@ -93,10 +105,10 @@ export default function InvestigationGraphView({
         <div>
           <div className="flex items-center space-x-2 text-xs font-semibold text-indigo-400 uppercase tracking-wider">
             <Network className="w-4 h-4" />
-            <span>Formal Epistemic Investigation DAG</span>
+            <span>Investigation workbench</span>
           </div>
           <h3 className="text-base font-bold text-white mt-0.5">
-            Competing Hypotheses & Bayesian Belief Distribution
+            Questions, evidence, and analytical checks
           </h3>
         </div>
 
@@ -105,7 +117,7 @@ export default function InvestigationGraphView({
           <div className="flex items-center space-x-3 bg-slate-950 px-3.5 py-1.5 rounded-xl border border-slate-800">
             <Activity className="w-3.5 h-3.5 text-cyan-400" />
             <div className="text-xs">
-              <span className="text-slate-400 mr-1.5">Shannon Entropy:</span>
+              <span className="text-slate-400 mr-1.5">Uncertainty score:</span>
               <span className="font-mono font-bold text-cyan-300">
                 {entropy.toFixed(3)} bits
               </span>
@@ -182,9 +194,9 @@ export default function InvestigationGraphView({
                         <span>{badge.label}</span>
                       </span>
 
-                      {/* Posterior Probability Meter */}
+                      {/* Relative priority meter */}
                       <div className="flex items-center space-x-1.5 text-[11px] font-mono">
-                        <span className="text-slate-400">P(H|E):</span>
+                        <span className="text-slate-400">Priority:</span>
                         <span className="font-bold text-cyan-300">{probPct}%</span>
                       </div>
                     </div>
@@ -239,7 +251,7 @@ export default function InvestigationGraphView({
 
               <div>
                 <label className="text-[10px] font-mono uppercase text-slate-400 font-semibold block mb-1">
-                  Hypothesis Formulation
+                  Question being tested
                 </label>
                 <p className="text-xs font-medium text-slate-200 leading-relaxed bg-slate-900/80 p-3 rounded-lg border border-slate-800">
                   {selectedHypothesis.statement}
@@ -248,7 +260,7 @@ export default function InvestigationGraphView({
 
               <div>
                 <label className="text-[10px] font-mono uppercase text-slate-400 font-semibold block mb-1">
-                  Epistemic Rationale
+                  Why this check matters
                 </label>
                 <p className="text-xs text-slate-400 leading-relaxed">
                   {selectedHypothesis.rationale}
@@ -259,7 +271,7 @@ export default function InvestigationGraphView({
                 <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-3">
                   <div className="flex items-center space-x-1.5 text-xs font-semibold text-rose-400 mb-1">
                     <AlertTriangle className="w-3.5 h-3.5" />
-                    <span>Falsification Evidence</span>
+                    <span>Reason for rejection</span>
                   </div>
                   <p className="text-xs text-rose-300">
                     {selectedHypothesis.reason_for_rejection}
@@ -271,7 +283,7 @@ export default function InvestigationGraphView({
                 selectedHypothesis.investigation_steps.length > 0 && (
                   <div>
                     <label className="text-[10px] font-mono uppercase text-slate-400 font-semibold block mb-1.5">
-                      Completed Analytical Tests
+                      Investigation steps
                     </label>
                     <div className="space-y-1.5">
                       {selectedHypothesis.investigation_steps.map((step, sIdx) => (
@@ -289,13 +301,13 @@ export default function InvestigationGraphView({
             </div>
           ) : (
             <div className="text-center py-12 text-xs text-slate-500">
-              Select a hypothesis node to inspect its Bayesian likelihood updates and falsification tests.
+              Select a check to review its rationale, result status, and supporting steps.
             </div>
           )}
 
           <div className="pt-3 border-t border-slate-800 text-[11px] text-slate-500 flex items-center justify-between">
-            <span>Bayesian Normalizer: Active</span>
-            <span className="text-cyan-400 font-mono">P(H|E) ∝ P(E|H) · P(H)</span>
+            <span>Investigation status</span>
+            <span className="text-cyan-400 font-mono">Scores prioritize checks; they are not probabilities</span>
           </div>
         </div>
       </div>

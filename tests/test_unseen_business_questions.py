@@ -52,6 +52,34 @@ class TestUnseenBusinessQuestions(unittest.TestCase):
         self.assertEqual(plan.semantics.grouping_columns, ["traffic_source"])
         self.assertEqual(plan.task, "DIAGNOSTIC")
 
+    def test_ranked_rate_followed_by_why_preserves_both_ranking_and_diagnostic_intent(self):
+        df = pd.DataFrame({
+            "customer_segment": ["Small Business", "Small Business", "Enterprise", "Small Business"],
+            "quarter": ["Q3", "Q3", "Q3", "Q4"],
+            "delivery_completed_flag": [1, 1, 1, 1],
+            "region": ["West", "East", "West", "South"],
+            "return_rate": [0.06, 0.03, 0.02, 0.01],
+            "late_and_returned": [1, 0, 0, 0],
+        })
+        ranking = compile_canonical_question_contract(
+            "For Small Business orders in Q3 that reached delivery, which region had the highest return rate?", df
+        )
+        diagnostic = compile_canonical_question_contract(
+            "For Small Business orders in Q3 that reached delivery, which region had the highest return rate and why?", df
+        )
+        self.assertEqual(ranking.task_family, "RANKING")
+        self.assertEqual(diagnostic.task_family, "ROOT_CAUSE")
+        self.assertEqual(diagnostic.target_column, "return_rate")
+        self.assertEqual(diagnostic.grouping_columns, ("region",))
+        self.assertEqual(diagnostic.requested_aggregation, "RATE")
+        self.assertEqual(diagnostic.estimand, "root_cause")
+        self.assertEqual(diagnostic.claim_ceiling, "ASSOCIATION")
+        # The diagnostic clause must not make an explicit population preface vanish.
+        self.assertIn(
+            {"column": "customer_segment", "operator": "=", "value": "Small Business"},
+            diagnostic.filter_conditions,
+        )
+
     def test_profit_correlated_with_advertising_spend(self):
         df = pd.DataFrame({
             "profit": [100.0, 150.0, 200.0, 250.0],

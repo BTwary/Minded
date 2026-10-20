@@ -1242,7 +1242,7 @@ t_elapsed = round(time.time() - t_start, 2)
 print(f"Completed evaluation of {len(results)} cases in {t_elapsed}s.")
 
 # Write full raw results to JSON
-out_path = Path("C:/Users/bhask/.gemini/antigravity/scratch/minded_audit/audit_matrix_results.json")
+out_path = Path(__file__).resolve().parent / "audit_matrix_results.json"
 out_path.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
 print(f"Raw results saved to {out_path}")
 

@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from packages.analytics_core.src.runtime.controller_serialization import _json_safe
-from packages.analytics_core.src.runtime.controller_scope import validate_scope_filter_expression
+from packages.analytics_core.src.runtime.controller_scope import validate_scope_filter_expression, same_scope_filter
 from packages.analytics_core.src.runtime.controller_planning import (
     compute_task_compatible_candidates,
     build_simpsons_conditional_candidate,
@@ -22,9 +22,11 @@ from packages.analytics_core.src.runtime.controller_hypotheses import _is_binary
 
 
 
+
 from apps.api.src.core.database import SessionLocal
 from apps.api.src.services.dataset_service import DatasetService
 from apps.api.src.models.entities import (
+    DatasetVersion,
     Investigation,
     InvestigationObjective,
     Hypothesis,
@@ -292,7 +294,7 @@ class InvestigationController:
         same experiment/observation/evidence records, and format only the verified relation.
         """
         from packages.analytics_core.src.runtime.approved_execution import (
-            compile_approved_aggregate, answer_from_execution,
+            compile_approved_aggregate, answer_from_execution, reconcile_approved_execution,
         )
         if cancellation_check and cancellation_check():
             return False
@@ -310,13 +312,12 @@ class InvestigationController:
             query=sql, data_context=context, primary_table=dataset_name,
             aggregation_type=binding.specification["aggregation"], primary_result_column="value",
         )
-        receipt_matches = (
-            getattr(result, "executed_query", None) == sql
-            and getattr(result, "source_datasets", None) == [dataset_name]
-            and getattr(result, "source_dataset_fingerprints", None) == expected_fingerprints
-            and getattr(result, "source_dataset_versions", None) == expected_versions
-            and getattr(result, "input_content_fingerprints", None) == expected_inputs
+        reconciliation = reconcile_approved_execution(
+            contract, binding, result, dataset_name=dataset_name,
+            expected_fingerprints=expected_fingerprints, expected_versions=expected_versions,
+            expected_inputs=expected_inputs,
         )
+        receipt_matches = reconciliation["status"] == "MATCHED"
         verification = VerificationEngine.verify_secondary(
             primary_df=frame, target_metric_col=contract.target_column,
             aggregation_type=binding.specification["aggregation"], primary_metric=result.primary_value,
@@ -343,6 +344,7 @@ class InvestigationController:
             "input_content_fingerprints": getattr(result, "input_content_fingerprints", None),
             "execution_status": result.status,
             "contract_status": "MATCHED" if receipt_matches else "MISMATCH",
+            "contract_reconciliation": reconciliation,
             "verification_status": str(verification.status),
             "source_row_count": len(frame), "population_row_count": population_rows,
             "result_row_count": result.result_row_count,
@@ -351,6 +353,9 @@ class InvestigationController:
                 else "No rows matched the approved scope." if population_rows == 0 else None),
         }
         record.update({
+            "denominator": ({"kind": "sum_of_group_values", "value": float(result.result_df["value"].sum()),
+                             "verified_from_returned_relation": bool(contract.share_of_total)}
+                            if contract.share_of_total and "value" in result.result_df else None),
             "primary_tool": verification.primary_tool, "secondary_tool": verification.secondary_tool,
             "observed_delta_pct": verification.observed_delta_pct, "tolerance": 1e-4,
             "source_datasets": actual_sources,
@@ -404,11 +409,18 @@ class InvestigationController:
                     raise ValueError("The approved operation graph disagrees with the approved metric or scope.")
                 if node.get("operation") == "RANK" and contract.ranking_direction and params.get("direction", "DESC") != contract.ranking_direction:
                     raise ValueError("The approved operation graph disagrees with the approved ranking direction.")
-        elif contract.ranking_direction:
-            raise ValueError("This primitive does not record an independently checked ranking direction.")
         started = time.monotonic()
         answer = _execute_canonical_descriptive_contract(contract, context.datasets_map[dataset_name])
         actual = answer.numbers if answer is not None else {}
+        ranking_ok = not contract.ranking_direction
+        if contract.ranking_direction and graph is None:
+            # Independently verify the executed ordering instead of trusting the primitive.
+            table = actual.get("table") or {}
+            values = [row.get("value") for row in table.values() if isinstance(row, dict)]
+            ranking_ok = (
+                bool(values) and len(values) == len(table) and all(v is not None for v in values)
+                and values == sorted(values, reverse=(contract.ranking_direction == "DESC"))
+            )
         spec = {"aggregation": actual.get("operation"), "target_column": actual.get("target_column"),
                 "grouping_columns": actual.get("grouping_columns", []), "filters": actual.get("filters"),
                 "operation_graph": actual.get("executed_operation_graph")}
@@ -419,7 +431,7 @@ class InvestigationController:
             and spec["filters"] == list(contract.filter_conditions)
             and not contract.comparison_values
             and not contract.time_range
-            and not contract.ranking_direction
+            and ranking_ok
             and (not contract.share_of_total or "share_of_total" in actual)
         )
         graph_match = contract.operation_graph is not None and spec["operation_graph"] == contract.operation_graph
@@ -748,6 +760,220 @@ class InvestigationController:
             )
             return False
 
+        # Apply explicit human corrections to a locked canonical contract before
+        # any execution fast path. Historically the guidance replay happened much
+        # later, and then was explicitly cleared for locked contracts, so the UI
+        # could accept a correction while execution silently used the old metric.
+        if locked_contract is not None:
+            with self.session_factory() as _correction_session:
+                _correction_rows = (
+                    _correction_session.query(InvestigationEvent)
+                    .filter(
+                        InvestigationEvent.investigation_id == investigation_id,
+                        InvestigationEvent.event_type == "investigation.human_guidance_intent",
+                    )
+                    .order_by(InvestigationEvent.timestamp.asc(), InvestigationEvent.id.asc())
+                    .all()
+                )
+            _corrections: Dict[str, Any] = {}
+            for _correction_row in _correction_rows:
+                _payload = dict(_correction_row.event_payload_json or {})
+                _corrections.update({k: v for k, v in _payload.items() if v not in (None, "", [])})
+
+            _clarification = _corrections.get("clarification_response")
+            if _clarification and "refuse" in str(_clarification).lower():
+                return _complete_inconclusive(
+                    f"Investigation halted by human analyst decision: '{_clarification}'.",
+                    failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+                )
+
+            # A scope predicate selected in the pre-analysis panel is sent both in
+            # the locked contract (as typed filters) and in the guidance event. The
+            # old guard rejected every non-empty scope_filter, including this valid
+            # approved case, which made "Specific filter subset" appear to be ignored.
+            # Permit only a predicate that exactly matches the approved preview. A
+            # different/new predicate is still blocked and must be previewed and
+            # approved as a new contract before execution.
+            _requested_scope_filter = _corrections.get("scope_filter")
+            _approved_guidance = (locked_contract_payload or {}).get("guidance") or {}
+            _approved_scope_filter = _approved_guidance.get("scope_filter")
+            if _requested_scope_filter and not same_scope_filter(
+                _requested_scope_filter, _approved_scope_filter
+            ):
+                return _complete_inconclusive(
+                    "A human-requested scope filter differs from the approved analytical contract. "
+                    "Re-preview and approve the updated population before running; the system did not "
+                    "substitute the broader unfiltered population."
+                )
+
+            _patch: Dict[str, Any] = {}
+            _metric = _corrections.get("selected_metric")
+            if not _metric and _clarification:
+                _metric_match = re.search(r"`([a-zA-Z0-9_]+)`", str(_clarification))
+                if _metric_match:
+                    _metric = _metric_match.group(1)
+            _frame_for_correction = data_context.datasets_map.get(locked_dataset_name)
+            if _metric:
+                if _frame_for_correction is None or _metric not in _frame_for_correction.columns:
+                    return _complete_inconclusive(
+                        f"The requested correction selects metric '{_metric}', which is not a column in the locked dataset. "
+                        "The previous metric was not substituted."
+                    )
+                _agg_candidate = str(_corrections.get("selected_aggregation") or locked_contract.requested_aggregation or "").upper()
+                if _agg_candidate not in {"COUNT", "COUNT_DISTINCT", "ROW_COUNT"} and not pd.api.types.is_numeric_dtype(_frame_for_correction[_metric]):
+                    return _complete_inconclusive(
+                        f"The requested correction selects non-numeric metric '{_metric}' for quantitative aggregation."
+                    )
+                _patch["target_column"] = _metric
+                _patch["unresolved_roles"] = tuple(role for role in locked_contract.unresolved_roles if role != "target_column")
+                _patch["unresolved_semantics"] = tuple(role for role in locked_contract.unresolved_semantics if role not in {"target_column", "metric"})
+            _aggregation = _corrections.get("selected_aggregation")
+            if _aggregation:
+                _agg_map = {"AVERAGE": "MEAN", "AVG": "MEAN", "MEAN": "MEAN", "COUNT": "ROW_COUNT", "COUNT_ROWS": "ROW_COUNT", "SUM": "SUM", "MIN": "MIN", "MAX": "MAX"}
+                _normalized_agg = _agg_map.get(str(_aggregation).strip().upper())
+                if _normalized_agg is None:
+                    return _complete_inconclusive(
+                        f"The requested aggregation correction '{_aggregation}' is not supported by the approved executor."
+                    )
+                _patch["requested_aggregation"] = _normalized_agg
+                _patch["estimand"] = {
+                    "SUM": "sum", "MEAN": "mean", "MIN": "min", "MAX": "max",
+                    "ROW_COUNT": "count",
+                }[_normalized_agg]
+            _group = _corrections.get("selected_group_dimension")
+            if _group:
+                if _frame_for_correction is None or _group not in _frame_for_correction.columns:
+                    return _complete_inconclusive(
+                        f"The requested grouping correction selects '{_group}', which is not a column in the locked dataset."
+                    )
+                _patch["grouping_columns"] = (_group,)
+            if _patch:
+                from dataclasses import replace as _contract_replace
+                _old_hash = locked_contract.contract_hash()
+                _evidence = dict(locked_contract.resolution_evidence or {})
+                _evidence["human_guidance_applied"] = sorted(_patch.keys())
+                _patch["resolution_evidence"] = _evidence
+                locked_contract = _contract_replace(locked_contract, **_patch)
+                locked_contract_payload = dict(locked_contract_payload or {})
+                locked_contract_payload["contract"] = locked_contract.to_dict()
+                locked_contract_payload["contract_hash"] = locked_contract.contract_hash()
+                self.checkpointer.record_event(
+                    investigation_id=investigation_id, execution_id=exec_id,
+                    event_type="investigation.canonical_contract_amended",
+                    payload={
+                        "previous_contract_hash": _old_hash,
+                        "effective_contract_hash": locked_contract.contract_hash(),
+                        "applied_fields": sorted(_patch.keys()),
+                        "selected_metric": locked_contract.target_column,
+                        "selected_aggregation": locked_contract.requested_aggregation,
+                        "selected_group_dimension": list(locked_contract.grouping_columns),
+                    },
+                )
+
+        # 1.4 Centralized pre-analysis variable-resolution gate. Runs before
+        # semantic/intent resolution and before any task-family synthesizer
+        # gets a chance to silently bind a fallback column, so no family
+        # (correlation, rate/proportion, trend, ranking) can substitute a
+        # different variable and report a confident answer to a question
+        # that was never asked. See variable_resolution_gate.py for the
+        # detection rule and its deliberately narrow scope; churn-flavored
+        # questions are excluded here because they already have their own
+        # dedicated fail-closed path further below in this method.
+        _all_available_columns: set = set()
+        for _ds_df in data_context.datasets_map.values():
+            _all_available_columns.update(str(c) for c in getattr(_ds_df, "columns", []))
+        _missing_requested_vars = detect_unresolved_requested_variables(question, _all_available_columns)
+        # A rate can be derived from a uniquely named binary outcome flag (e.g.
+        # "defect rate" from `is_defective`). Do not treat that as a missing
+        # physical outcome; semantic resolution below binds the actual indicator.
+        _rate_indicator_candidates = [
+            (ds_name, infer_binary_rate_indicator(question, ds_df))
+            for ds_name, ds_df in data_context.datasets_map.items()
+        ]
+        _rate_indicator_candidates = [(ds, col) for ds, col in _rate_indicator_candidates if col]
+        _has_unique_derived_rate = len(_rate_indicator_candidates) == 1
+        if not _missing_requested_vars and not _has_unique_derived_rate and detect_rate_question_with_no_column_reference(question, _all_available_columns):
+            _missing_requested_vars = ["the requested rate/proportion outcome"]
+        if _missing_requested_vars:
+            named = ", ".join(_missing_requested_vars)
+            message = (
+                f"The requested variable(s) {named} could not be resolved to any column "
+                "in the available dataset. AA-OS will not substitute a different column and "
+                "run an analysis the question did not ask for; no experiment was run."
+            )
+            self.checkpointer.record_event(
+                investigation_id=investigation_id,
+                execution_id=exec_id,
+                event_type="investigation.variable_not_found",
+                payload={"missing_variables": _missing_requested_vars},
+            )
+            self.checkpointer.complete_execution(
+                investigation_id=investigation_id, execution_id=exec_id,
+                final_status="COMPLETED", error_message=message,
+            )
+            with self.session_factory() as terminal_session:
+                terminal_inv = terminal_session.query(Investigation).filter(Investigation.id == investigation_id).first()
+                if terminal_inv:
+                    terminal_inv.status = InvestigationState.COMPLETED
+                    terminal_inv.verdict_type = "INCONCLUSIVE"
+                    terminal_inv.direct_answer = message
+                    terminal_inv.main_finding = message
+                    terminal_inv.confidence_score = 0.0
+                    terminal_session.commit()
+            return True
+
+        # Check if clarification is an explicit refusal of analysis
+        with self.session_factory() as guidance_session:
+            _refusal_event = (
+                guidance_session.query(InvestigationEvent)
+                .filter(
+                    InvestigationEvent.investigation_id == investigation_id,
+                    InvestigationEvent.event_type == "investigation.human_guidance_intent",
+                )
+                .order_by(InvestigationEvent.timestamp.desc(), InvestigationEvent.id.desc())
+                .first()
+            )
+            if _refusal_event:
+                _refusal_payload = dict(_refusal_event.event_payload_json or {})
+                _clarif = _refusal_payload.get("clarification_response")
+                if _clarif and "refuse" in str(_clarif).lower():
+                    refusal_msg = (
+                        f"Investigation halted by human analyst decision: '{_clarif}'. "
+                        "MindEd AA-OS strictly honors epistemic refusal boundaries."
+                    )
+                    return _complete_inconclusive(
+                        refusal_msg,
+                        failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+                    )
+
+        # 1.4b Fail-closed guard for aggregate questions whose metric cannot be
+        # resolved to any column OR to any known alias vocabulary.  A question
+        # like "What is the average shoe size of our customers?" on a dataset
+        # that has no shoe-related column must not silently bind a fallback
+        # column (e.g. revenue) and return a confident OBSERVED answer.  This
+        # check is deliberately conservative: it only fires when the metric
+        # phrase is absent from both the schema AND the standard alias set, so
+        # legitimate alias-resolved questions ("average sales" → revenue) are
+        # never blocked here.
+        _absent_measure = detect_named_measure_absent(question, _all_available_columns)
+        if _absent_measure:
+            return _complete_inconclusive(
+                f"The question asks about '{_absent_measure}', but no column in the selected "
+                f"data carries that measure. AA-OS will not substitute a different metric; "
+                f"no experiment was run. Add a column for it or rephrase the question.",
+                failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+            )
+        if detect_aggregate_metric_not_found(question, _all_available_columns):
+            return _complete_inconclusive(
+                "The metric requested in this question (e.g., an aggregate like "
+                "'average shoe size') could not be matched to any column or known "
+                "alias in the available dataset. AA-OS will not substitute a "
+                "different metric; no experiment was run.",
+                failure_class=FailureTaxonomy.DATA_QUALITY_FAILURE,
+            )
+
+
+
         if locked_contract is not None and (
             locked_contract.task_family == "GENERAL_EXPLORATION"
             or locked_contract.completeness in {"INCOMPLETE", "AMBIGUOUS"}
@@ -778,36 +1004,6 @@ class InvestigationController:
                     failure_class=FailureTaxonomy.VERIFICATION_FAILURE,
                 )
                 return False
-
-        if locked_contract is not None and locked_contract.filter_conditions:
-            if not locked_dataset_name or locked_dataset_name not in data_context.datasets_map:
-                return _complete_inconclusive(
-                    "The locked dataset for the requested population filter is unavailable."
-                )
-            filtered_population = data_context.datasets_map[locked_dataset_name]
-            for condition in locked_contract.filter_conditions:
-                column = condition.get("column")
-                operator = str(condition.get("operator", "")).upper()
-                if column not in filtered_population.columns:
-                    return _complete_inconclusive(
-                        f"The locked population filter references unavailable field {column!r}."
-                    )
-                try:
-                    from packages.analytics_core.src.intelligence.intent_state import filter_condition_mask
-                    mask = filter_condition_mask(filtered_population[column], operator, condition.get("value"))
-                    filtered_population = filtered_population.loc[mask]
-                except (TypeError, ValueError):
-                    return _complete_inconclusive(
-                        f"The locked population filter operator {operator!r} is unsupported."
-                    )
-            if filtered_population.empty:
-                return _complete_inconclusive(
-                    "The selected population filter matches no records; the unfiltered dataset was not substituted."
-                )
-            # Apply the approved population to the acquired context itself. Previously the
-            # filtered dataframe was computed only in a local variable, so downstream semantic
-            # resolution and execution still saw the unfiltered population.
-            data_context.datasets_map[locked_dataset_name] = filtered_population
 
         # 1.4 Centralized pre-analysis variable-resolution gate. Runs before
         # semantic/intent resolution and before any task-family synthesizer
@@ -1218,7 +1414,15 @@ class InvestigationController:
             return True
 
         # 2. Intent Parsing & Semantic Resolution
-        intent = IntentEngine.parse_intent(question)
+        # Parse explicit adjustment clauses against the actual selected schema. This makes
+        # `controlling for tenure_months and support_tickets` a typed request rather than
+        # free text competing with the primary metric/group during semantic resolution.
+        _intent_columns = list(dict.fromkeys(
+            str(col)
+            for frame in (data_context.datasets_map or {}).values()
+            for col in getattr(frame, "columns", [])
+        ))
+        intent = IntentEngine.parse_intent(question, available_columns=_intent_columns)
         semantic = self.semantic_engine.resolve_schema(intent, data_context.datasets_map)
 
         # Human-selected multi-dataset scopes are allowed to contain datasets
@@ -1452,9 +1656,14 @@ class InvestigationController:
             if scope_filter_expr and isinstance(scope_filter_expr, str) and scope_filter_expr.strip():
                 clean_filter = scope_filter_expr.strip()
                 try:
-                    validate_scope_filter_expression(clean_filter, list(primary_df.columns))
+                    validated_filter = validate_scope_filter_expression(clean_filter, list(primary_df.columns))
+                    if not validated_filter:
+                        raise ValueError("Scope filter is empty after validation.")
                     import duckdb
-                    filtered_df = duckdb.query(f"SELECT * FROM primary_df WHERE {clean_filter}").df()
+                    # Execute only the validated SQLGlot AST serialization, never the raw
+                    # user string. This keeps the predicate DuckDB executes aligned with
+                    # the predicate whose nodes and column references were allowlisted.
+                    filtered_df = duckdb.query(f"SELECT * FROM primary_df WHERE {validated_filter}").df()
                     if len(filtered_df) == 0:
                         # Fail-closed invariant: zero matching rows must NEVER fall back to full dataset
                         self.checkpointer.fail_execution(
@@ -2776,7 +2985,7 @@ class InvestigationController:
                 _typed_facts["time_index"]["monotonic"] = False
         _typed_facts["forecast"]["horizon_status"] = (
             "SPECIFIED" if re.search(
-                r"\bnext\s+\d+\s+(?:periods?|days?|weeks?|months?|quarters?|years?)\b|\bfor\s+\d+\s+(?:periods?|days?|weeks?|months?|quarters?|years?)\b",
+                r"\bnext\s+(?:\d+\s+)?(?:periods?|days?|weeks?|months?|quarters?|years?)\b|\bfor\s+\d+\s+(?:periods?|days?|weeks?|months?|quarters?|years?)\b",
                 question, re.I,
             ) else "UNKNOWN"
         )
@@ -3437,22 +3646,34 @@ class InvestigationController:
                         "message": str(adaptive_exc),
                     },
                 )
-                available_candidates = [
-                    c for c in ExperimentSynthesizer.synthesize_candidate_experiments(
-                        current_hyps,
-                        semantic,
-                        unresolved_adversarial_issues=unresolved_adversarial_issues,
-                        predictions_by_hyp=predictions_by_hyp,
-                        predictions_map=predictions_map,
-                        time_filter_sql=(temporal_scope.sql_filter(canonical_time_col) if temporal_scope.found and canonical_time_col else None),
-                        decision=method_decision,
-                        sample_stats=candidate_sample_stats,
+                try:
+                    available_candidates = [
+                        c for c in ExperimentSynthesizer.synthesize_candidate_experiments(
+                            current_hyps,
+                            semantic,
+                            unresolved_adversarial_issues=unresolved_adversarial_issues,
+                            predictions_by_hyp=predictions_by_hyp,
+                            predictions_map=predictions_map,
+                            time_filter_sql=(temporal_scope.sql_filter(canonical_time_col) if temporal_scope.found and canonical_time_col else None),
+                            decision=method_decision,
+                            sample_stats=candidate_sample_stats,
+                        )
+                        if not state_mgr.has_experiment_been_executed(c.code, c.fingerprint)
+                        and c.code not in blocked_experiment_codes
+                    ]
+                    available_candidates = MethodSelectionEngine.bind_candidates(available_candidates, method_decision.selected_method_code)
+                    replan = None
+                except Exception as fallback_exc:
+                    # The non-adaptive fallback failed too; stop cleanly instead of
+                    # letting the exception escape execute_investigation.
+                    self.checkpointer.record_event(
+                        investigation_id=investigation_id,
+                        execution_id=exec_id,
+                        event_type="investigation.replan_fallback_failed",
+                        payload={"error": f"{type(fallback_exc).__name__}: {fallback_exc}"},
                     )
-                    if not state_mgr.has_experiment_been_executed(c.code, c.fingerprint)
-                    and c.code not in blocked_experiment_codes
-                ]
-                available_candidates = MethodSelectionEngine.bind_candidates(available_candidates, method_decision.selected_method_code)
-                replan = None
+                    stopping_reason = "REPLAN_FALLBACK_FAILED"
+                    break
 
             available_candidates = _question_filter_candidates(available_candidates)
 
@@ -5560,12 +5781,29 @@ class InvestigationController:
                 except Exception:
                     analyst_df = primary_df
 
+            _control_terms = list((getattr(intent, "constraints", None) or {}).get("controlled_for") or [])
+            _controls = []
+            _unresolved_controls = []
+            def _norm_control_name(value):
+                return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
+            _control_norm_to_cols = {}
+            for _col in analyst_df.columns:
+                _control_norm_to_cols.setdefault(_norm_control_name(_col), []).append(str(_col))
+            for _term in _control_terms:
+                _matches = _control_norm_to_cols.get(_norm_control_name(_term), [])
+                if len(_matches) == 1:
+                    _controls.append(_matches[0])
+                else:
+                    _unresolved_controls.append(str(_term))
             analyst_result = build_analyst_result(
                 question,
                 analyst_df,
                 target=canonical_target_col,
                 group=canonical_group_dimension_col,
                 explanatory=_analyst_predictors,
+                explicit_controls=list(dict.fromkeys(_controls)),
+                unresolved_controls=list(dict.fromkeys(_unresolved_controls)),
+                target_explicit=(True if getattr(intent, "target_metric_hint", None) else None),
                 time_col=canonical_time_col,
                 default_aggregation=_agg_default,
                 approved_contract=locked_contract or (
@@ -5650,6 +5888,11 @@ class InvestigationController:
         )
         if _canonical_descriptive_verified:
             _loop_owns_answer = False
+        # An explicit analytical insufficiency is an authoritative refusal to substitute a
+        # different analysis. Do not let the hypothesis loop overwrite it with a plausible but
+        # unscoped/unadjusted answer.
+        if analyst_result is not None and getattr(analyst_result, "kind", "") == "INSUFFICIENT_EVIDENCE":
+            _loop_owns_answer = False
         if analyst_result is not None and not _loop_owns_answer and verdict_eval.verdict_type != "REFUTED":
             _loop_answer = direct_ans
             _loop_verdict = verdict_eval.verdict_type
@@ -5658,7 +5901,15 @@ class InvestigationController:
                 and (latest_missingness_result is None
                      or latest_missingness_result.classification not in ("SENSITIVE", "UNIDENTIFIABLE", "INSUFFICIENT_EVIDENCE"))
             )
-            if (analyst_result.descriptive or analyst_result.kind in ("RANKING", "TREND", "PERIOD_CHANGE")):
+            if analyst_result.kind == "INSUFFICIENT_EVIDENCE":
+                verdict_eval.verdict_type = "INCONCLUSIVE"
+                verdict_eval.confidence_score = 0.0
+                top_prob = min(top_prob, 0.5)
+                direct_ans = analyst_result.to_text()
+                verdict_eval.direct_answer = direct_ans
+                main_find = f"Requested analysis not completed: {analyst_result.headline}"
+                analyst_verdict_note = "The requested analytical path failed closed; no alternate unadjusted or unscoped result was substituted."
+            elif (analyst_result.descriptive or analyst_result.kind in ("RANKING", "TREND", "PERIOD_CHANGE")):
                 # A ranking/total/descriptive breakdown is a recomputed fact, not an unproven hypothesis
                 if str(getattr(analysis_plan, "task", "")).upper() == "FORECAST" and analyst_result.finding == "none":
                     verdict_eval.verdict_type = "INCONCLUSIVE"
@@ -5910,10 +6161,32 @@ class InvestigationController:
         # above must not be able to restore an inferential claim after failed,
         # missing, partial, or stale verification.
         from packages.analytics_core.src.governance.verification_gate import verification_gate_reason
+        from packages.analytics_core.src.governance.verification_gate import analyst_group_comparison_dual_statistical_confirmation
+        _has_executed_experiments = len(state_mgr.get_executed_experiments()) > 0
+        _has_verified_evidence_row = False
+        if _has_executed_experiments:
+            with self.session_factory() as _verif_sess:
+                _has_verified_evidence_row = (
+                    _verif_sess.query(EvidenceVerification)
+                    .join(Evidence, EvidenceVerification.evidence_id == Evidence.id)
+                    .filter(Evidence.investigation_id == investigation_id)
+                    .filter(Evidence.validation_status == "VERIFIED")
+                    .filter(EvidenceVerification.status == VerificationStatus.VERIFIED)
+                    .first() is not None
+                )
+        _analyst_owned_claim_verified = bool(
+            analyst_result is not None
+            and str(verdict_eval.verdict_type) == "STATISTICALLY_SIGNIFICANT"
+            and _has_executed_experiments
+            and _has_verified_evidence_row
+            and analyst_group_comparison_dual_statistical_confirmation(
+                getattr(analyst_result, "kind", None), getattr(analyst_result, "numbers", None)
+            )
+        )
         _verification_block = verification_gate_reason(
             verdict_eval.verdict_type,
-            all_verifications_passed=(all_verifications_passed is True),
-            has_verified_evidence=(has_verified_evidence is True),
+            all_verifications_passed=(all_verifications_passed is True and _has_executed_experiments),
+            has_verified_evidence=(has_verified_evidence is True or _analyst_owned_claim_verified),
         )
         if _verification_block:
             _blocked_verdict = verdict_eval.verdict_type

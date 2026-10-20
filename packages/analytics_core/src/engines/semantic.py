@@ -600,22 +600,53 @@ class SemanticEngine:
                 group_col = None
 
         # 4. Match Time Dimension. Never choose the first physical datetime
-        # column when several plausible time dimensions exist.
+        # column when several plausible time dimensions exist. Also recognize common
+        # numeric year columns and parseable date strings, which pandas does not include
+        # in `select_dtypes(datetime)` and the prior implementation therefore missed.
         time_col = None
-        explicit_times = [c for c in date_cols if str(c).lower() in q_tokens]
+        import pandas as pd
+        _time_name_hints = ("date", "time", "timestamp", "datetime", "period", "year", "fiscal_year", "calendar_year")
+        _time_candidates: List[str] = list(dict.fromkeys(str(c) for c in date_cols))
+        _numeric_year_candidates: List[str] = []
+        for _c in primary_df.columns:
+            _name = str(_c).strip().lower().replace("-", "_").replace(" ", "_")
+            _series = primary_df[_c]
+            if _c in _time_candidates:
+                continue
+            if pd.api.types.is_numeric_dtype(_series) and any(_name == hint or _name.endswith("_" + hint) for hint in ("year", "yr", "fiscal_year", "calendar_year", "report_year")):
+                _nums = pd.to_numeric(_series, errors="coerce").dropna()
+                if len(_nums) >= 2 and _nums.nunique() >= 2 and float(_nums.min()) >= 1800 and float(_nums.max()) <= 2200:
+                    _numeric_year_candidates.append(str(_c))
+                    _time_candidates.append(str(_c))
+                continue
+            if any(hint in _name for hint in _time_name_hints) and not pd.api.types.is_numeric_dtype(_series):
+                _non_null = _series.dropna()
+                if _non_null.empty:
+                    continue
+                try:
+                    _parsed = pd.to_datetime(_non_null, errors="coerce")
+                    _ratio = float(_parsed.notna().sum()) / max(1, len(_non_null))
+                    if _ratio >= 0.80 and _parsed.nunique(dropna=True) >= 2:
+                        _time_candidates.append(str(_c))
+                except Exception:
+                    pass
+        explicit_times = [c for c in _time_candidates if str(c).lower() in q_tokens]
         if len(explicit_times) == 1:
             time_col = explicit_times[0]
         elif len(explicit_times) > 1:
             time_col = None
         else:
             wm_times = [t.column_name for t in world_model.time_dimensions
-                        if t.table_name == primary_table and t.column_name in primary_df.columns]
+                        if t.table_name == primary_table and t.column_name in _time_candidates]
             if len(wm_times) == 1:
                 time_col = wm_times[0]
             elif len(wm_times) > 1:
                 time_col = None
             else:
-                named_times = [c for c in date_cols if any(t in str(c).lower() for t in ["date", "time", "period"])]
+                # Named years/dates are a deterministic candidate only when unique.
+                # If a table has both `year` and `created_at`, ask rather than guess.
+                named_times = [c for c in _time_candidates
+                               if any(t in str(c).lower() for t in ("date", "time", "period", "year", "timestamp"))]
                 if len(named_times) == 1:
                     time_col = named_times[0]
                 else:
@@ -629,12 +660,21 @@ class SemanticEngine:
         if time_col and time_col in primary_df.columns:
             series = primary_df[time_col]
             declared_tz = (getattr(primary_df, "attrs", {}) or {}).get("business_timezone") or os.getenv("AAOS_BUSINESS_TIMEZONE")
-            if pd.api.types.is_datetime64_any_dtype(series) and getattr(series.dt, "tz", None) is not None:
+            _time_name = str(time_col).strip().lower().replace("-", "_").replace(" ", "_")
+            _is_numeric_year = pd.api.types.is_numeric_dtype(series) and any(
+                _time_name == hint or _time_name.endswith("_" + hint)
+                for hint in ("year", "yr", "fiscal_year", "calendar_year", "report_year")
+            )
+            if _is_numeric_year:
+                time_zone_policy = "CALENDAR_YEAR_NO_TIMEZONE"
+            elif pd.api.types.is_datetime64_any_dtype(series) and getattr(series.dt, "tz", None) is not None:
                 time_zone_policy = "DATASET_TIMEZONE_AWARE"
             elif declared_tz:
                 time_zone_policy = f"DECLARED_BUSINESS_TIMEZONE:{declared_tz}"
-            else:
+            elif time_col in date_cols or any(t in _time_name for t in ("date", "time", "timestamp", "datetime")):
                 time_zone_policy = "UNRESOLVED_NAIVE_TIMEZONE"
+            else:
+                time_zone_policy = "CALENDAR_PERIOD_NO_TIMEZONE"
 
         table_grain = world_model.table_grains.get(primary_table, "record_level")
 

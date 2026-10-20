@@ -1,0 +1,85 @@
+{
+  "additionalProperties": false,
+  "description": "Golden-suite metrics; these cannot be inferred from one report alone.",
+  "properties": {
+    "rerun_exact_match_rate": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Rerun Exact Match Rate",
+      "type": "number"
+    },
+    "key_figure_traceability_rate": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Key Figure Traceability Rate",
+      "type": "number"
+    },
+    "planted_issue_detection_rate": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Planted Issue Detection Rate",
+      "type": "number"
+    },
+    "false_insight_rate_on_no_signal": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "False Insight Rate On No Signal",
+      "type": "number"
+    },
+    "quality_rubric_average": {
+      "maximum": 2,
+      "minimum": 0,
+      "title": "Quality Rubric Average",
+      "type": "number"
+    },
+    "reconciliation_pass_rate": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Reconciliation Pass Rate",
+      "type": "number"
+    },
+    "statistical_validity_passed": {
+      "title": "Statistical Validity Passed",
+      "type": "boolean"
+    },
+    "golden_dataset_count": {
+      "minimum": 0,
+      "title": "Golden Dataset Count",
+      "type": "integer"
+    },
+    "human_reviewers": {
+      "minimum": 0,
+      "title": "Human Reviewers",
+      "type": "integer"
+    },
+    "inter_rater_agreement": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Inter Rater Agreement"
+    }
+  },
+  "required": [
+    "rerun_exact_match_rate",
+    "key_figure_traceability_rate",
+    "planted_issue_detection_rate",
+    "false_insight_rate_on_no_signal",
+    "quality_rubric_average",
+    "reconciliation_pass_rate",
+    "statistical_validity_passed",
+    "golden_dataset_count",
+    "human_reviewers"
+  ],
+  "title": "MindEd Golden-Set Benchmark Run Metrics",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://minded.local/schemas/benchmark-run-metrics-1.0.0.json"
+}

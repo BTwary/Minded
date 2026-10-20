@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -34,6 +34,13 @@ import {
 } from "lucide-react";
 import {
   createInvestigation,
+  createAnalysisSession,
+  fetchAnalysisSession,
+  updateAnalysisSession,
+  closeAnalysisSession,
+  downloadAnalysisSessionExport,
+  saveExportBlob,
+  AnalysisSession,
   fetchDatasets,
   fetchDatasetData,
   fetchInvestigation,
@@ -41,6 +48,7 @@ import {
   fetchProjects,
   interpretQuestion,
   PreAnalysisPlan,
+  InterpretGuidance,
   reviseInvestigationGuidance,
   retryInvestigationDispatch,
 } from "../../lib/api";
@@ -64,6 +72,8 @@ export default function AnalystPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const initialDataset = useRef<string | null>(null);
+  const initialAnalysisSession = useRef<string | null>(null);
+  const sessionResumeAttempted = useRef(false);
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
@@ -83,6 +93,14 @@ export default function AnalystPage() {
   const [interpretation, setInterpretation] = useState<any>(null);
   const [followUps, setFollowUps] = useState<string[]>([]);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
+  const [analysisSession, setAnalysisSession] = useState<AnalysisSession | null>(null);
+  const analysisSessionRef = useRef<AnalysisSession | null>(null);
+  const [sessionTitleDraft, setSessionTitleDraft] = useState("New analysis");
+  const [sessionScopeDraft, setSessionScopeDraft] = useState("");
+  const [isSessionBusy, setIsSessionBusy] = useState(false);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [sessionExporting, setSessionExporting] = useState<"pdf" | "docx" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -90,6 +108,15 @@ export default function AnalystPage() {
   const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([]);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"findings" | "records" | "graph" | "evidence" | "steps" | "scenarios" | "review">("findings");
+
+  const commitAnalysisSession = useCallback((session: AnalysisSession | null) => {
+    analysisSessionRef.current = session;
+    setAnalysisSession(session);
+    if (session) {
+      setSessionTitleDraft(session.title || "New analysis");
+      setSessionScopeDraft(session.scope_filter || "");
+    }
+  }, []);
 
   useEffect(() => {
     async function loadProjects() {
@@ -103,6 +130,7 @@ export default function AnalystPage() {
           throw new Error("This workspace is unavailable. Open an accessible workspace from Datasets.");
         }
         initialDataset.current = params.get("dataset");
+        initialAnalysisSession.current = params.get("analysis_session_id");
         setProjectId(requestedProject || projects[0]?.id || "");
         if (typeof window !== "undefined") {
           const params = new URLSearchParams(window.location.search);
@@ -154,6 +182,25 @@ export default function AnalystPage() {
   }, [projectId]);
 
   useEffect(() => {
+    if (!projectId || loadingDatasets || !initialAnalysisSession.current || sessionResumeAttempted.current) return;
+    const sessionId = initialAnalysisSession.current;
+    sessionResumeAttempted.current = true;
+    let cancelled = false;
+    fetchAnalysisSession(sessionId).then((session) => {
+      if (cancelled) return;
+      if (session.project_id !== projectId) throw new Error("The requested analysis session belongs to a different workspace.");
+      const missing = (session.dataset_ids || []).filter((id) => !datasets.some((dataset) => dataset.id === id));
+      if (missing.length) throw new Error("This analysis references a dataset that is no longer available in the selected workspace.");
+      setSelectedDatasetIds(session.dataset_ids || []);
+      commitAnalysisSession(session);
+      setSessionNotice(session.status === "OPEN" ? "Resumed the existing analysis session. Follow-up questions will continue its report." : "This analysis is closed and read-only. Start a new analysis to ask more questions.");
+    }).catch((cause) => {
+      if (!cancelled) setSessionError(cause instanceof Error ? cause.message : "Unable to resume the requested analysis session.");
+    });
+    return () => { cancelled = true; };
+  }, [projectId, loadingDatasets, datasets, commitAnalysisSession]);
+
+  useEffect(() => {
     let cancelled = false;
     setRecordSampleRows([]);
     setRecordSampleCols([]);
@@ -172,7 +219,165 @@ export default function AnalystPage() {
     return () => { cancelled = true; };
   }, [selectedDatasetIds]);
 
-  const changeDatasetScope = (ids: string[]) => {
+  const ensureOpenAnalysisSession = async (): Promise<AnalysisSession> => {
+    const current = analysisSessionRef.current;
+    if (current && current.project_id === projectId) {
+      if (current.status !== "OPEN") {
+        throw new Error("This analysis is closed. Click New Analysis before asking another question so it is not appended to a finalized report.");
+      }
+      const selected = [...selectedDatasetIds].sort();
+      const pinned = [...(current.dataset_ids || [])].sort();
+      if (JSON.stringify(selected) === JSON.stringify(pinned)) return current;
+      throw new Error("The selected datasets differ from this analysis session's pinned scope. Start a new analysis to change datasets.");
+    }
+    if (!projectId || !selectedDatasetIds.length) {
+      throw new Error("Select at least one dataset before starting an analysis.");
+    }
+    const created = await createAnalysisSession({
+      project_id: projectId,
+      title: sessionTitleDraft.trim() || undefined,
+      dataset_ids: selectedDatasetIds,
+      scope_filter: sessionScopeDraft.trim() || undefined,
+    });
+    commitAnalysisSession(created);
+    setSessionNotice("Analysis session created. Accepted question results will accumulate in one report.");
+    return created;
+  };
+
+  const handleNewAnalysis = async () => {
+    if (isSessionBusy || busy || !projectId || !selectedDatasetIds.length) return;
+    setIsSessionBusy(true);
+    setSessionError(null);
+    setSessionNotice(null);
+    try {
+      const previous = analysisSessionRef.current;
+      if (previous && previous.status === "OPEN") {
+        const proceed = window.confirm("Close the current analysis and start a new one? The previous session and its report history will be preserved.");
+        if (!proceed) return;
+        const closedPrevious = await closeAnalysisSession(previous.id);
+        // Reflect the server-confirmed closure before creating the next session. If the
+        // new-session request fails, do not leave the UI believing the old session is open.
+        commitAnalysisSession(closedPrevious.session);
+      }
+      const created = await createAnalysisSession({
+        project_id: projectId,
+        title: sessionTitleDraft.trim() || undefined,
+        dataset_ids: selectedDatasetIds,
+        scope_filter: sessionScopeDraft.trim() || undefined,
+      });
+      commitAnalysisSession(created);
+      setAnalysis(null);
+      setProposedPlan(null);
+      setPlanNotice(null);
+      setQuestion("");
+      setChatMessages([]);
+      setFollowUps([]);
+      setInterpretation(null);
+      setError(null);
+      setClarificationInvestigationId(null);
+      setDispatchRetryId(null);
+      setIsReportModalOpen(false);
+      setSessionNotice("New analysis started. Ask questions and accept verified results to build its cumulative report.");
+    } catch (cause) {
+      setSessionError(cause instanceof Error ? cause.message : "Unable to start a new analysis session.");
+    } finally {
+      setIsSessionBusy(false);
+    }
+  };
+
+  const handleSaveSessionContext = async () => {
+    const current = analysisSessionRef.current;
+    if (!current || current.status !== "OPEN" || isSessionBusy) return;
+    setIsSessionBusy(true);
+    setSessionError(null);
+    setSessionNotice(null);
+    try {
+      const updated = await updateAnalysisSession(current.id, {
+        title: sessionTitleDraft.trim() || current.title,
+        scope_filter: sessionScopeDraft,
+      });
+      commitAnalysisSession(updated);
+      setSessionNotice("Shared population context saved. It will be included in each newly approved question contract.");
+    } catch (cause) {
+      setSessionError(cause instanceof Error ? cause.message : "Unable to save the shared analysis context.");
+    } finally {
+      setIsSessionBusy(false);
+    }
+  };
+
+  const handleCloseAnalysis = async () => {
+    const current = analysisSessionRef.current;
+    if (!current || current.status !== "OPEN" || isSessionBusy) return;
+    if (!window.confirm("Close this analysis? New questions will be blocked, and the accepted report will be finalized for export.")) return;
+    setIsSessionBusy(true);
+    setSessionError(null);
+    setSessionNotice(null);
+    try {
+      const response = await closeAnalysisSession(current.id);
+      commitAnalysisSession(response.session);
+      setSessionTitleDraft("New analysis");
+      setSessionNotice("Analysis closed. The final cumulative PDF and DOCX are available below. Edit the title or default filters above before starting the next analysis.");
+    } catch (cause) {
+      setSessionError(cause instanceof Error ? cause.message : "Unable to close the analysis.");
+    } finally {
+      setIsSessionBusy(false);
+    }
+  };
+
+  const handleExportSession = async (format: "pdf" | "docx") => {
+    const current = analysisSessionRef.current;
+    if (!current || sessionExporting) return;
+    setSessionExporting(format);
+    setSessionError(null);
+    setSessionNotice(null);
+    try {
+      const blob = await downloadAnalysisSessionExport(current.id, format);
+      const delivery = await saveExportBlob(blob, `MindEd_Analysis_${current.id.slice(0, 8)}_R${current.report_revision}.${format}`);
+      setSessionNotice(delivery.message);
+    } catch (cause) {
+      setSessionError(cause instanceof Error ? cause.message : `Unable to export the cumulative ${format.toUpperCase()} report.`);
+    } finally {
+      setSessionExporting(null);
+    }
+  };
+
+  const refreshAnalysisSession = async () => {
+    const current = analysisSessionRef.current;
+    if (!current) return;
+    try {
+      const refreshed = await fetchAnalysisSession(current.id);
+      commitAnalysisSession(refreshed);
+    } catch (cause) {
+      console.warn("Analysis session refresh failed; the saved session can be refreshed from history.", cause);
+    }
+  };
+
+  const changeDatasetScope = async (ids: string[]): Promise<boolean> => {
+    const currentSession = analysisSessionRef.current;
+    const nextIds = [...ids].sort();
+    const pinnedIds = [...(currentSession?.dataset_ids || [])].sort();
+    const scopeChanged = JSON.stringify(nextIds) !== JSON.stringify(pinnedIds);
+    if (currentSession?.status === "OPEN" && scopeChanged) {
+      const proceed = window.confirm("Changing datasets will close the current analysis. Its saved questions and report history will be preserved. Continue?");
+      if (!proceed) return false;
+      setIsSessionBusy(true);
+      setSessionError(null);
+      try {
+        await closeAnalysisSession(currentSession.id);
+        commitAnalysisSession(null);
+        setSessionTitleDraft("New analysis");
+      } catch (cause) {
+        setSessionError(cause instanceof Error ? cause.message : "Unable to close the current analysis before changing dataset scope.");
+        return false;
+      } finally {
+        setIsSessionBusy(false);
+      }
+    } else if (currentSession?.status === "CLOSED" && scopeChanged) {
+      // A closed session is immutable. Changing its dataset selection starts a new
+      // session context instead of leaving a closed session attached to another dataset.
+      commitAnalysisSession(null);
+      setSessionTitleDraft("New analysis");
+    }
     setSelectedDatasetIds(ids);
     setProposedPlan(null);
     setPlanNotice(null);
@@ -185,12 +390,21 @@ export default function AnalystPage() {
     setFollowUps([]);
     setIsReportModalOpen(false);
     setError(null);
+    return true;
   };
 
-  const busy = isLoading || isPlanning || isUploading || loadingDatasets;
+  const busy = isLoading || isPlanning || isUploading || loadingDatasets || isSessionBusy;
   const journeyStep = isLoading ? 3 : analysis ? 4 : proposedPlan ? 2 : selectedDatasetIds.length ? 1 : 0;
 
-  const handlePlanQuestion = async (q: string) => {
+  const guidanceFingerprint = (fields: InterpretGuidance) => {
+    const entries = Object.entries(fields).filter(([, value]) =>
+      value !== undefined && value !== null && value !== "" &&
+      !(Array.isArray(value) && value.length === 0)
+    ).sort(([a], [b]) => a.localeCompare(b));
+    return entries.length ? JSON.stringify(Object.fromEntries(entries)) : "";
+  };
+
+  const handlePlanQuestion = async (q: string, guidance: InterpretGuidance = {}) => {
     if (!q.trim() || busy || !selectedDatasetIds.length) return;
     setClarificationInvestigationId(null);
     setDispatchRetryId(null);
@@ -204,13 +418,18 @@ export default function AnalystPage() {
       if (!projectId) {
         throw new Error("No local analytical workspace is available yet.");
       }
+      const activeSession = await ensureOpenAnalysisSession();
       const plan = await interpretQuestion({
         question: q,
         project_id: projectId,
+        analysis_session_id: activeSession.id,
         dataset_ids: selectedDatasetIds.length > 0 ? selectedDatasetIds : undefined,
+        ...guidance,
       });
-      setProposedPlan(plan);
-      setPreviewedGuidanceKey("");
+      // Keep the structured correction in the plan shown to the user. The panel will
+      // initialize from it, so the next Run click approves the exact same guidance.
+      setProposedPlan({ ...plan, guidance_context: guidance });
+      setPreviewedGuidanceKey(guidanceFingerprint(guidance));
     } catch (err: any) {
       console.error("Pre-analysis plan interpretation failed:", err);
       // Invariant: An interpretation service failure must NOT silently bypass human-guidance review
@@ -269,20 +488,27 @@ export default function AnalystPage() {
       const hasGuidance = Object.values(guidanceFields).some(
         (v) => v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && v.length === 0)
       );
-      const guidanceKey = hasGuidance ? JSON.stringify(guidanceFields) : "";
+      const guidanceKey = hasGuidance ? guidanceFingerprint(guidanceFields) : "";
       if (!retryId && !clarificationInvestigationId && guidanceKey !== previewedGuidanceKey) {
         // The preview on screen was computed without this guidance. Re-preview it so the analyst
         // approves the plan that will actually run, then stop; they confirm again.
+        const activeSession = await ensureOpenAnalysisSession();
         const refreshed = await interpretQuestion({
           question: q,
           project_id: projectId,
+          analysis_session_id: activeSession.id,
           dataset_ids: selectedDatasetIds.length > 0 ? selectedDatasetIds : undefined,
           ...guidanceFields,
         });
-        setProposedPlan(refreshed);
+        // Keep the exact guidance alongside the new preview. The panel is keyed by the plan
+        // hash and remounts when the contract changes; without this context, radio choices,
+        // custom filters, and the assumptions acknowledgement vanish, causing repeated re-previews.
+        setProposedPlan({ ...refreshed, guidance_context: guidanceFields });
         setPreviewedGuidanceKey(guidanceKey);
         setProgressText(null);
-        setPlanNotice("Your interpretation has been updated to include your guidance. Review the calculation below, then select Run Analysis to approve it.");
+        setPlanNotice(refreshed.can_auto_proceed && refreshed.ambiguity_status === "CLEAR"
+          ? "Your decisions are now included in the preview. Review the updated calculation, then select Confirm & Run Analysis."
+          : "Your decisions were applied, but the preview is still unresolved. Review the updated clarification and change the plan before execution.");
         return;
       }
       const requestGuidance = {
@@ -305,6 +531,7 @@ export default function AnalystPage() {
           : await createInvestigation({
               question: q,
               project_id: projectId,
+              analysis_session_id: (await ensureOpenAnalysisSession()).id,
               dataset_ids: selectedDatasetIds.length > 0 ? selectedDatasetIds : undefined,
               ...requestGuidance,
             });
@@ -390,6 +617,7 @@ export default function AnalystPage() {
           main_finding: inv.main_finding || inv.direct_answer || "",
           analyst_result: inv.analyst_result || null,
           execution_record: inv.execution_record || null,
+          report_contract: inv.report_contract || null,
           provenance: inv.provenance || undefined,
           evidence_verifications: inv.evidence_verifications || [],
           confidence,
@@ -470,6 +698,7 @@ export default function AnalystPage() {
           if (["COMPLETED", "FAILED", "CANCELLED", "PARTIAL"].includes(status)) {
             const mapped = toAnalysisResponse(current);
             setAnalysis(mapped);
+            void refreshAnalysisSession();
             setActiveTab("findings");
             if (status === "FAILED") {
               setError(current.error_message || "This run did not produce a result. Review the interpretation and try a more specific question. The failed run is saved in History.");
@@ -520,7 +749,15 @@ export default function AnalystPage() {
 
         <label className="text-xs text-slate-400">Workspace
           <select aria-label="Workspace" value={projectId} disabled={busy}
-            onChange={(event) => { changeDatasetScope([]); setDatasets([]); setProjectId(event.target.value); }}
+            onChange={(event) => {
+              const nextProjectId = event.target.value;
+              void (async () => {
+                const changed = await changeDatasetScope([]);
+                if (!changed) return;
+                setDatasets([]);
+                setProjectId(nextProjectId);
+              })();
+            }}
             className="ml-2 rounded-lg border border-slate-700 bg-slate-900 p-2 text-slate-200">
             {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
@@ -541,8 +778,11 @@ export default function AnalystPage() {
         onUploaded={async (id, sample) => {
           const refreshed = await fetchDatasets(projectId);
           setDatasets(refreshed);
-          if (!refreshed.some((dataset) => dataset.id === id)) throw new Error("Upload finished, but the dataset list could not be refreshed. Reload the page to select it.");
-          changeDatasetScope([id]);
+          const ids = Array.isArray(id) ? id : [id];
+          const found = ids.filter((target) => refreshed.some((dataset) => dataset.id === target));
+          if (found.length === 0) throw new Error("Upload finished, but the dataset list could not be refreshed. Reload the page to select it.");
+          const changed = await changeDatasetScope(found);
+          if (!changed) return;
           if (sample) setQuestion("What is the total revenue by region?");
         }} />
 
@@ -559,7 +799,7 @@ export default function AnalystPage() {
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => changeDatasetScope([])}
+                onClick={() => { void changeDatasetScope([]); }}
                 className="ml-2 text-[10px] text-slate-500 hover:text-white"
               >
                 Clear scope
@@ -575,7 +815,7 @@ export default function AnalystPage() {
                   type="button"
                   disabled={busy}
                   aria-pressed={selected}
-                  onClick={() => changeDatasetScope(selected ? selectedDatasetIds.filter((id) => id !== d.id) : [...selectedDatasetIds, d.id])}
+                  onClick={() => { void changeDatasetScope(selected ? selectedDatasetIds.filter((id) => id !== d.id) : [...selectedDatasetIds, d.id]); }}
                   className={`px-2.5 py-1.5 rounded-lg border text-[11px] transition ${
                     selected
                       ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--foreground)]"
@@ -601,6 +841,88 @@ export default function AnalystPage() {
         {selectedDatasetIds.length > 0 && recordSampleCols.length > 0 && <p className="mt-3 text-xs text-slate-400">Available columns: {recordSampleCols.join(", ")}</p>}
       </section>
 
+      {/* One analysis session owns many question runs and one cumulative report. */}
+      <section aria-label="Analysis session and cumulative report" className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-300">
+              <Layers className="h-4 w-4" /> Analysis session
+            </div>
+            <h2 className="mt-1 text-base font-semibold text-white">
+              {analysisSession?.title || "Start a new analysis"}
+            </h2>
+            <p className="mt-1 max-w-3xl text-xs text-slate-400">
+              Ask multiple questions in this session. Accepted, verified results are added to one cumulative PDF/DOCX. History is stored once per analysis, with individual questions inside it.
+            </p>
+          </div>
+          {analysisSession && (
+            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-mono ${analysisSession.status === "OPEN" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-slate-600 bg-slate-800 text-slate-300"}`}>
+              {analysisSession.status} · {analysisSession.question_count} question{analysisSession.question_count === 1 ? "" : "s"} · {analysisSession.accepted_question_count} accepted
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            Analysis title
+            <input value={sessionTitleDraft} onChange={(event) => setSessionTitleDraft(event.target.value)} disabled={busy}
+              placeholder={analysisSession?.status === "CLOSED" ? "Title for the next analysis" : "e.g. Q3 Delivery Performance"}
+              className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-normal normal-case text-white placeholder:text-slate-600 disabled:opacity-60" />
+          </label>
+          <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            {analysisSession?.status === "CLOSED" ? "Default filters for next analysis (optional)" : "Shared population filters (optional)"}
+            <textarea value={sessionScopeDraft} onChange={(event) => setSessionScopeDraft(event.target.value)} disabled={busy} rows={2}
+              placeholder="e.g. customer_segment = 'Small Business' AND quarter = 'Q3' AND delivery_completed_flag = 1"
+              className="mt-1.5 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono normal-case text-white placeholder:text-slate-600 disabled:opacity-60" />
+            <span className="mt-1 block font-normal normal-case text-slate-500">These filters define the default population for new questions. Each saved result retains its exact executed filters.</span>
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {!analysisSession || analysisSession.status === "CLOSED" ? (
+            <button type="button" onClick={() => void handleNewAnalysis()} disabled={busy || !projectId || !selectedDatasetIds.length}
+              className="rounded-lg bg-amber-400 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-50">
+              {analysisSession?.status === "CLOSED" ? "New Analysis" : "Start Analysis"}
+            </button>
+          ) : (
+            <>
+              <button type="button" onClick={() => void handleSaveSessionContext()} disabled={busy}
+                className="rounded-lg border border-slate-600 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50">Save session context</button>
+              <button type="button" onClick={() => void handleCloseAnalysis()} disabled={busy}
+                className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-50">Close Analysis</button>
+            </>
+          )}
+          {analysisSession && analysisSession.accepted_question_count > 0 && (
+            <>
+              <button type="button" onClick={() => void handleExportSession("pdf")} disabled={!!sessionExporting}
+                className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50">{sessionExporting === "pdf" ? "Preparing PDF…" : "Export cumulative PDF"}</button>
+              <button type="button" onClick={() => void handleExportSession("docx")} disabled={!!sessionExporting}
+                className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50">{sessionExporting === "docx" ? "Preparing DOCX…" : "Export cumulative DOCX"}</button>
+            </>
+          )}
+          {analysisSession && <Link href="/history" className="px-2 py-2 text-xs text-slate-400 hover:text-white">View analysis history</Link>}
+        </div>
+        {sessionNotice && <p role="status" className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5 text-xs text-emerald-200">{sessionNotice}</p>}
+        {sessionError && <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-2.5 text-xs text-rose-200">{sessionError}</p>}
+
+        {!!analysisSession?.questions?.length && (
+          <div className="border-t border-slate-800 pt-3">
+            <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Question trail</h3>
+            <ol className="space-y-2">
+              {analysisSession.questions.map((item, index) => (
+                <li key={item.id} className="flex items-start gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5">
+                  <span className="mt-0.5 min-w-5 font-mono text-[10px] text-slate-500">{String(index + 1).padStart(2, "0")}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words text-xs text-slate-200">{item.question}</p>
+                    <p className="mt-1 text-[10px] text-slate-500">{item.status} · {item.review_status || "Not reviewed"}{item.accepted_into_report ? " · Included in report" : " · Not in report"}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </section>
+
       {/* Query Input Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl focus-within:border-cyan-500/50 transition-all">
         <label htmlFor="business-question" className="block text-base font-semibold text-white mb-2">2. Ask a business question</label>
@@ -619,14 +941,14 @@ export default function AnalystPage() {
               placeholder="Ask an analytical question (e.g. 'Which region has the highest revenue?', 'Does discount_pct affect quantity?', 'Why did revenue change?')..."
               value={question}
               onChange={(e) => { setQuestion(e.target.value); setProposedPlan(null); setPlanNotice(null); setPreviewedGuidanceKey(""); }}
-              disabled={busy}
+              disabled={busy || analysisSession?.status === "CLOSED"}
               className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 font-sans"
             />
           </div>
 
           <button
             type="submit"
-            disabled={busy || !question.trim() || !selectedDatasetIds.length}
+            disabled={busy || analysisSession?.status === "CLOSED" || !question.trim() || !selectedDatasetIds.length}
             className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-semibold px-6 py-3 rounded-xl flex items-center space-x-2 shadow-lg shadow-cyan-600/30 transition-all flex-shrink-0"
           >
             {isPlanning ? (
@@ -661,11 +983,23 @@ export default function AnalystPage() {
       {proposedPlan && planNotice && <p role="status" className="rounded-xl border border-slate-700 bg-[var(--accent-soft)] p-4 text-sm text-[var(--foreground)]">{planNotice}</p>}
       {proposedPlan && (
         <ProposedAnalysisPanel
-          key={`${clarificationInvestigationId || "new"}-${proposedPlan.resolution_reason || ""}`}
+          key={`${clarificationInvestigationId || "new"}-${proposedPlan.question}-${proposedPlan.plan_hash || "no-hash"}`}
           plan={proposedPlan}
           availableDatasets={datasets.map((dataset) => ({ id: dataset.id, name: dataset.name }))}
-          availableNumericCols={recordSampleCols.filter((c) => recordSampleRows[0] && typeof recordSampleRows[0][c] === "number")}
-          availableCategoricalCols={recordSampleCols.filter((c) => recordSampleRows[0] && typeof recordSampleRows[0][c] !== "number")}
+          availableColumns={recordSampleCols}
+          availableNumericCols={recordSampleCols.filter((c) => {
+            const sample = recordSampleRows.find((row) => row?.[c] !== null && row?.[c] !== undefined)?.[c];
+            return typeof sample === "number";
+          })}
+          availableCategoricalCols={recordSampleCols.filter((c) => {
+            const sample = recordSampleRows.find((row) => row?.[c] !== null && row?.[c] !== undefined)?.[c];
+            return sample !== undefined && typeof sample !== "number" && typeof sample !== "boolean";
+          })}
+          availableBooleanCols={recordSampleCols.filter((c) => {
+            const sample = recordSampleRows.find((row) => row?.[c] !== null && row?.[c] !== undefined)?.[c];
+            return typeof sample === "boolean";
+          })}
+          previewedGuidanceKey={previewedGuidanceKey}
           onConfirmAndRun={(customized) => handleExecuteInvestigation(proposedPlan.question, customized)}
           onCancel={() => {
             setProposedPlan(null);
@@ -773,25 +1107,49 @@ export default function AnalystPage() {
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900 p-4">
             <div role="status" className="text-sm text-slate-200">{analysis.status === "COMPLETED" ? "Analysis complete — review the findings and limitations below." : `Analysis ${String(analysis.status).toLowerCase()} — review the recorded outcome below.`}</div>
-            <Link href="/history" className="text-xs text-cyan-300 hover:underline">Open saved analyses & PDF / Word exports</Link>
-            <button
-              onClick={() => setIsReportModalOpen(true)}
-              className="text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 px-3.5 py-2 rounded-xl flex items-center space-x-2 transition-all shadow-lg shadow-indigo-600/10"
-            >
-              <FileCheck className="w-4 h-4" />
-              <span>Generate Report</span>
-            </button>
+            <Link href="/history" className="text-xs text-cyan-300 hover:underline">Open saved analyses</Link>
+            {analysisSession && <span className="text-xs text-slate-500">Results are added to the session report when accepted and verified.</span>}
           </div>
           <StructuredAnalysisAnswer
             analysis={analysis}
+            cumulativeReportMode={!!analysisSession}
+            onReviewChanged={() => { void refreshAnalysisSession(); }}
             onRedo={() => {
               if (analysis.question) {
                 handlePlanQuestion(analysis.question);
               }
             }}
             onRequestCorrection={(correction) => {
-              const revised = `${analysis.question || "Analysis"} [Correction: ${correction}]`;
-              handlePlanQuestion(revised);
+              // Never splice instructions into the original question and re-parse them as
+              // if they were one sentence. Preserve the original question and carry the
+              // correction through the API's explicit guidance fields.
+              const execution = (analysis.execution_record || {}) as Record<string, any>;
+              const contract = (execution.approved_contract ||
+                (analysis as any).locked_canonical_contract?.contract ||
+                (analysis as any).canonical_contract || {}) as Record<string, any>;
+              const approvedAggRaw = String(contract.requested_aggregation || execution.aggregation || "").toUpperCase();
+              const approvedAgg = ({ MEAN: "AVG", AVERAGE: "AVG", TOTAL: "SUM", ROW_COUNT: "COUNT" } as Record<string, string>)[approvedAggRaw] || approvedAggRaw;
+              const text = correction.toLowerCase();
+              const correctionAgg = /\b(average|avg|mean)\b/.test(text) ? "AVG"
+                : /\b(total|sum|summed)\b/.test(text) ? "SUM"
+                : /\bmedian\b/.test(text) ? "MEDIAN"
+                : /\b(count|number of rows|number of records)\b/.test(text) ? "COUNT"
+                : /\bminimum|min value\b/.test(text) ? "MIN"
+                : /\bmaximum|max value\b/.test(text) ? "MAX" : undefined;
+              const target = String(contract.target_column || execution.target_column || "");
+              const groups = Array.isArray(contract.grouping_columns) ? contract.grouping_columns : [];
+              const existingGroup = String(groups[0] || execution.group_dimension || "");
+              const aggregation = correctionAgg || (
+                ["SUM", "AVG", "MEDIAN", "COUNT", "COUNT_DISTINCT", "MIN", "MAX"].includes(approvedAgg)
+                  ? approvedAgg : undefined
+              );
+              const guidance: InterpretGuidance = {
+                ...(target ? { selected_metric: target } : {}),
+                ...(existingGroup ? { selected_group_dimension: existingGroup } : {}),
+                ...(aggregation ? { selected_aggregation: aggregation } : {}),
+                custom_instruction: correction.trim(),
+              };
+              handlePlanQuestion(analysis.question || question, guidance);
             }}
           />
 

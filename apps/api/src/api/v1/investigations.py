@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional, Union
 from datetime import datetime, timezone
@@ -13,8 +14,10 @@ from sqlalchemy.orm import Session
 
 from apps.api.src.core.database import get_db, SessionLocal
 from apps.api.src.core.security import get_current_user, verify_project_ownership, get_user_authorized_project_ids
+from apps.api.src.core.project_visibility import filter_user_facing_projects, is_diagnostic_project_name
 from apps.api.src.models.entities import (
     User,
+    AnalysisSession,
     AnalysisRun,
     AuditLog,
     Investigation,
@@ -86,6 +89,7 @@ class ListFieldPatch(BaseModel):
 class InvestigationCreateRequest(BaseModel):
     project_id: str
     question: str
+    analysis_session_id: Optional[str] = None
     target_metric: Optional[str] = "revenue"
     priority: Optional[int] = 10
     dataset_ids: Optional[List[str]] = None
@@ -118,9 +122,55 @@ _GUIDANCE_KEYS = {
 }
 
 
+def _bind_open_analysis_session(db: Session, current_user: User, session_id: Optional[str], project_id: str, dataset_ids: Optional[List[str]], scope_filter: Optional[str]) -> tuple[Optional[AnalysisSession], Optional[List[str]], Optional[str]]:
+    """Validate session ownership and return session-pinned datasets and combined scope."""
+    if not session_id:
+        return None, dataset_ids, scope_filter
+    session = db.query(AnalysisSession).filter(
+        AnalysisSession.id == session_id,
+        AnalysisSession.project_id == project_id,
+    ).first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Analysis session was not found in this workspace.")
+    if session.user_id and session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Analysis session is unavailable.")
+    if str(session.status or "OPEN").upper() != "OPEN":
+        raise HTTPException(status_code=409, detail="This analysis is closed. Start a new analysis to ask another question.")
+    pinned = list(session.dataset_ids_json or [])
+    supplied = list(dataset_ids or [])
+    if pinned and supplied and set(pinned) != set(supplied):
+        raise HTTPException(status_code=409, detail="The question's dataset selection differs from the dataset scope pinned to this analysis. Start a new analysis to change datasets.")
+    effective_datasets = pinned or supplied or None
+    session_filter = str(session.scope_filter or "").strip()
+    question_filter = str(scope_filter or "").strip()
+    if session_filter and question_filter:
+        # Both expressions are validated by the contract parser against the same data schema.
+        combined_filter = f"{session_filter} AND {question_filter}"
+    else:
+        combined_filter = session_filter or question_filter or None
+    return session, effective_datasets, combined_filter
+
+
+def _assert_analysis_session_open_for_child_mutation(db: Session, investigation_id: str) -> None:
+    """A closed parent session freezes all mutating actions on its questions."""
+    inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
+    if inv is None or not getattr(inv, "analysis_session_id", None):
+        return
+    session = db.query(AnalysisSession).filter(
+        AnalysisSession.id == inv.analysis_session_id,
+        AnalysisSession.project_id == inv.project_id,
+    ).first()
+    if session is not None and str(session.status or "OPEN").upper() != "OPEN":
+        raise HTTPException(
+            status_code=409,
+            detail="This question belongs to a closed analysis. Reopen is not automatic; start a new analysis to make further changes.",
+        )
+
+
 class PreAnalysisInterpretRequest(BaseModel):
     project_id: str
     question: str
+    analysis_session_id: Optional[str] = None
     dataset_ids: Optional[List[str]] = None
     # Optional human guidance. When present, the preview is produced by the same resolver that
     # investigation creation uses, so the plan hash returned here is the hash the API will
@@ -304,6 +354,13 @@ def create_investigation(
     Worker processes claim and execute the job completely asynchronously.
     """
     verify_project_ownership(payload.project_id, current_user, db)
+    analysis_session, session_dataset_ids, combined_scope_filter = _bind_open_analysis_session(
+        db, current_user, payload.analysis_session_id, payload.project_id,
+        payload.dataset_ids, payload.scope_filter,
+    )
+    if analysis_session is not None:
+        payload.dataset_ids = session_dataset_ids
+        payload.scope_filter = combined_scope_filter
 
     # Explicit multi-dataset scope is fail-closed: every requested dataset must
     # exist in the selected project, and duplicate IDs are rejected. The
@@ -509,6 +566,7 @@ def create_investigation(
         id=investigation_id,
         project_id=payload.project_id,
         user_id=current_user.id,
+        analysis_session_id=analysis_session.id if analysis_session is not None else None,
         question=analysis_question,
         status=InvestigationState.PLANNED,
         created_at=datetime.now(timezone.utc),
@@ -519,6 +577,9 @@ def create_investigation(
         is_subinvestigation=False,
     )
     db.add(inv)
+    if analysis_session is not None:
+        analysis_session.question_count = int(analysis_session.question_count or 0) + 1
+        analysis_session.updated_at = datetime.now(timezone.utc)
     db.add(InvestigationEvent(
         id=f"EVT-{gen_uuid()[:8]}",
         investigation_id=investigation_id,
@@ -646,6 +707,7 @@ def retry_investigation_dispatch(
     if inv is None:
         raise HTTPException(status_code=404, detail="Investigation not found.")
     verify_project_ownership(inv.project_id, current_user, db)
+    _assert_analysis_session_open_for_child_mutation(db, investigation_id)
     return _dispatch_ready_investigation(
         db=db,
         investigation_id=investigation_id,
@@ -713,19 +775,34 @@ def list_analysis_history(
 ):
     """Return persisted analysis and project records without rerunning calculations."""
     allowed_ids = get_user_authorized_project_ids(current_user, db)
-    projects = db.query(Project).filter(Project.id.in_(allowed_ids)).all() if allowed_ids else []
-    project_names = {project.id: project.name for project in projects}
+    all_projects = db.query(Project).filter(Project.id.in_(allowed_ids)).all() if allowed_ids else []
+    project_names = {project.id: project.name for project in all_projects}
+    diagnostic_project_ids = {
+        project.id for project in all_projects if is_diagnostic_project_name(project.name)
+    }
+    # Diagnostic workspaces remain in storage, but their generated test records do
+    # not pollute the ordinary user's analysis history. An explicit environment
+    # opt-in exposes them for developers investigating a stress run.
+    show_diagnostics = os.getenv("AAOS_SHOW_DIAGNOSTIC_PROJECTS", "").strip().lower() in {"1", "true", "yes", "on"}
+    if not show_diagnostics:
+        allowed_history_ids = [pid for pid in allowed_ids if pid not in diagnostic_project_ids]
+    else:
+        allowed_history_ids = list(allowed_ids)
+    projects = filter_user_facing_projects(all_projects)
 
     investigations = (
         db.query(Investigation)
         .filter(
-            Investigation.project_id.in_(allowed_ids),
+            Investigation.project_id.in_(allowed_history_ids),
             Investigation.is_subinvestigation.is_(False),
+            # Session-attached questions are listed inside their parent analysis
+            # session, not as independent history cards.
+            Investigation.analysis_session_id.is_(None),
         )
         .order_by(Investigation.created_at.desc())
         .limit(limit)
         .all()
-        if allowed_ids else []
+        if allowed_history_ids else []
     )
     investigation_ids = [row.id for row in investigations]
     contracts_by_investigation = {}
@@ -947,11 +1024,11 @@ def list_analysis_history(
     investigation_id_set = set(investigation_ids)
     legacy_runs = (
         db.query(AnalysisRun)
-        .filter(AnalysisRun.project_id.in_(allowed_ids))
+        .filter(AnalysisRun.project_id.in_(allowed_history_ids))
         .order_by(AnalysisRun.created_at.desc())
         .limit(limit)
         .all()
-        if allowed_ids else []
+        if allowed_history_ids else []
     )
     for legacy in legacy_runs:
         if legacy.id in investigation_id_set:
@@ -1000,7 +1077,13 @@ def clear_analysis_history(
     """Delete only the caller's saved analysis records, not projects or datasets."""
     allowed_ids = get_user_authorized_project_ids(current_user, db)
     if not allowed_ids:
-        return {"status": "success", "removed_investigations": 0, "removed_legacy_analyses": 0}
+        return {"status": "success", "removed_investigations": 0, "removed_legacy_analyses": 0, "removed_sessions": 0}
+
+    session_query = db.query(AnalysisSession).filter(
+        AnalysisSession.project_id.in_(allowed_ids),
+        (AnalysisSession.user_id == current_user.id) | (AnalysisSession.user_id.is_(None)),
+    )
+    session_count = session_query.count()
 
     investigation_ids = [
         row[0]
@@ -1054,6 +1137,7 @@ def clear_analysis_history(
                     predicate = tuple_(*primary_key).in_(keys)
                 db.execute(delete(table).where(predicate))
             legacy_query.delete(synchronize_session=False)
+            session_query.delete(synchronize_session=False)
             db.commit()
         except Exception as exc:
             db.rollback()
@@ -1061,6 +1145,7 @@ def clear_analysis_history(
     else:
         try:
             legacy_query.delete(synchronize_session=False)
+            session_query.delete(synchronize_session=False)
             db.commit()
         except Exception as exc:
             db.rollback()
@@ -1070,6 +1155,7 @@ def clear_analysis_history(
         "status": "success",
         "removed_investigations": len(investigation_ids),
         "removed_legacy_analyses": legacy_count,
+        "removed_sessions": session_count,
         "projects_and_datasets_preserved": True,
     }
 
@@ -1138,6 +1224,7 @@ def get_investigation(
                 return event.event_payload_json or {}
         return None
 
+    latest_human_review_payload = _latest_payload(["investigation.human_review"]) or {}
     epistemic_payload = _latest_payload(["calculation.epistemic_calibration"])
     missingness_payload = _latest_payload(["investigation.missingness_sensitivity"])
     causal_gate_payload = _latest_payload(["investigation.causal_gate.evaluated", "investigation.causal_gate.fallback"])
@@ -1313,11 +1400,40 @@ def get_investigation(
                 _failure_message = str(_fp["error_message"])
                 break
 
+    # Produce one structured report contract from the same persisted data used by
+    # the export renderer. The browser consumes this contract instead of inferring
+    # a second interpretation/chart plan independently.
+    execution_record_payload = _latest_payload(["investigation.approved_execution"]) or (
+        (analyst_result_payload or {}).get("numbers", {}).get("execution_record")
+    )
+    locked_contract_payload = (
+        latest_locked_contract_event.event_payload_json
+        if latest_locked_contract_event else None
+    )
+    report_evidence_payload = [
+        {"id": ev.id, "validation_status": ev.validation_status}
+        for ev in evid
+    ]
+    from packages.analytics_core.src.reporting.exporter import _build_report_contract
+    report_contract = _build_report_contract({
+        "id": inv.id,
+        "question": inv.question,
+        "status": inv.status,
+        "verdict_type": inv.verdict_type,
+        "analyst_result": analyst_result_payload,
+        "execution_record": execution_record_payload,
+        "analysis_plan": analysis_plan,
+        "locked_canonical_contract": locked_contract_payload,
+        "dataset_scope": requested_scope_ids,
+        "evidence": report_evidence_payload,
+    })
+
     return {
         "id": inv.id,
         "project_id": inv.project_id,
         "question": inv.question,
         "status": inv.status,
+        "review_status": latest_human_review_payload.get("review_status"),
         "error_message": _failure_message,
         "verdict_type": inv.verdict_type,
         "confidence_score": inv.confidence_score,
@@ -1325,9 +1441,8 @@ def get_investigation(
         "main_finding": inv.main_finding,
         "analysis_mode": "DETERMINISTIC",
         "analyst_result": analyst_result_payload,
-        "execution_record": _latest_payload(["investigation.approved_execution"]) or (
-            (analyst_result_payload or {}).get("numbers", {}).get("execution_record")
-        ),
+        "execution_record": execution_record_payload,
+        "report_contract": report_contract,
         "claim_gate": ({
             "outcome": claim_gate_row.outcome,
             "requested_claim": claim_gate_row.requested_claim,
@@ -1352,11 +1467,7 @@ def get_investigation(
             if latest_guidance_resolution_event
             else None
         ),
-        "locked_canonical_contract": (
-            latest_locked_contract_event.event_payload_json
-            if latest_locked_contract_event
-            else None
-        ),
+        "locked_canonical_contract": locked_contract_payload,
         "decision_impact": decision_impact,
         "ai_status_message": "Analysis and explanation are generated locally from canonical investigation state. AI is optional.",
         "explanation": local_explanation.to_dict(),
@@ -1684,6 +1795,7 @@ def cancel_investigation(
     if not inv:
         raise HTTPException(status_code=404, detail="Investigation not found.")
     verify_project_ownership(inv.project_id, current_user, db)
+    _assert_analysis_session_open_for_child_mutation(db, investigation_id)
 
     transition_investigation(
         db=db,
@@ -1711,6 +1823,7 @@ def resolve_decision_request(
     if not inv:
         raise HTTPException(status_code=404, detail="Investigation not found.")
     verify_project_ownership(inv.project_id, current_user, db)
+    _assert_analysis_session_open_for_child_mutation(db, investigation_id)
 
     dec_req = (
         db.query(InvestigationDecisionRequest)
@@ -2183,6 +2296,7 @@ def record_verification_decision(
 ):
     """Record the human verifier's decision on one item."""
     state = _verification_state(db, investigation_id, current_user)
+    _assert_analysis_session_open_for_child_mutation(db, investigation_id)
     packet = state["packet"]
     item = next((i for i in packet["items"] if i["id"] == body.item_id), None)
     error = validate_decision(packet, body.item_id, body.decision, body.comment)
@@ -2213,6 +2327,7 @@ def sign_off_verification(
 ):
     """Record the overall verification outcome, bound to the exact result reviewed."""
     state = _verification_state(db, investigation_id, current_user)
+    _assert_analysis_session_open_for_child_mutation(db, investigation_id)
     packet, review = state["packet"], state["review"]
     error = validate_signoff(review, body.outcome, body.comment)
     if error:
@@ -2245,6 +2360,10 @@ def export_investigation(
 ):
     """Export investigation result as publication-grade PDF or structured DOCX in standard answer format."""
     inv_data = get_investigation(investigation_id=investigation_id, current_user=current_user, db=db)
+    if str(inv_data.get("status", "")).upper() not in {"COMPLETED", "PARTIAL"}:
+        raise HTTPException(status_code=409, detail="Export is available only after the analysis has completed.")
+    if str(inv_data.get("review_status", "")).upper() != "ACCEPTED_AND_VERIFIED":
+        raise HTTPException(status_code=409, detail="Review and accept the verified analysis before exporting PDF or DOCX.")
     from fastapi.responses import Response
     from packages.analytics_core.src.reporting.exporter import (
         export_investigation_to_pdf,
@@ -2318,6 +2437,13 @@ def interpret_investigation_question(
 ):
     """Pre-analysis guided interpretation: reveals what MindEd understood, planned calculations, and consequential ambiguity."""
     verify_project_ownership(payload.project_id, current_user, db)
+    analysis_session, session_dataset_ids, combined_scope_filter = _bind_open_analysis_session(
+        db, current_user, payload.analysis_session_id, payload.project_id,
+        payload.dataset_ids, payload.scope_filter,
+    )
+    if analysis_session is not None:
+        payload.dataset_ids = session_dataset_ids
+        payload.scope_filter = combined_scope_filter
 
     from packages.analytics_core.src.engines.dataset_provider import DatabaseDatasetProvider
     from packages.analytics_core.src.governance.guided_investigation import (
@@ -2327,6 +2453,33 @@ def interpret_investigation_question(
 
     provider = DatabaseDatasetProvider(session_factory=SessionLocal)
     context = provider.acquire_context(payload.project_id, payload.dataset_ids)
+
+    # Pre-analysis must operate on the exact selected scope. Previously /interpret could
+    # preview against whichever frames happened to load even when another requested dataset
+    # failed, while creation correctly stopped. Never approve a partial ingestion silently.
+    if context.load_errors or context.unavailable_requested_ids or context.scope_errors:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PREANALYSIS_DATASET_CONTEXT_INCOMPLETE",
+                "message": (
+                    "Pre-analysis could not load the complete selected dataset scope. "
+                    "No plan was approved. Reload or re-ingest the affected dataset(s), "
+                    "then preview the question again."
+                ),
+                "unavailable_dataset_ids": list(context.unavailable_requested_ids or []),
+                "load_error_datasets": sorted(str(name) for name in (context.load_errors or {})),
+                "scope_error_count": len(context.scope_errors or []),
+            },
+        )
+    if not context.datasets_map:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "PREANALYSIS_NO_DATASET_AVAILABLE",
+                "message": "No selected dataset could be loaded for pre-analysis. Re-ingest or select an available dataset.",
+            },
+        )
 
     primary_name, primary_df = select_primary_dataset(payload.question, context.datasets_map or {})
 
@@ -2362,75 +2515,79 @@ def interpret_investigation_question(
             ),
             _sel,
         )
-    guidance_resolution = None
-    if guidance:
-        # Resolve through the same code path as creation so the hash shown here is the hash
-        # the API will compute for this guidance.
-        guidance_resolution = apply_human_guidance_to_contract(
-            question=payload.question,
-            data_context=context,
-            guidance=guidance,
-        )
-        if guidance_resolution.contract is not None:
-            interpretation.canonical_contract = guidance_resolution.contract
-            contract = guidance_resolution.contract
-            interpretation.target_metric = contract.target_column
-            interpretation.group_dimension = (contract.grouping_columns or (None,))[0]
-            known_slots = {
-                "target_column", "numerator_column", "denominator_column", "time_column", "time_range",
-                "grouping_columns", "requested_aggregation", "ranking_direction", "filter_conditions",
+    # Always resolve the pre-analysis plan through the exact same canonical resolver
+    # used by POST /investigations. Conditional resolution made the no-guidance preview
+    # hash a different contract than the creation endpoint approved, and could hide
+    # user-scope/filter/default-aggregation changes until execution.
+    guidance_resolution = apply_human_guidance_to_contract(
+        question=payload.question,
+        data_context=context,
+        guidance=guidance,
+    )
+    if guidance_resolution.contract is not None:
+        interpretation.canonical_contract = guidance_resolution.contract
+        contract = guidance_resolution.contract
+        interpretation.target_metric = contract.target_column
+        interpretation.group_dimension = (contract.grouping_columns or (None,))[0]
+        known_slots = {
+            "target_column", "numerator_column", "denominator_column", "time_column", "time_range",
+            "grouping_columns", "requested_aggregation", "ranking_direction", "filter_conditions",
+        }
+        candidate_slot = str(guidance_resolution.unresolved_instruction or "").strip()
+        if candidate_slot not in known_slots:
+            candidate_slot = next(
+                (str(item.get("slot")) for item in (contract.intent_ledger or ())
+                 if item.get("status") == "UNRESOLVED" and str(item.get("slot")) in known_slots),
+                "",
+            )
+        interpretation.pending_intent_slot = candidate_slot or None
+        display_sql = render_contract_preview_from_contract(contract)
+        if display_sql:
+            interpretation.planned_calculation = display_sql
+        if guidance_resolution.status != ResolverStatus.RESOLVED:
+            # The legacy heuristic parser may have produced a calculation (for example a SUM over
+            # whichever numeric column it found first). When the authoritative resolver has not
+            # accepted the question, no calculation may be shown as the plan.
+            interpretation.planned_calculation = "Not executable yet: one or more material intent slots remain unresolved."
+            interpretation.can_auto_proceed = False
+            interpretation.ambiguity_status = (
+                "AMBIGUOUS_SCOPE"
+                if any(str(item.get("slot")) in {"time_column", "time_range"} for item in (contract.intent_ledger or ()))
+                else "MISSING_DATA"
+            )
+            interpretation.clarification_prompt = guidance_resolution.reason
+            interpretation.clarification_options = list(guidance_resolution.suggested_resolutions)
+            if guidance_resolution.suggested_patches:
+                interpretation.clarification_options = [item.get("label", "Apply clarification") for item in guidance_resolution.suggested_patches]
+                interpretation.clarification_option_patches = list(guidance_resolution.suggested_patches)
+            interpretation.recommended_action = "Resolve the open intent slots before execution."
+            interpretation.plan_hash = None
+        elif contract.completeness == "INCOMPLETE" or contract.unresolved_roles:
+            interpretation.can_auto_proceed = False
+            interpretation.ambiguity_status = "MISSING_DATA"
+            interpretation.clarification_prompt = "The canonical contract still has unresolved material intent slots."
+            interpretation.clarification_options = list(guidance_resolution.suggested_resolutions)
+            interpretation.plan_hash = None
+        else:
+            # The newly resolved contract supersedes stale clarification statuses from the
+            # previous preview. Do not clear independent safety gates (causal/join risk,
+            # failed verification, or unexpected assumptions) merely because a slot resolved.
+            protected_statuses = {
+                "JOIN_FANOUT_RISK", "CAUSAL_ON_OBSERVATIONAL", "VERIFICATION_FAILED",
+                "UNEXPECTED_ASSUMPTION",
             }
-            candidate_slot = str(guidance_resolution.unresolved_instruction or "").strip()
-            if candidate_slot not in known_slots:
-                candidate_slot = next(
-                    (str(item.get("slot")) for item in (contract.intent_ledger or ())
-                     if item.get("status") == "UNRESOLVED" and str(item.get("slot")) in known_slots),
-                    "",
-                )
-            interpretation.pending_intent_slot = candidate_slot or None
-            display_sql = render_contract_preview_from_contract(contract)
-            if display_sql:
-                interpretation.planned_calculation = display_sql
-            if guidance_resolution.status != ResolverStatus.RESOLVED:
-                interpretation.can_auto_proceed = False
-                interpretation.ambiguity_status = (
-                    "AMBIGUOUS_SCOPE"
-                    if any(str(item.get("slot")) in {"time_column", "time_range"} for item in (contract.intent_ledger or ()))
-                    else "MISSING_DATA"
-                )
-                interpretation.clarification_prompt = guidance_resolution.reason
-                interpretation.clarification_options = list(guidance_resolution.suggested_resolutions)
-                if guidance_resolution.suggested_patches:
-                    interpretation.clarification_options = [item.get("label", "Apply clarification") for item in guidance_resolution.suggested_patches]
-                    interpretation.clarification_option_patches = list(guidance_resolution.suggested_patches)
-                interpretation.recommended_action = "Resolve the open intent slots before execution."
+            if interpretation.ambiguity_status not in protected_statuses:
+                interpretation.ambiguity_status = "CLEAR"
+                interpretation.can_auto_proceed = True
+                interpretation.clarification_prompt = None
+                interpretation.clarification_options = []
+                interpretation.clarification_option_patches = []
+                interpretation.recommended_action = "Execute the approved canonical contract."
                 interpretation.plan_hash = None
-            elif contract.completeness == "INCOMPLETE" or contract.unresolved_roles:
-                interpretation.can_auto_proceed = False
-                interpretation.ambiguity_status = "MISSING_DATA"
-                interpretation.clarification_prompt = "The canonical contract still has unresolved material intent slots."
-                interpretation.clarification_options = list(guidance_resolution.suggested_resolutions)
-                interpretation.plan_hash = None
-            else:
-                # The newly resolved contract supersedes stale clarification statuses from the
-                # previous preview. Do not clear independent safety gates (causal/join risk,
-                # failed verification, or unexpected assumptions) merely because a slot resolved.
-                protected_statuses = {
-                    "JOIN_FANOUT_RISK", "CAUSAL_ON_OBSERVATIONAL", "VERIFICATION_FAILED",
-                    "UNEXPECTED_ASSUMPTION",
-                }
-                if interpretation.ambiguity_status not in protected_statuses:
-                    interpretation.ambiguity_status = "CLEAR"
-                    interpretation.can_auto_proceed = True
-                    interpretation.clarification_prompt = None
-                    interpretation.clarification_options = []
-                    interpretation.clarification_option_patches = []
-                    interpretation.recommended_action = "Execute the approved canonical contract."
-                    interpretation.plan_hash = None
-        resolved_name = guidance_resolution.schema_information.get("dataset") if guidance_resolution.schema_information else None
-        if resolved_name:
-            primary_name = resolved_name
-            dataset_fp = context.dataset_fingerprints.get(primary_name)
+    resolved_name = guidance_resolution.schema_information.get("dataset") if guidance_resolution.schema_information else None
+    if resolved_name:
+        primary_name = resolved_name
+        dataset_fp = context.dataset_fingerprints.get(primary_name)
     if interpretation.canonical_contract is not None and interpretation.can_auto_proceed and (
         guidance_resolution is None or guidance_resolution.status == ResolverStatus.RESOLVED
     ):
@@ -2473,6 +2630,7 @@ def revise_investigation_guidance(
     if not inv:
         raise HTTPException(status_code=404, detail="Investigation not found.")
     verify_project_ownership(inv.project_id, current_user, db)
+    _assert_analysis_session_open_for_child_mutation(db, investigation_id)
     if inv.status != InvestigationState.NEEDS_CLARIFICATION:
         raise HTTPException(
             status_code=409,
@@ -2720,9 +2878,23 @@ def submit_investigation_review(
     if not inv:
         raise HTTPException(status_code=404, detail="Investigation not found.")
     verify_project_ownership(inv.project_id, current_user, db)
+    if inv.analysis_session_id:
+        attached_session = db.query(AnalysisSession).filter(
+            AnalysisSession.id == inv.analysis_session_id,
+            AnalysisSession.project_id == inv.project_id,
+        ).first()
+        if attached_session is not None and str(attached_session.status or "OPEN").upper() == "CLOSED":
+            raise HTTPException(status_code=409, detail="This question belongs to a closed analysis. Its accepted report membership is frozen.")
 
-    verifications = db.query(EvidenceVerification).filter(EvidenceVerification.investigation_id == investigation_id).all()
     evidence_items = db.query(Evidence).filter(Evidence.investigation_id == investigation_id).all()
+    # EvidenceVerification has no investigation_id column; it is scoped through its evidence rows
+    # (same as the detail/explanation endpoints). Querying a non-existent attribute made every
+    # review action (ACCEPT/REQUEST_CORRECTION/REJECT/REDO) fail with a 500.
+    _evidence_ids = [e.id for e in evidence_items]
+    verifications = (
+        db.query(EvidenceVerification).filter(EvidenceVerification.evidence_id.in_(_evidence_ids)).all()
+        if _evidence_ids else []
+    )
     machine_verified = (
         len(evidence_items) > 0 and
         all(e.validation_status == "VERIFIED" for e in evidence_items) and
@@ -2744,13 +2916,30 @@ def submit_investigation_review(
 
     _append_verification_event(db, investigation_id, "investigation.human_review", review_record)
 
+    if inv.analysis_session_id:
+        analysis_session = db.query(AnalysisSession).filter(
+            AnalysisSession.id == inv.analysis_session_id,
+            AnalysisSession.project_id == inv.project_id,
+        ).first()
+        if analysis_session is not None:
+            accepted_ids = list(analysis_session.accepted_investigation_ids_json or [])
+            if str(review_record.get("review_status") or "").upper() == "ACCEPTED_AND_VERIFIED":
+                if investigation_id not in accepted_ids:
+                    accepted_ids.append(investigation_id)
+            else:
+                accepted_ids = [item for item in accepted_ids if item != investigation_id]
+            analysis_session.accepted_investigation_ids_json = accepted_ids
+            analysis_session.report_revision = int(analysis_session.report_revision or 0) + 1
+            analysis_session.updated_at = datetime.now(timezone.utc)
+
+    # AuditLog has no resource_type/resource_id columns (passing them raised TypeError -> 500);
+    # the resource reference travels inside details_json and the row is scoped by project_id.
     audit_entry = AuditLog(
         id=f"AUD-{gen_uuid()[:8]}",
+        project_id=inv.project_id,
         user_id=current_user.id,
         action=f"REVIEW_{payload.action.upper()}",
-        resource_type="investigation",
-        resource_id=investigation_id,
-        details_json=review_record,
+        details_json={**review_record, "resource_type": "investigation", "resource_id": investigation_id},
     )
     db.add(audit_entry)
     db.commit()

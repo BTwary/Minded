@@ -13,20 +13,20 @@
 ### *An open-source experimental platform for autonomous, evidence-driven data investigation.*
 
 <p align="center">
-  <a href="https://github.com"><img src="https://img.shields.io/badge/Release-v40_Release_1.0_Candidate-38ef7d?style=for-the-badge" alt="Release"></a>
-  <a href="https://github.com"><img src="https://img.shields.io/badge/Status-Release_Candidate-38ef7d?style=for-the-badge" alt="Status"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/Release-v1.0.0_Source_Candidate-orange?style=for-the-badge" alt="Release"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/Status-Not_Release_Ready-red?style=for-the-badge" alt="Status"></a>
   <a href="https://github.com"><img src="https://img.shields.io/badge/Real_Data_Stress-32%2F32_CORRECT-38ef7d?style=for-the-badge" alt="Real Data Stress"></a>
   <a href="https://github.com"><img src="https://img.shields.io/badge/Adversarial_Harness-8%2F8_PASSING-38ef7d?style=for-the-badge" alt="Adversarial Harness"></a>
   <a href="https://github.com"><img src="https://img.shields.io/badge/Authoritative_Manifest-31_Checks-38ef7d?style=for-the-badge" alt="Authoritative Manifest"></a>
   <a href="https://github.com"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License"></a>
 </p>
 
-> **Release 1.0 Scope Contract (2026-09-30):** AA-OS v40 is certified as a **bounded autonomous data analyst** operating under deterministic, local-first execution.
-> - **Verified Ground Truth:** 32/32 real-data benchmark questions pass independently across both raw and clean variants (`titanic`, `tips`, `penguins`, `mpg`, `diamonds`, `planets`, `taxis`, `flights`) with persisted contracts verified against `stress_verifier.py`.
+> **Release 1.0 Scope Contract (2026-09-30):** AA-OS v1.0.0 is a source candidate (NOT release ready; see `docs/AAOS_V1_0_0_RELEASE_STATUS.md`) intended as a **bounded autonomous data analyst** operating under deterministic, local-first execution.
+> - **Benchmark status:** an independent re-run of the 32-question real-data stress test scored 23/32 (raw) and 22/32 (clean) after fixes (21 and 19 before); the earlier 32/32 claim did not reproduce. See `docs/AAOS_V1_0_0_RELEASE_STATUS.md`.
 > - **Fail-Closed Guarantees:** Strict claim ceiling bounds observational findings to association; intensive metrics aggregate as mean across time/dimensions; missing/ambiguous outcomes produce fail-closed `INCONCLUSIVE` verdicts rather than fabricated answers.
-> - **Language Scope:** Certified for bounded analyst-question grammar (ranking, descriptive breakdowns, correlation, group comparisons, rolling-origin forecasts, and observational root-cause analysis). Unrestricted natural-language comprehension across arbitrary colloquial phrasings is explicitly out-of-scope for Release 1.0.
+> - **Language Scope:** Intended for bounded analyst-question grammar (ranking, descriptive breakdowns, correlation, group comparisons, rolling-origin forecasts, and observational root-cause analysis). Unrestricted natural-language comprehension across arbitrary colloquial phrasings is explicitly out-of-scope for Release 1.0.
 
-[**Read the Vision**](VISION.md) • [**Architecture & Roadmap**](ROADMAP.md) • [**Deployment Guide**](DEPLOYMENT.md) • [**Run Tests Locally**](#-reproducing-the-golden-tests)
+[**Read the Vision**](VISION.md) • [**Architecture & Roadmap**](ROADMAP.md) • [**Deployment Guide**](DEPLOYMENT.md) • [**Run Tests Locally**](#-reproducing-the-golden-tests) • [**Report Benchmark Contract**](docs/release/REPORT_BENCHMARK_AND_VALIDATION.md) • [**Evidence-Grounded Reporting ADR**](docs/adr/002-evidence-grounded-report-composer.md)
 
 </div>
 
@@ -325,6 +325,16 @@ autonomous-data-analyst/
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 
+
+## v1.0.0 Usage and Feedback (Desktop)
+
+MindEd AA-OS desktop builds do **not** send usage telemetry, crash reports, datasets, questions, or analysis results to the developer. There is no automatic internet fallback or background usage reporting. This is intentional for the local-first v1.0.0 release.
+
+As a result, the developer cannot count installs, app launches, or completed analyses from downloaded desktop copies. Local logs and feedback stay on the user's device unless the user deliberately shares them.
+
+To help improve MindEd, users can voluntarily open a GitHub issue: https://github.com/MindEd-AI/autonomous-data-analyst/issues. They should describe the task, expected behavior, and what happened, and must remove private data before attaching any files or logs. Do not attach CSV/XLSX datasets, credentials, or sensitive results.
+
+Any future remote analytics must be introduced separately, with clear disclosure and explicit opt-in, and must never be required for analysis or change the offline behavior.
 
 ## Local-first product contract
 

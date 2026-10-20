@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from apps.api.src.core.config import settings
 from apps.api.src.core.database import get_db
 from apps.api.src.core.security import get_current_user, verify_project_ownership
+from apps.api.src.core.project_visibility import filter_user_facing_projects
 from apps.api.src.models.entities import (
     AlertEvent,
     AlertRule,
@@ -50,7 +51,7 @@ def list_projects(
     from apps.api.src.core.security import get_user_authorized_project_ids
 
     auth_ids = get_user_authorized_project_ids(current_user, db)
-    projects = db.query(Project).filter(Project.id.in_(auth_ids)).all()
+    projects = filter_user_facing_projects(db.query(Project).filter(Project.id.in_(auth_ids)).all())
 
     return [
         ProjectResponse(

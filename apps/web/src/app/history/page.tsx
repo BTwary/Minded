@@ -6,9 +6,14 @@ import { ArrowUpRight, BookOpen, Clock3, Database, FileDown, Loader2, RefreshCw,
 import {
   AnalysisHistoryRecord,
   AnalysisHistoryResponse,
+  AnalysisSession,
   clearAnalysisHistory,
+  downloadAnalysisSessionExport,
   downloadInvestigationExport,
   fetchAnalysisHistory,
+  fetchAnalysisSession,
+  fetchAnalysisSessions,
+  saveExportBlob,
 } from "../../lib/api";
 
 function formatTimestamp(value: string | null): string {
@@ -41,28 +46,44 @@ function statusTone(status: string): string {
 export default function HistoryPage() {
   const [history, setHistory] = useState<AnalysisHistoryResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<AnalysisSession[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSession, setSelectedSession] = useState<AnalysisSession | null>(null);
+  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [clearMessage, setClearMessage] = useState<string | null>(null);
   const [exportingId, setExportingId] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
   const handleExport = async (id: string, fmt: "pdf" | "docx") => {
     if (!id || exportingId) return;
     setExportingId(id);
+    setExportNotice(null);
     try {
       const blob = await downloadInvestigationExport(id, fmt);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `MindEd_Investigation_${id.slice(0, 8)}.${fmt}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      const filename = `MindEd_Investigation_${id.slice(0, 8)}.${fmt}`;
+      const delivery = await saveExportBlob(blob, filename);
+      setExportNotice(delivery.message);
     } catch (err) {
       console.error(`Failed to export ${fmt}:`, err);
       alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExportingId(null);
+    }
+  };
+
+  const handleExportSession = async (session: AnalysisSession, fmt: "pdf" | "docx") => {
+    if (exportingId) return;
+    setExportingId(session.id);
+    setExportNotice(null);
+    try {
+      const blob = await downloadAnalysisSessionExport(session.id, fmt);
+      const delivery = await saveExportBlob(blob, `MindEd_Analysis_${session.id.slice(0, 8)}_R${session.report_revision}.${fmt}`);
+      setExportNotice(delivery.message);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : `The cumulative ${fmt.toUpperCase()} export failed.`);
     } finally {
       setExportingId(null);
     }
@@ -72,8 +93,9 @@ export default function HistoryPage() {
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchAnalysisHistory(100);
+      const [result, sessionRows] = await Promise.all([fetchAnalysisHistory(100), fetchAnalysisSessions(undefined, 100)]);
       setHistory(result);
+      setSessions(sessionRows);
       const requestedId = typeof window === "undefined"
         ? ""
         : new URLSearchParams(window.location.search).get("investigation_id") || "";
@@ -87,6 +109,7 @@ export default function HistoryPage() {
     } catch (cause) {
       console.error("Unable to load analysis history.", cause);
       setHistory(null);
+      setSessions([]);
       setError(cause instanceof Error ? cause.message : "Analysis history could not be loaded.");
     } finally {
       setLoading(false);
@@ -96,6 +119,23 @@ export default function HistoryPage() {
   useEffect(() => {
     void loadHistory();
   }, [loadHistory]);
+
+  useEffect(() => {
+    if (!selectedSessionId) {
+      setSelectedSession(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingSessionId(selectedSessionId);
+    fetchAnalysisSession(selectedSessionId).then((session) => {
+      if (!cancelled) setSelectedSession(session);
+    }).catch((cause) => {
+      if (!cancelled) setError(cause instanceof Error ? cause.message : "Analysis session detail could not be loaded.");
+    }).finally(() => {
+      if (!cancelled) setLoadingSessionId(null);
+    });
+    return () => { cancelled = true; };
+  }, [selectedSessionId]);
 
   const selectedRecord = useMemo(
     () => history?.records.find((record) => record.id === selectedId) || null,
@@ -116,6 +156,9 @@ export default function HistoryPage() {
         throw new Error("The server did not confirm that history was cleared.");
       }
       setHistory((current) => current ? { ...current, records: [] } : current);
+      setSessions([]);
+      setSelectedSession(null);
+      setSelectedSessionId(null);
       setSelectedId(null);
       setClearMessage("Analysis history was cleared. Projects and datasets were preserved.");
     } catch (cause) {
@@ -152,7 +195,7 @@ export default function HistoryPage() {
           <button
             type="button"
             onClick={() => void handleClearHistory()}
-            disabled={clearing || loading || !history?.records.length}
+            disabled={clearing || loading || !(history?.records.length || sessions.length)}
             className="inline-flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-200 hover:bg-rose-500/20 disabled:opacity-50"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -169,6 +212,9 @@ export default function HistoryPage() {
       )}
       {clearMessage && (
         <div role="status" className="rounded-xl border border-emerald-500/30 bg-emerald-950/30 p-3 text-xs text-emerald-200">{clearMessage}</div>
+      )}
+      {exportNotice && (
+        <div role="status" aria-live="polite" className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3 text-xs text-emerald-200">{exportNotice}</div>
       )}
 
       {loading ? (
@@ -199,14 +245,65 @@ export default function HistoryPage() {
             </section>
           )}
 
-          {!history.records.length ? (
+          {!!sessions.length && (
+            <section className="space-y-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Analysis sessions · one card per report</h2>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {sessions.map((session) => (
+                  <article key={session.id} className={`rounded-2xl border p-4 ${selectedSessionId === session.id ? "border-cyan-500/40 bg-cyan-950/20" : "border-slate-800 bg-slate-900/50"}`}>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] text-slate-500">{formatTimestamp(session.updated_at || session.created_at || null)} · {history?.projects.find((project) => project.id === session.project_id)?.name || session.project_id}</div>
+                        <h3 className="mt-1 break-words text-sm font-semibold text-white">{session.title}</h3>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          <span className={`rounded-full border px-2 py-0.5 text-[9px] font-mono ${statusTone(session.status)}`}>{session.status}</span>
+                          <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[9px] font-mono text-slate-300">{session.question_count} questions</span>
+                          <span className="rounded-full border border-emerald-500/30 px-2 py-0.5 text-[9px] font-mono text-emerald-300">{session.accepted_question_count} accepted</span>
+                        </div>
+                        <div className="mt-2 text-[10px] text-slate-500">{session.dataset_ids.length} dataset(s) · report revision {session.report_revision}</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => setSelectedSessionId(selectedSessionId === session.id ? null : session.id)}
+                        className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/20">
+                        {selectedSessionId === session.id ? "Hide questions" : "View questions"}
+                      </button>
+                      {session.accepted_question_count > 0 && <>
+                        <button type="button" onClick={() => void handleExportSession(session, "pdf")} disabled={!!exportingId}
+                          className="rounded-lg border border-slate-700 px-2.5 py-1.5 text-[11px] text-slate-200 hover:bg-slate-800 disabled:opacity-50">PDF</button>
+                        <button type="button" onClick={() => void handleExportSession(session, "docx")} disabled={!!exportingId}
+                          className="rounded-lg border border-slate-700 px-2.5 py-1.5 text-[11px] text-slate-200 hover:bg-slate-800 disabled:opacity-50">DOCX</button>
+                      </>}
+                      {session.status === "OPEN" && <Link href={`/analyst?project_id=${encodeURIComponent(session.project_id)}&analysis_session_id=${encodeURIComponent(session.id)}`}
+                        className="rounded-lg border border-slate-700 px-2.5 py-1.5 text-[11px] text-slate-200 hover:bg-slate-800">Continue analysis</Link>}
+                    </div>
+                    {selectedSessionId === session.id && (
+                      <div className="mt-3 border-t border-slate-800 pt-3">
+                        {loadingSessionId === session.id ? <p className="text-xs text-slate-400">Loading question trail…</p> : selectedSession?.id === session.id ? (
+                          selectedSession.questions?.length ? <ol className="space-y-2">{selectedSession.questions.map((question, index) => (
+                            <li key={question.id} className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5">
+                              <div className="flex items-start gap-2"><span className="font-mono text-[10px] text-slate-500">{String(index + 1).padStart(2, "0")}</span><p className="break-words text-xs text-slate-200">{question.question}</p></div>
+                              <p className="mt-1 pl-6 text-[10px] text-slate-500">{question.status} · {question.review_status || "Not reviewed"}{question.accepted_into_report ? " · Included in report" : " · Not in report"}</p>
+                            </li>
+                          ))}</ol> : <p className="text-xs text-slate-400">No question runs have been recorded in this session yet.</p>
+                        ) : <p className="text-xs text-slate-400">Session details are not available.</p>}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {!history.records.length && !sessions.length && (
             <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-900/40 p-10 text-center">
               <BookOpen className="mx-auto h-8 w-8 text-slate-500" />
               <h2 className="mt-3 text-sm font-semibold text-white">No saved analyses yet</h2>
-              <p className="mt-1 text-xs text-slate-400">Completed, inconclusive, and failed investigation records will appear here.</p>
+              <p className="mt-1 text-xs text-slate-400">Completed, inconclusive, and failed sessions will appear here, with their questions nested inside each analysis.</p>
               <Link href="/analyst" className="mt-4 inline-flex rounded-lg bg-cyan-600 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-500">Start an analysis</Link>
             </div>
-          ) : (
+          )}
+          {!!history.records.length && (
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
               <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50">
                 <div className="border-b border-slate-800 px-4 py-3 text-xs text-slate-400">

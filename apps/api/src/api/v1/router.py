@@ -8,6 +8,7 @@ from apps.api.src.api.v1.dashboards import router as dashboards_router
 from apps.api.src.api.v1.datasets import router as datasets_router
 from apps.api.src.api.v1.glossary import router as glossary_router
 from apps.api.src.api.v1.investigations import router as investigations_router
+from apps.api.src.api.v1.analysis_sessions import router as analysis_sessions_router
 from apps.api.src.api.v1.metrics import router as metrics_router
 from apps.api.src.api.v1.projects import router as projects_router
 from apps.api.src.api.v1.query import router as query_router
@@ -21,6 +22,7 @@ api_router.include_router(auth_router)
 api_router.include_router(projects_router)
 api_router.include_router(datasets_router)
 api_router.include_router(investigations_router)
+api_router.include_router(analysis_sessions_router)
 api_router.include_router(analysis_router)
 api_router.include_router(chat_router)
 api_router.include_router(metrics_router)

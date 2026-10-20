@@ -13,8 +13,9 @@ import {
   ShieldCheck,
   XCircle,
 } from "lucide-react";
-import { downloadInvestigationExport, submitHumanReview } from "../lib/api";
+import { downloadInvestigationExport, saveExportBlob, submitHumanReview } from "../lib/api";
 import { presentAnalyticalAnswer } from "../lib/analyticalAnswer";
+import PlotlyChart from "./PlotlyChart";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -49,6 +50,52 @@ function display(value: unknown): string {
   } catch {
     return "Not available";
   }
+}
+
+// Audit counts (rows in scope, result rows) must be exact, never abbreviated to "1.23M".
+function exactCount(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) return value.toLocaleString();
+  return display(value);
+}
+
+function filterDisplay(value: unknown): string {
+  if (Array.isArray(value)) {
+    const parts = value.map((item) => {
+      const entry = record(item);
+      if (!entry) return String(item);
+      const column = String(entry.column ?? entry.field ?? "column");
+      const operator = String(entry.operator ?? entry.op ?? "=").toUpperCase();
+      const raw = entry.value;
+      const literal = (item: unknown) => item === null || item === undefined
+        ? "NULL"
+        : typeof item === "string"
+          ? `'${item.replace(/'/g, "''")}'`
+          : String(item);
+      const shown = operator === "BETWEEN" && Array.isArray(raw) && raw.length === 2
+        ? `${literal(raw[0])} AND ${literal(raw[1])}`
+        : Array.isArray(raw) ? `(${raw.map(literal).join(", ")})` : raw === null ? "NULL" : literal(raw);
+      return `${column} ${operator}${operator === "IS NULL" || operator === "IS NOT NULL" ? "" : ` ${shown}`}`.trim();
+    });
+    return parts.length ? parts.join(" AND ") : "No explicit filter recorded";
+  }
+  if (typeof value === "string") return value.trim() || "No explicit filter recorded";
+  return display(value);
+}
+
+function timeRangeDisplay(value: unknown): string {
+  const range = record(value);
+  if (!range) return display(value);
+  const expression = typeof range.expression === "string" ? range.expression.trim() : "";
+  const start = typeof range.start === "string" ? range.start : "";
+  const end = typeof range.end === "string" ? range.end : "";
+  const bounds = start && end
+    ? `${start} to ${end}${range.end_exclusive === true ? " (end exclusive)" : " (inclusive bounds)"}`
+    : "";
+  if (expression && bounds) return `${expression} · ${bounds}`;
+  if (expression) return expression;
+  if (bounds) return bounds;
+  if (String(range.type || "").toLowerCase() === "all") return "All available dates";
+  return display(value);
 }
 
 function formatCompactNum(val: number): string {
@@ -137,10 +184,16 @@ export default function StructuredAnalysisAnswer({
   analysis,
   onRedo,
   onRequestCorrection,
+  onAccepted,
+  onReviewChanged,
+  cumulativeReportMode = false,
 }: {
   analysis: AnalysisResponse;
   onRedo?: () => void;
   onRequestCorrection?: (comment: string) => void;
+  onAccepted?: () => void;
+  onReviewChanged?: () => void;
+  cumulativeReportMode?: boolean;
 }) {
   const result = record(analysis.analyst_result);
   const numbers = record(result?.numbers) || {};
@@ -162,11 +215,15 @@ export default function StructuredAnalysisAnswer({
 
   const [exportingFormat, setExportingFormat] = useState<"pdf" | "docx" | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [reviewStatus, setReviewStatus] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<string | null>(analysis.review_status || null);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   const [reviewComment, setReviewComment] = useState<string>("");
   const [isSubmittingReview, setIsSubmittingReview] = useState<boolean>(false);
   const [reviewActionForm, setReviewActionForm] = useState<"CORRECTION" | "REJECT" | null>(null);
+  React.useEffect(() => {
+    setReviewStatus(analysis.review_status || null);
+  }, [analysis.id, analysis.review_status]);
 
   const handleReviewAction = async (action: "ACCEPT" | "REQUEST_CORRECTION" | "REJECT" | "REDO", comments?: string) => {
     if (!analysis.id || isSubmittingReview) return;
@@ -180,6 +237,12 @@ export default function StructuredAnalysisAnswer({
       setReviewStatus(rev.review_status || action);
       setReviewNotice(rev.notice || "Review recorded successfully.");
       setReviewActionForm(null);
+      if (action === "ACCEPT" && onAccepted) {
+        onAccepted();
+      }
+      if (onReviewChanged) {
+        onReviewChanged();
+      }
       if (action === "REDO" && onRedo) {
         onRedo();
       } else if (action === "REQUEST_CORRECTION" && onRequestCorrection) {
@@ -197,16 +260,12 @@ export default function StructuredAnalysisAnswer({
     if (!analysis.id || exportingFormat) return;
     setExportingFormat(fmt);
     setExportError(null);
+    setExportNotice(null);
     try {
       const blob = await downloadInvestigationExport(analysis.id, fmt);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `MindEd_Investigation_${analysis.id.slice(0, 8)}.${fmt}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      const filename = `MindEd_Investigation_${analysis.id.slice(0, 8)}.${fmt}`;
+      const delivery = await saveExportBlob(blob, filename);
+      setExportNotice(delivery.message);
     } catch (err) {
       console.error(`Failed to export ${fmt.toUpperCase()}:`, err);
       setExportError(err instanceof Error ? err.message : `Failed to export as ${fmt.toUpperCase()}`);
@@ -464,7 +523,7 @@ export default function StructuredAnalysisAnswer({
             {integrityFailure ? "Consistency: FAILED" : `Verification: ${verification}`}
           </span>
 
-          {analysis.id && (
+          {!cumulativeReportMode && analysis.id && (reviewStatus === "ACCEPTED_AND_VERIFIED" || analysis.review_status === "ACCEPTED_AND_VERIFIED") && (
             <div className="flex items-center gap-1.5 ml-1">
               <button
                 type="button"
@@ -500,9 +559,18 @@ export default function StructuredAnalysisAnswer({
         </div>
       </div>
 
+      {analysis.id && reviewStatus !== "ACCEPTED_AND_VERIFIED" && analysis.review_status !== "ACCEPTED_AND_VERIFIED" && (
+        <p className="text-xs text-[var(--muted)]">PDF and DOCX exports unlock after this analysis is accepted and verified in the Review section.</p>
+      )}
+
       {exportError && (
         <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-950/30 p-2.5 text-xs text-rose-200">
           {exportError}
+        </div>
+      )}
+      {exportNotice && (
+        <div role="status" aria-live="polite" className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-2.5 text-xs text-emerald-200">
+          {exportNotice}
         </div>
       )}
 
@@ -517,12 +585,99 @@ export default function StructuredAnalysisAnswer({
       )}
 
       {/* Answer first; the table and evidence below support this explanation. */}
-      <section aria-label="Answer" className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/40 p-5 space-y-2">
-        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)]">Answer</h3>
+      <section aria-label="Answer and verification status" className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]/40 p-5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)]">Answer</h3>
+          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
+            verification === "VERIFIED"
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+              : verification === "FAILED" || verification === "REFUSED"
+                ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+          }`}>
+            {verification === "VERIFIED" ? "Independently verified" : verification === "FAILED" || verification === "REFUSED" ? "Not verified · attention required" : "Verification incomplete"}
+          </span>
+        </div>
         <p className="text-lg font-semibold tracking-tight text-[var(--foreground)] leading-relaxed">
           {answer.answer}
         </p>
+        {integrityFailure && <p className="text-xs leading-relaxed text-rose-300">{integrityFailure}</p>}
       </section>
+
+      {answer.supported && answer.narrative && (
+        <section aria-label="Analysis explanation" className="space-y-3 rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)]/30 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-[var(--foreground)]">{answer.narrative.title}</h3>
+            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/5 px-2 py-0.5 text-[10px] font-medium text-emerald-200">
+              {answer.narrative.supportedClaimCount} evidence-linked {answer.narrative.supportedClaimCount === 1 ? "claim" : "claims"}
+            </span>
+          </div>
+          <p className="text-sm leading-relaxed text-[var(--foreground)]">{answer.narrative.summary}</p>
+          {(answer.narrative.claims[0]?.evidenceRefs.length ?? 0) > 0 && (
+            <p className="text-[10px] text-[var(--muted)]">Evidence: {answer.narrative.claims[0].evidenceRefs.join(", ")}</p>
+          )}
+          {answer.narrative.paragraphs.length > 0 && (
+            <ul className="list-disc space-y-2 pl-5 text-sm leading-relaxed text-[var(--foreground)]">
+              {answer.narrative.paragraphs.map((paragraph, idx) => {
+                const claim = answer.narrative?.claims.find((item) => item.text === paragraph);
+                return (
+                  <li key={`${idx}-${paragraph}`}>
+                    {paragraph}
+                    {claim && claim.evidenceRefs.length > 0 && (
+                      <span className="mt-1 block text-[10px] text-[var(--muted)]">
+                        Evidence: {claim.evidenceRefs.join(", ")}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <p className="text-[10px] leading-relaxed text-[var(--muted)]">
+            This explanation is composed from saved, verified facts. Unsupported narrative claims are withheld; reported associations and arithmetic contributions are not automatically causal explanations.
+          </p>
+        </section>
+      )}
+
+      {/* Execution snapshot: the user should not have to scroll into provenance to see scope. */}
+      {execution && (
+        <section aria-label="Analysis at a glance" className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-[var(--foreground)]">Analysis at a glance</h3>
+              <p className="mt-0.5 text-xs text-[var(--muted)]">Scope and execution facts from the saved run record.</p>
+            </div>
+            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
+              verification === "VERIFIED"
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                : verification === "FAILED" || verification === "REFUSED"
+                  ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                  : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+            }`}>{verification === "VERIFIED" ? "Independently verified" : verification === "FAILED" || verification === "REFUSED" ? "Not verified · attention required" : "Verification incomplete"}</span>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              { label: "Dataset", value: display(executedDataset?.name) },
+              { label: "Rows in scope", value: exactCount(execution.population_row_count) },
+              { label: "Returned rows / groups", value: exactCount(execution.result_row_count) },
+              { label: "Metric", value: `${display(execution.aggregation)} · ${display(execution.target_column)}` },
+              ...(record(execution.denominator) ? [{ label: "Denominator", value: `${display(record(execution.denominator)?.kind)} · ${display(record(execution.denominator)?.value)}` }] : []),
+            ].map((item) => (
+              <div key={item.label} className="min-w-0 rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)]/60 p-3.5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-2)]">{item.label}</div>
+                <div className="mt-1.5 break-words text-sm font-semibold text-[var(--foreground)]">{item.value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)]/40 px-4 py-3 text-xs">
+            <div className="font-semibold text-[var(--foreground)]">Population filter</div>
+            <p className="mt-1 break-words leading-relaxed text-[var(--muted)]">{filterDisplay(execution.filters)}</p>
+            {execution.time_range !== undefined && execution.time_range !== null && (
+              <p className="mt-1 text-[var(--muted)]">Date range: {timeRangeDisplay(execution.time_range)}</p>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* 2. Key Result Metric Banner */}
       {answer.supported && keyResultInfo.mainValue && (
@@ -535,6 +690,30 @@ export default function StructuredAnalysisAnswer({
               {keyResultInfo.mainValueSub}
             </div>
           )}
+        </section>
+      )}
+
+      {answer.supported && answer.charts.length > 0 && (
+        <section aria-label="Visualizations" className="space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold text-[var(--foreground)]">Visualizations</h3>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">Charts are selected from the verified, persisted analytical outputs. They do not replace the statistical evidence.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-3">
+            {answer.charts.map((chart, index) => (
+              <PlotlyChart key={`${chart.chart_id}-${index}`} spec={chart} height={320} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {answer.interpreted.length > 0 && (
+        <section aria-label="What MindEd interpreted" className="rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)]/40 p-4 space-y-2">
+          <h3 className="text-sm font-semibold text-[var(--foreground)]">What MindEd interpreted</h3>
+          <p className="text-xs text-[var(--muted)]">This describes the question and recorded analytical specification. The execution record below separately shows what actually ran.</p>
+          <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-[var(--muted)]">
+            {answer.interpreted.map((item, idx) => <li key={idx}>{item}</li>)}
+          </ul>
         </section>
       )}
 
@@ -618,9 +797,10 @@ export default function StructuredAnalysisAnswer({
             <div><dt className="font-semibold">Grouping executed</dt><dd>{display(execution.grouping_columns)}</dd></div>
             <div><dt className="font-semibold">Filters executed</dt><dd>{display(execution.filters)}</dd></div>
             <div><dt className="font-semibold">Date range executed</dt><dd>{display(execution.time_range)}</dd></div>
-            <div><dt className="font-semibold">Rows in executed scope</dt><dd>{display(execution.population_row_count)}</dd></div>
-            <div><dt className="font-semibold">Result rows / groups</dt><dd>{display(execution.result_row_count)}</dd></div>
+            <div><dt className="font-semibold">Rows in executed scope</dt><dd>{exactCount(execution.population_row_count)}</dd></div>
+            <div><dt className="font-semibold">Result rows / groups</dt><dd>{exactCount(execution.result_row_count)}</dd></div>
           </dl>
+          {record(execution.contract_reconciliation) && <details><summary className="cursor-pointer text-xs font-semibold">Contract-to-execution checks</summary><pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{JSON.stringify(execution.contract_reconciliation, null, 2)}</pre></details>}
           {typeof execution.sql === "string" && <details><summary className="cursor-pointer text-xs font-semibold">SQL actually executed</summary><pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{execution.sql}</pre></details>}
           {record(execution.execution_specification) && <details><summary className="cursor-pointer text-xs font-semibold">Executed specification</summary><pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{JSON.stringify(execution.execution_specification, null, 2)}</pre></details>}
           {approvedContract && <details><summary className="cursor-pointer text-xs font-semibold">Approved plan (separate from execution)</summary><pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{JSON.stringify(approvedContract, null, 2)}</pre></details>}
@@ -742,10 +922,10 @@ export default function StructuredAnalysisAnswer({
             disabled={isSubmittingReview}
             onClick={() => handleReviewAction("ACCEPT")}
             className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
-            title="Accept this result for your workflow. Does not override machine verification."
+            title={cumulativeReportMode ? "Accept this verified result as a section in the current analysis report." : "Accept this result for your workflow. Does not override machine verification."}
           >
             <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>Accept for Workflow</span>
+            <span>{cumulativeReportMode ? "Accept & Add to Report" : "Accept for Workflow"}</span>
           </button>
 
           <button

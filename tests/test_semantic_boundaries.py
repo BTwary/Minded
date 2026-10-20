@@ -69,7 +69,7 @@ def test_case_01_clear_ranking_by_category(single_revenue_df):
     assert res.can_auto_proceed is True
     assert res.target_metric == "revenue"
     assert res.group_dimension == "sales_rep"
-    assert "SUM(revenue)" in res.planned_calculation
+    assert 'SUM("revenue")' in res.planned_calculation
 
 
 def test_case_02_clear_ranking_by_territory(single_revenue_df):

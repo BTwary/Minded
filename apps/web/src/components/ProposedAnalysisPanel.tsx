@@ -13,8 +13,11 @@ import {
   HelpCircle,
   Layers,
   Play,
+  Plus,
   RotateCcw,
   ShieldAlert,
+  Trash2,
+  Info,
   Sparkles,
   TableProperties,
 } from "lucide-react";
@@ -23,8 +26,12 @@ import { PreAnalysisPlan } from "../lib/api";
 interface ProposedAnalysisPanelProps {
   plan: PreAnalysisPlan;
   availableDatasets?: Array<{ id: string; name: string }>;
+  availableColumns?: string[];
   availableNumericCols?: string[];
   availableCategoricalCols?: string[];
+  availableBooleanCols?: string[];
+  /** Fingerprint of the guidance that has already been applied to the visible preview. */
+  previewedGuidanceKey?: string;
   onConfirmAndRun: (customizedPlan: {
     selected_metric?: string;
     selected_aggregation?: string;
@@ -78,28 +85,186 @@ function saveSaved(question: string, value: { metric?: string; aggregation?: str
   }
 }
 
+type CanonicalFilterCondition = {
+  column?: string;
+  operator?: string;
+  value?: unknown;
+};
+
+function contractFilters(plan: PreAnalysisPlan): CanonicalFilterCondition[] {
+  const contract = plan.canonical_contract as { filter_conditions?: unknown } | null | undefined;
+  if (!Array.isArray(contract?.filter_conditions)) return [];
+  return contract.filter_conditions.filter(
+    (item): item is CanonicalFilterCondition =>
+      Boolean(item && typeof item === "object" &&
+        typeof (item as CanonicalFilterCondition).column === "string" &&
+        typeof (item as CanonicalFilterCondition).operator === "string")
+  );
+}
+
+function displayFilter(filter: CanonicalFilterCondition): string {
+  const column = filter.column || "<unknown column>";
+  const operator = (filter.operator || "").toUpperCase();
+  if (operator === "IS NULL" || operator === "IS NOT NULL") return `${column} ${operator}`;
+  const quote = (item: unknown): string => typeof item === "string" ? `'${item.replace(/'/g, "''")}'` : item === null || item === undefined ? "NULL" : String(item);
+  const value = operator === "BETWEEN" && Array.isArray(filter.value) && filter.value.length === 2
+    ? `${quote(filter.value[0])} AND ${quote(filter.value[1])}`
+    : Array.isArray(filter.value)
+      ? `(${filter.value.map(quote).join(", ")})`
+      : quote(filter.value);
+  return `${column} ${operator} ${value}`;
+}
+
+function sqlIdentifier(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function sqlFilter(filter: CanonicalFilterCondition): string {
+  const column = sqlIdentifier(filter.column || "unknown");
+  const operator = (filter.operator || "").toUpperCase();
+  if (operator === "IS NULL" || operator === "IS NOT NULL") return `${column} ${operator}`;
+  const literal = (value: unknown): string => {
+    if (value === null || value === undefined) return "NULL";
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    return `'${String(value).replace(/'/g, "''")}'`;
+  };
+  if ((operator === "IN" || operator === "NOT IN") && Array.isArray(filter.value)) {
+    return `${column} ${operator} (${filter.value.map(literal).join(", ")})`;
+  }
+  if (operator === "BETWEEN" && Array.isArray(filter.value) && filter.value.length === 2) {
+    return `${column} BETWEEN ${literal(filter.value[0])} AND ${literal(filter.value[1])}`;
+  }
+  return `${column} ${operator} ${literal(filter.value)}`;
+}
+
+type FilterOperator = "=" | "!=" | ">" | ">=" | "<" | "<=" | "IN" | "NOT IN" | "BETWEEN" | "IS NULL" | "IS NOT NULL";
+type EditableFilter = { id: string; column: string; operator: FilterOperator; value: string };
+const FILTER_OPERATORS: Array<{ value: FilterOperator; label: string }> = [
+  { value: "=", label: "is" },
+  { value: "!=", label: "is not" },
+  { value: ">", label: "greater than" },
+  { value: ">=", label: "at least" },
+  { value: "<", label: "less than" },
+  { value: "<=", label: "at most" },
+  { value: "IN", label: "is one of" },
+  { value: "NOT IN", label: "is not one of" },
+  { value: "BETWEEN", label: "is between" },
+  { value: "IS NULL", label: "is empty / NULL" },
+  { value: "IS NOT NULL", label: "is not empty / NULL" },
+];
+
+function quoteSqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function compileEditableFilters(
+  rows: EditableFilter[],
+  availableColumns: string[],
+  numericColumns: string[],
+  booleanColumns: string[],
+): { sql: string | null; error: string | null } {
+  const active = rows.filter((row) => Boolean(row.column.trim() || row.value.trim() || row.operator !== "="));
+  if (!active.length) return { sql: null, error: null };
+  const allowed = new Set(availableColumns.map((value) => value.trim().toLowerCase()));
+  const numeric = new Set(numericColumns.map((value) => value.toLowerCase()));
+  const booleans = new Set(booleanColumns.map((value) => value.toLowerCase()));
+  const compiled: string[] = [];
+  for (let index = 0; index < active.length; index += 1) {
+    const row = active[index];
+    const column = row.column.trim();
+    const op = row.operator;
+    if (!column) return { sql: null, error: `Choose a column for filter ${index + 1}.` };
+    if (!allowed.has(column.toLowerCase())) {
+      return { sql: null, error: `Column '${column}' is not available in the selected dataset. Refresh the dataset preview and choose a listed column.` };
+    }
+    if (op === "IS NULL" || op === "IS NOT NULL") {
+      compiled.push(`${sqlIdentifier(column)} ${op}`);
+      continue;
+    }
+    if (!row.value.trim()) return { sql: null, error: `Enter a value for filter ${index + 1}.` };
+    const parts = op === "IN" || op === "NOT IN" || op === "BETWEEN"
+      ? row.value.split(",").map((value) => value.trim())
+      : [row.value.trim()];
+    if (parts.some((value) => !value)) return { sql: null, error: `Filter ${index + 1} contains an empty value.` };
+    if (op === "BETWEEN" && parts.length !== 2) return { sql: null, error: `Filter ${index + 1}: enter exactly two values separated by a comma for BETWEEN.` };
+    if ((op === "IN" || op === "NOT IN") && parts.length < 1) return { sql: null, error: `Filter ${index + 1} requires at least one list value.` };
+    const isNumeric = numeric.has(column.toLowerCase());
+    const isBoolean = booleans.has(column.toLowerCase());
+    if (isBoolean) {
+      if ((op !== "=" && op !== "!=" && op !== "IN" && op !== "NOT IN") || parts.some((value) => !/^(true|false)$/i.test(value))) {
+        return { sql: null, error: `Boolean column '${column}' accepts true/false with is, is not, is one of, or is not one of.` };
+      }
+    }
+    if (isNumeric && parts.some((value) => !/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/.test(value))) {
+      return { sql: null, error: `Numeric column '${column}' requires a numeric value.` };
+    }
+    if (op === "BETWEEN" && isNumeric && Number(parts[0]) > Number(parts[1])) {
+      return { sql: null, error: `Filter ${index + 1}: the lower BETWEEN bound must not exceed the upper bound.` };
+    }
+    const literal = (value: string) => {
+      if (isNumeric) return value;
+      if (isBoolean) return value.toLowerCase();
+      return quoteSqlLiteral(value);
+    };
+    if (op === "IN" || op === "NOT IN") {
+      compiled.push(`${sqlIdentifier(column)} ${op} (${parts.map(literal).join(", ")})`);
+    } else if (op === "BETWEEN") {
+      compiled.push(`${sqlIdentifier(column)} BETWEEN ${literal(parts[0])} AND ${literal(parts[1])}`);
+    } else {
+      compiled.push(`${sqlIdentifier(column)} ${op} ${literal(parts[0])}`);
+    }
+  }
+  return { sql: compiled.join(" AND "), error: null };
+}
+
 export default function ProposedAnalysisPanel({
   plan,
   availableDatasets = [],
+  availableColumns = [],
   availableNumericCols = [],
   availableCategoricalCols = [],
+  availableBooleanCols = [],
+  previewedGuidanceKey = "",
   onConfirmAndRun,
   onCancel,
   isRunning = false,
 }: ProposedAnalysisPanelProps) {
   const saved = useMemo(() => (typeof window === "undefined" ? {} : loadSaved(plan.question || "")), [plan.question]);
+  const contract = (plan.canonical_contract || {}) as Record<string, any>;
+  const retainedGuidance = plan.guidance_context || {};
+  const contractMetric = typeof contract.target_column === "string" ? contract.target_column : undefined;
+  const contractGroup = Array.isArray(contract.grouping_columns) ? contract.grouping_columns[0] : undefined;
+  const contractAggRaw = String(contract.requested_aggregation || "").toUpperCase();
+  const contractAgg = ({ MEAN: "AVG", AVERAGE: "AVG", TOTAL: "SUM", ROW_COUNT: "COUNT" } as Record<string, string>)[contractAggRaw] || contractAggRaw;
+  // Session values are only safe to restore from an earlier run when this question's current
+  // canonical preview is executable. Otherwise stale selections can masquerade as parsed intent.
+  const canRestoreSavedParameters = plan.ambiguity_status === "CLEAR";
+  const savedMetric = canRestoreSavedParameters ? saved.metric : undefined;
+  const savedAggregation = canRestoreSavedParameters ? saved.aggregation : undefined;
+  const savedGroup = canRestoreSavedParameters ? saved.group : undefined;
   const [selectedMetric, setSelectedMetric] = useState<string>(
-    saved.metric ?? (plan.target_metric || (availableNumericCols[0] ?? ""))
+    retainedGuidance.selected_metric ?? contractMetric ?? plan.target_metric ?? savedMetric ?? ""
   );
   const initialAgg = useMemo(() => inferAggregation(plan.question || ""), [plan.question]);
+  const hasExplicitAggregation = /\b(total|sum|average|avg|mean|median|minimum|min|maximum|max|count|distinct|unique)\b/i.test(plan.question || "");
 
-  const [selectedAggregation, setSelectedAggregation] = useState<string>(saved.aggregation ?? initialAgg);
-  const [selectedGroup, setSelectedGroup] = useState<string>(
-    saved.group ?? (plan.group_dimension || (availableCategoricalCols[0] ?? ""))
+  const [selectedAggregation, setSelectedAggregation] = useState<string>(
+    retainedGuidance.selected_aggregation ?? (contractAgg || (!hasExplicitAggregation ? savedAggregation : undefined) || initialAgg)
   );
-  const [metricTouched, setMetricTouched] = useState(saved.metric !== undefined);
-  const [aggregationTouched, setAggregationTouched] = useState(saved.aggregation !== undefined);
-  const [groupTouched, setGroupTouched] = useState(saved.group !== undefined);
+  const [selectedGroup, setSelectedGroup] = useState<string>(
+    retainedGuidance.selected_group_dimension ?? contractGroup ?? plan.group_dimension ?? savedGroup ?? ""
+  );
+  // A prior edit may be restored only when the current canonical preview has no resolved
+  // value for that slot. Resolved question intent must win over sessionStorage from an older run.
+  const [metricTouched, setMetricTouched] = useState(
+    Boolean(retainedGuidance.selected_metric) || (!contractMetric && !plan.target_metric && canRestoreSavedParameters && saved.metric !== undefined)
+  );
+  const [aggregationTouched, setAggregationTouched] = useState(
+    Boolean(retainedGuidance.selected_aggregation) || (!contractAgg && !hasExplicitAggregation && canRestoreSavedParameters && saved.aggregation !== undefined)
+  );
+  const [groupTouched, setGroupTouched] = useState(
+    Boolean(retainedGuidance.selected_group_dimension) || (!contractGroup && !plan.group_dimension && canRestoreSavedParameters && saved.group !== undefined)
+  );
   React.useEffect(() => {
     const v: { metric?: string; aggregation?: string; group?: string } = {};
     if (metricTouched) v.metric = selectedMetric;
@@ -107,16 +272,50 @@ export default function ProposedAnalysisPanel({
     if (groupTouched) v.group = selectedGroup;
     if (Object.keys(v).length) saveSaved(plan.question || "", v);
   }, [metricTouched, aggregationTouched, groupTouched, selectedMetric, selectedAggregation, selectedGroup, plan.question]);
-  const [selectedDataset, setSelectedDataset] = useState("");
-  const [selectedScope, setSelectedScope] = useState<string>("ALL");
-  const [customFilter, setCustomFilter] = useState<string>("");
-  // Invariant: For ambiguous plans, do not silently pre-select an option; require explicit human decision.
-  const [selectedClarificationOption, setSelectedClarificationOption] = useState<string>("");
-  const [selectedClarificationPatch, setSelectedClarificationPatch] = useState<Record<string, unknown> | undefined>(undefined);
-  const [customInstruction, setCustomInstruction] = useState<string>("");
+  const [selectedDataset, setSelectedDataset] = useState<string>(retainedGuidance.selected_dataset || "");
+  const [selectedScope, setSelectedScope] = useState<string>(retainedGuidance.scope_filter ? "CUSTOM" : "ALL");
+  const [scopeTouched, setScopeTouched] = useState<boolean>(Boolean(retainedGuidance.scope_filter));
+  const [customFilter, setCustomFilter] = useState<string>(retainedGuidance.scope_filter || "");
+  const [filterMode, setFilterMode] = useState<"builder" | "sql">(retainedGuidance.scope_filter ? "sql" : "builder");
+  const availableFilterColumns = useMemo(
+    () => Array.from(new Set([...(availableColumns || []), ...availableCategoricalCols, ...availableNumericCols, ...availableBooleanCols])),
+    [availableColumns, availableCategoricalCols, availableNumericCols, availableBooleanCols],
+  );
+  const [filterRows, setFilterRows] = useState<EditableFilter[]>([{
+    id: "filter-1",
+    column: "",
+    operator: "=",
+    value: "",
+  }]);
+  // The user picks the column; defaulting to the first one (usually an ID) invites a wrong filter.
+  // Errors for an untouched, empty builder are not shown: only after the user starts editing.
+  const [filterTouched, setFilterTouched] = useState(false);
+  const filterRowsInitialRef = React.useRef(true);
+  React.useEffect(() => {
+    if (filterRowsInitialRef.current) { filterRowsInitialRef.current = false; return; }
+    setFilterTouched(true);
+  }, [filterRows, customFilter]);
+  const filterBuilderResult = useMemo(
+    () => compileEditableFilters(filterRows, availableFilterColumns, availableNumericCols, availableBooleanCols),
+    [filterRows, availableFilterColumns, availableNumericCols, availableBooleanCols],
+  );
+  const activeCustomFilter = filterMode === "builder" ? filterBuilderResult.sql : customFilter.trim();
+  const customFilterError = filterMode === "builder"
+    ? (filterBuilderResult.error || (!filterBuilderResult.sql ? "Add at least one complete filter condition, or return to the full question scope." : null))
+    : (!customFilter.trim() ? "Enter a SQL filter expression before running this subset." : null);
+  // Once a decision has been applied to a refreshed preview, keep the decision itself.
+  // Otherwise the panel remount clears the radio choice and every subsequent click re-previews
+  // an uncorrected plan instead of ever reaching execution.
+  const [selectedClarificationOption, setSelectedClarificationOption] = useState<string>(
+    retainedGuidance.clarification_response || ""
+  );
+  const [selectedClarificationPatch, setSelectedClarificationPatch] = useState<Record<string, unknown> | undefined>(
+    retainedGuidance.intent_patch
+  );
+  const [customInstruction, setCustomInstruction] = useState<string>(retainedGuidance.custom_instruction || "");
+  const questionFilters = useMemo(() => contractFilters(plan), [plan]);
   const [showSql, setShowSql] = useState<boolean>(true);
   const [showAssumptions, setShowAssumptions] = useState<boolean>(true);
-  const [assumptionsAcknowledged, setAssumptionsAcknowledged] = useState<boolean>(false);
 
   const isAmbiguous = plan.ambiguity_status !== "CLEAR";
   const hasFreeformResolution = Boolean(customInstruction.trim());
@@ -124,12 +323,16 @@ export default function ProposedAnalysisPanel({
     (metricTouched && Boolean(selectedMetric.trim())) ||
     (groupTouched && Boolean(selectedGroup.trim())) ||
     Boolean(selectedDataset);
+  const hasScopeResolution =
+    scopeTouched ||
+    (selectedScope === "CUSTOM" && Boolean(customFilter.trim()));
   const isDecisionRequiredAndMissing =
     isAmbiguous &&
     plan.clarification_options.length > 0 &&
     !selectedClarificationOption &&
     !hasFreeformResolution &&
-    !hasStructuredResolution;
+    !hasStructuredResolution &&
+    !hasScopeResolution;
 
   // Detect contradictory / invalid selections: SUM/AVG on categorical field
   const isMetricCategorical = useMemo(() => {
@@ -141,31 +344,46 @@ export default function ProposedAnalysisPanel({
   const isInvalidCombination = useMemo(() => {
     return isMetricCategorical && ["SUM", "AVG", "MEDIAN", "MIN", "MAX"].includes(selectedAggregation);
   }, [isMetricCategorical, selectedAggregation]);
+  const duplicateScopeInstruction =
+    selectedScope === "CUSTOM" &&
+    activeCustomFilter != null &&
+    activeCustomFilter.trim().replace(/\s+/g, " ").toLowerCase() ===
+      customInstruction.trim().replace(/\s+/g, " ").toLowerCase();
 
-  // Dynamically derive the planned calculation SQL preview
+  // Show the backend's canonical plan verbatim until the analyst changes a parameter.
+  // If the analyst edits the plan, keep every question-derived predicate in the displayed
+  // calculation and add custom scope as an additional AND condition (the resolver does the same).
   const derivedCalculation = useMemo(() => {
+    const hasParameterEdits = metricTouched || aggregationTouched || groupTouched;
+    if (!hasParameterEdits && selectedScope !== "CUSTOM" && plan.planned_calculation) {
+      return plan.planned_calculation;
+    }
     const metric = selectedMetric.trim();
     const group = selectedGroup.trim();
     const agg = selectedAggregation.toUpperCase();
-    const filterClause = selectedScope === "CUSTOM" && customFilter.trim() ? `WHERE ${customFilter.trim()}` : "";
+    const filters = questionFilters.map(sqlFilter);
+    if (selectedScope === "CUSTOM" && activeCustomFilter) {
+      const rawFilter = activeCustomFilter.trim().replace(/^where\s+/i, "");
+      filters.push(`(${rawFilter})`);
+    }
+    const filterClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
     let selectExpr = "";
     if (agg === "COUNT") {
-      // Row count: COUNT(*) preserves all rows including records where a dimension or metric is null
       selectExpr = "COUNT(*) AS observation_count";
     } else if (agg === "COUNT_DISTINCT") {
-      selectExpr = `COUNT(DISTINCT ${metric || "*"}) AS distinct_count`;
+      selectExpr = `COUNT(DISTINCT ${metric ? sqlIdentifier(metric) : "*"}) AS distinct_count`;
     } else {
-      selectExpr = `${agg}(${metric || "*"}) AS metric_val`;
+      selectExpr = `${agg}(${metric ? sqlIdentifier(metric) : "*"}) AS metric_val`;
     }
 
     if (group) {
+      const groupSql = sqlIdentifier(group);
       const orderCol = agg === "COUNT" ? "observation_count" : agg === "COUNT_DISTINCT" ? "distinct_count" : "metric_val";
-      return `SELECT ${group}, ${selectExpr}\nFROM data\n${filterClause ? filterClause + "\n" : ""}GROUP BY ${group}\nORDER BY ${orderCol} DESC;`;
-    } else {
-      return `SELECT ${selectExpr}\nFROM data${filterClause ? "\n" + filterClause : ""};`;
+      return `SELECT ${groupSql}, ${selectExpr}\nFROM data\n${filterClause ? filterClause + "\n" : ""}GROUP BY ${groupSql}\nORDER BY ${orderCol} DESC;`;
     }
-  }, [selectedMetric, selectedAggregation, selectedGroup, selectedScope, customFilter]);
+    return `SELECT ${selectExpr}\nFROM data${filterClause ? "\n" + filterClause : ""};`;
+  }, [selectedMetric, selectedAggregation, selectedGroup, selectedScope, activeCustomFilter, metricTouched, aggregationTouched, groupTouched, questionFilters, plan.planned_calculation]);
 
   // Dynamically derive the active assumptions
   const derivedAssumptions = useMemo(() => {
@@ -188,10 +406,15 @@ export default function ProposedAnalysisPanel({
       list.push(`Grouping: overall (no group dimension)`);
     }
 
-    if (selectedScope === "CUSTOM" && customFilter.trim()) {
-      list.push(`Scope filter: ${customFilter.trim()}`);
+    for (const filter of questionFilters) {
+      list.push(`Question filter (preserved): ${displayFilter(filter)}`);
+    }
+    if (selectedScope === "CUSTOM" && activeCustomFilter) {
+      list.push(`Additional scope filter: ${activeCustomFilter}`);
+    } else if (questionFilters.length) {
+      list.push("Scope: Keep the population filters stated in your question; no additional UI filter.");
     } else {
-      list.push(`Scope: All available records without filtering`);
+      list.push("Scope: All available records; no additional filter selected.");
     }
 
     // Preserve any existing boundary assumptions from the backend
@@ -201,7 +424,17 @@ export default function ProposedAnalysisPanel({
       }
     }
     return list;
-  }, [selectedMetric, selectedAggregation, selectedGroup, selectedScope, customFilter, plan.assumptions]);
+  }, [selectedMetric, selectedAggregation, selectedGroup, selectedScope, activeCustomFilter, plan.assumptions, questionFilters]);
+
+  const retainedConfirmedAssumptions = Array.isArray(retainedGuidance.confirmed_assumptions)
+    ? retainedGuidance.confirmed_assumptions
+    : [];
+  // Do not carry an acknowledgement forward if a corrected interpretation changed its
+  // assumptions. That requires the analyst to review the new parameter list again.
+  const [assumptionsAcknowledged, setAssumptionsAcknowledged] = useState<boolean>(
+    retainedConfirmedAssumptions.length > 0 &&
+    JSON.stringify(retainedConfirmedAssumptions) === JSON.stringify(derivedAssumptions)
+  );
 
   const getStatusBadge = () => {
     switch (plan.ambiguity_status) {
@@ -246,8 +479,7 @@ export default function ProposedAnalysisPanel({
 
   const badge = getStatusBadge();
 
-  const handleRun = () => {
-    if (isDecisionRequiredAndMissing) return;
+  const buildGuidancePayload = () => {
     const freeformSubmitted = Boolean(customInstruction.trim());
     const selectedOptionIndex = plan.clarification_options.indexOf(selectedClarificationOption);
     const selectedOptionPatch = freeformSubmitted
@@ -257,9 +489,9 @@ export default function ProposedAnalysisPanel({
         : selectedClarificationPatch;
     const ledger = (plan.canonical_contract as { intent_ledger?: Array<{ slot?: string; status?: string }> } | null | undefined)?.intent_ledger || [];
     const pendingIntentSlot = freeformSubmitted
-      ? plan.pending_intent_slot || ledger.find((item) => item.status === "UNRESOLVED" && item.slot)?.slot
+      ? retainedGuidance.pending_intent_slot || plan.pending_intent_slot || ledger.find((item) => item.status === "UNRESOLVED" && item.slot)?.slot
       : undefined;
-    onConfirmAndRun({
+    return {
       // Defaults shown in controls are not user intent. Only send a field after the analyst
       // actually edits it; unresolved defaults must not become accidental semantic patches.
       selected_metric: metricTouched ? selectedMetric.trim() || undefined : undefined,
@@ -267,11 +499,29 @@ export default function ProposedAnalysisPanel({
       selected_group_dimension: groupTouched ? selectedGroup.trim() || undefined : undefined,
       selected_dataset: selectedDataset || undefined,
       confirmed_assumptions: assumptionsAcknowledged ? derivedAssumptions : [],
-      scope_filter: selectedScope === "CUSTOM" && customFilter.trim() ? customFilter.trim() : undefined,
+      scope_filter: selectedScope === "CUSTOM" ? activeCustomFilter || undefined : undefined,
       clarification_response: selectedClarificationOption || undefined,
       custom_instruction: customInstruction.trim() || undefined,
       intent_patch: selectedOptionPatch,
       pending_intent_slot: pendingIntentSlot,
+    };
+  };
+
+  const fingerprintGuidance = (fields: Record<string, unknown>) => {
+    const entries = Object.entries(fields).filter(([, value]) =>
+      value !== undefined && value !== null && value !== "" && !(Array.isArray(value) && value.length === 0)
+    ).sort(([left], [right]) => left.localeCompare(right));
+    return entries.length ? JSON.stringify(Object.fromEntries(entries)) : "";
+  };
+  const guidanceNeedsPreview = fingerprintGuidance(buildGuidancePayload()) !== previewedGuidanceKey;
+  const canRunCurrentPlan = plan.can_auto_proceed && plan.ambiguity_status === "CLEAR";
+
+  const handleRun = () => {
+    if (isDecisionRequiredAndMissing || isInvalidCombination || duplicateScopeInstruction) return;
+    if (!guidanceNeedsPreview && !canRunCurrentPlan) return;
+    if (selectedScope === "CUSTOM" && (!activeCustomFilter || customFilterError)) return;
+    onConfirmAndRun({
+      ...buildGuidancePayload(),
       plan_hash: plan.plan_hash || undefined,
     });
   };
@@ -398,10 +648,13 @@ export default function ProposedAnalysisPanel({
           {showSql ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
         </button>
         {showSql && (
-          <div className="p-3 border-t border-slate-800/80 bg-slate-950">
-            <pre className="text-[11px] font-mono text-emerald-300 whitespace-pre-wrap break-all">
+          <div className="p-3 border-t border-slate-800/80 bg-slate-950 space-y-2">
+            <pre className="text-[11px] font-mono text-emerald-300 whitespace-pre-wrap break-words">
               {derivedCalculation}
             </pre>
+            <p className="text-[10px] leading-relaxed text-slate-500">
+              This is the proposed calculation preview, not a claim that execution has succeeded. The saved execution record and verification result are authoritative after you run it.
+            </p>
           </div>
         )}
       </div>
@@ -475,35 +728,159 @@ export default function ProposedAnalysisPanel({
           <div className="flex flex-wrap gap-2 text-xs">
             <button
               type="button"
-              onClick={() => setSelectedScope("ALL")}
+              onClick={() => {
+                setSelectedScope("ALL");
+                setScopeTouched(true);
+              }}
               className={`px-3 py-1.5 rounded-lg border text-xs transition ${
                 selectedScope === "ALL"
                   ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200 font-medium"
                   : "border-slate-800 bg-slate-900 text-slate-400 hover:text-white"
               }`}
             >
-              All available records
+              {questionFilters.length ? "Keep question-defined scope" : "All available records"}
             </button>
             <button
               type="button"
-              onClick={() => setSelectedScope("CUSTOM")}
+              onClick={() => {
+                setSelectedScope("CUSTOM");
+                setScopeTouched(true);
+              }}
               className={`px-3 py-1.5 rounded-lg border text-xs transition ${
                 selectedScope === "CUSTOM"
                   ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200 font-medium"
                   : "border-slate-800 bg-slate-900 text-slate-400 hover:text-white"
               }`}
             >
-              Specific filter subset
+              {questionFilters.length ? "Add a filter" : "Specific filter subset"}
             </button>
           </div>
           {selectedScope === "CUSTOM" && (
-            <input
-              type="text"
-              value={customFilter}
-              onChange={(e) => setCustomFilter(e.target.value)}
-              placeholder="e.g. region = 'West'"
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 mt-2 font-mono"
-            />
+            <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold text-white">Additional filter conditions</div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+                    Each condition is checked against the loaded dataset columns. Conditions are combined with AND; your question's filters remain in place.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFilterMode(filterMode === "builder" ? "sql" : "builder")}
+                  className="rounded-lg border border-slate-700 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-200 hover:border-cyan-500/50"
+                >
+                  {filterMode === "builder" ? "Advanced SQL expression" : "Use filter builder"}
+                </button>
+              </div>
+
+              {filterMode === "builder" ? (
+                <div className="space-y-2.5">
+                  {availableFilterColumns.length === 0 ? (
+                    <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-950/20 p-3 text-xs text-amber-200">
+                      Dataset columns are not available for a safe filter builder. Reload the dataset preview or use the advanced expression after confirming column names.
+                    </div>
+                  ) : filterRows.map((row, index) => (
+                    <div key={row.id} className="grid grid-cols-1 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.2fr)_auto] gap-2 items-center">
+                      <label className="sr-only" htmlFor={`filter-column-${row.id}`}>Filter column {index + 1}</label>
+                      <select
+                        id={`filter-column-${row.id}`}
+                        value={row.column}
+                        onChange={(event) => {
+                          const column = event.target.value;
+                          setFilterRows((rows) => rows.map((item) => item.id === row.id ? { ...item, column } : item));
+                          setScopeTouched(true);
+                        }}
+                        className="min-w-0 w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value="">Choose column…</option>
+                        {availableFilterColumns.map((column) => <option key={column} value={column}>{column}</option>)}
+                      </select>
+                      <label className="sr-only" htmlFor={`filter-operator-${row.id}`}>Filter operator {index + 1}</label>
+                      <select
+                        id={`filter-operator-${row.id}`}
+                        value={row.operator}
+                        onChange={(event) => {
+                          const operator = event.target.value as FilterOperator;
+                          // Keep the entered value when switching to a null operator so changing
+                          // back does not silently erase the analyst's previous filter value.
+                          setFilterRows((rows) => rows.map((item) => item.id === row.id ? { ...item, operator } : item));
+                          setScopeTouched(true);
+                        }}
+                        className="min-w-0 w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+                      >
+                        {FILTER_OPERATORS.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}
+                      </select>
+                      {row.operator === "IS NULL" || row.operator === "IS NOT NULL" ? (
+                        <div className="rounded-lg border border-dashed border-slate-800 px-3 py-2 text-xs text-slate-500">No value needed</div>
+                      ) : (
+                        <>
+                          <label className="sr-only" htmlFor={`filter-value-${row.id}`}>Filter value {index + 1}</label>
+                          <input
+                            id={`filter-value-${row.id}`}
+                            value={row.value}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setFilterRows((rows) => rows.map((item) => item.id === row.id ? { ...item, value } : item));
+                              setScopeTouched(true);
+                            }}
+                            placeholder={row.operator === "IN" || row.operator === "NOT IN" ? "Values separated by commas" : availableNumericCols.includes(row.column) ? "Enter a number" : "Enter a value"}
+                            inputMode={availableNumericCols.includes(row.column) && !["IN", "NOT IN"].includes(row.operator) ? "decimal" : "text"}
+                            className="min-w-0 w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                          />
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        disabled={filterRows.length === 1}
+                        onClick={() => setFilterRows((rows) => rows.filter((item) => item.id !== row.id))}
+                        title="Remove filter condition"
+                        aria-label={`Remove filter condition ${index + 1}`}
+                        className="inline-flex items-center justify-center rounded-lg border border-slate-800 p-2 text-slate-400 hover:border-rose-500/50 hover:text-rose-300 disabled:opacity-30"
+                      ><Trash2 className="h-3.5 w-3.5" /></button>
+                    </div>
+                  ))}
+                  {availableFilterColumns.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFilterRows((rows) => [...rows, { id: `filter-${Date.now()}-${rows.length}`, column: availableFilterColumns[0], operator: "=", value: "" }])}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-cyan-200 hover:border-cyan-500/50"
+                    ><Plus className="h-3.5 w-3.5" /> Add condition</button>
+                  )}
+                  {customFilterError && filterTouched && (
+                    <p role="alert" className="text-xs text-amber-300">{customFilterError}</p>
+                  )}
+                  {filterBuilderResult.sql && !customFilterError && (
+                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Filter preview · AND logic</div>
+                      <code className="block whitespace-pre-wrap break-words text-[11px] text-emerald-100">{filterBuilderResult.sql}</code>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label htmlFor="advanced-scope-filter" className="block text-[11px] font-semibold text-slate-300">SQL WHERE expression (not a complete SELECT statement)</label>
+                  <textarea
+                    id="advanced-scope-filter"
+                    value={customFilter}
+                    onChange={(event) => {
+                      setCustomFilter(event.target.value);
+                      setScopeTouched(true);
+                    }}
+                    rows={3}
+                    placeholder={questionFilters.length ? "channel = 'Web' AND revenue > 100" : "region = 'West' AND status IN ('Delivered', 'Shipped')"}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono"
+                  />
+                  <div className="flex items-start gap-2 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3 text-[11px] leading-relaxed text-sky-100/90">
+                    <Info className="h-4 w-4 shrink-0 text-sky-300 mt-0.5" />
+                    <p>Use column names from the selected dataset. Supported forms include <code>status = 'Delivered'</code>, <code>revenue &gt;= 100</code>, <code>region IN ('East', 'West')</code>, <code>revenue BETWEEN 100 AND 500</code>, and <code>status IS NOT NULL</code>. Combine conditions with AND. OR, functions, comments, statement separators, qualified columns and unknown columns are rejected rather than guessed.</p>
+                  </div>
+                  {customFilterError && filterTouched && <p role="alert" className="text-xs text-amber-300">{customFilterError}</p>}
+                </div>
+              )}
+              <p className="text-[10px] leading-relaxed text-slate-500">
+                SQL behavior: conditions become a WHERE predicate. AND narrows the population. The builder escapes text literals and quotes column identifiers; the backend validates the expression against the selected dataset before execution. If no rows match, analysis stops rather than dropping the filter.
+              </p>
+            </div>
           )}
         </div>
 
@@ -554,6 +931,12 @@ export default function ProposedAnalysisPanel({
         </div>
       )}
 
+      {duplicateScopeInstruction && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-950/30 p-3.5 text-xs text-amber-200">
+          This expression is already in the scope-filter field. Clear the optional instruction field; it is for additional analytical guidance, not a duplicate filter.
+        </div>
+      )}
+
       {/* Invalid Combination Conflict Warning */}
       {isInvalidCombination && (
         <div className="rounded-xl border border-rose-500/40 bg-rose-950/30 p-3.5 flex items-start space-x-3 text-xs text-rose-300">
@@ -587,10 +970,15 @@ export default function ProposedAnalysisPanel({
               <span>Select an option above to resolve ambiguity</span>
             </span>
           )}
+          {!guidanceNeedsPreview && !canRunCurrentPlan && !isDecisionRequiredAndMissing && (
+            <span role="status" className="max-w-md text-[11px] text-amber-300 font-medium">
+              This preview is still unresolved. Change a parameter or choose a clarification before running.
+            </span>
+          )}
           <button
             type="button"
             onClick={handleRun}
-            disabled={isRunning || isDecisionRequiredAndMissing || isInvalidCombination}
+            disabled={isRunning || isDecisionRequiredAndMissing || isInvalidCombination || duplicateScopeInstruction || (!guidanceNeedsPreview && !canRunCurrentPlan) || (selectedScope === "CUSTOM" && (!activeCustomFilter || Boolean(customFilterError)))}
             className="px-6 py-2.5 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg shadow-cyan-600/30 flex items-center space-x-2 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isRunning ? (
@@ -601,7 +989,7 @@ export default function ProposedAnalysisPanel({
             ) : (
               <>
                 <Play className="w-4 h-4 fill-current" />
-                <span>Run Analysis</span>
+                <span>{guidanceNeedsPreview ? "Apply Decisions & Refresh Preview" : "Confirm & Run Analysis"}</span>
               </>
             )}
           </button>

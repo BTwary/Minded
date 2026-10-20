@@ -45,6 +45,7 @@ export default function DatasetsPage() {
   const [workspaceResetting, setWorkspaceResetting] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"profile" | "data" | "semantic">("profile");
   const [searchQuery, setSearchQuery] = useState("");
   const [loadError, setLoadError] = useState(false);
@@ -228,32 +229,45 @@ export default function DatasetsPage() {
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
     if (workspaceResetting) return;
 
-    setIsUploading(true);
-    const formData = new FormData();
-    formData.append("file", file);
+    const files = Array.from(fileList);
     const targetProject = selectedProjectId || (projects.length > 0 ? projects[0].id : "");
     if (!targetProject) {
       alert("No local project is available yet. Refresh the workspace after local initialization.");
-      setIsUploading(false);
       return;
     }
-    beginWorkspaceUpload();
-    formData.append("project_id", targetProject);
-    formData.append("description", `Uploaded ${file.name}`);
-    formData.append("business_timezone", "UTC");
 
+    setIsUploading(true);
+    beginWorkspaceUpload();
+
+    const errors: string[] = [];
     try {
-      await uploadDatasetFile(formData);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadProgress(`Profiling ${i + 1}/${files.length}: ${file.name}...`);
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("project_id", targetProject);
+        formData.append("description", `Uploaded ${file.name}`);
+        formData.append("business_timezone", "UTC");
+        try {
+          await uploadDatasetFile(formData);
+        } catch (err: any) {
+          errors.push(`${file.name}: ${err?.message || "Failed"}`);
+        }
+      }
+      if (errors.length > 0) {
+        alert(`Some uploads failed:\n${errors.join("\n")}`);
+      }
       await loadAll(targetProject);
-    } catch (err: any) {
-      alert(`Upload failed: ${err.message}`);
     } finally {
       setIsUploading(false);
+      setUploadProgress(null);
       finishWorkspaceUpload();
+      e.target.value = "";
     }
   };
 
@@ -297,9 +311,10 @@ export default function DatasetsPage() {
         )}
         <label className={`cursor-pointer bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-lg shadow-cyan-600/30 flex items-center space-x-2 transition-all ${workspaceResetting ? "opacity-50 pointer-events-none" : ""}`}>
           <UploadCloud className="w-4 h-4" />
-          <span>{isUploading ? "Profiling..." : "Upload New Dataset"}</span>
+          <span>{uploadProgress || (isUploading ? "Profiling..." : "Upload New Dataset")}</span>
           <input
             type="file"
+            multiple
             accept=".csv,.xlsx,.json,.parquet"
             onChange={handleFileUpload}
             disabled={isUploading || workspaceResetting}
@@ -328,9 +343,10 @@ export default function DatasetsPage() {
           </div>
           <label className="cursor-pointer inline-flex items-center space-x-2 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-xs font-semibold px-5 py-2.5 rounded-xl shadow-lg shadow-cyan-500/20 transition-all">
             <UploadCloud className="w-4 h-4" />
-            <span>Select File to Ingest</span>
+            <span>{uploadProgress || "Select File(s) to Ingest"}</span>
             <input
               type="file"
+              multiple
               accept=".csv,.xlsx,.json,.parquet"
               onChange={handleFileUpload}
               disabled={isUploading}

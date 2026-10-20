@@ -160,7 +160,7 @@ def main():
     import argparse
 
     ap = argparse.ArgumentParser(description="Build a clean release source ZIP")
-    ap.add_argument("dest_name", nargs="?", default="MindEd_AAOS_v40_Release1.0_candidate.zip")
+    ap.add_argument("dest_name", nargs="?", default="MindEd_AAOS_v1.0.0_complete_source_candidate.zip")
     ap.add_argument("--profile", choices=PROFILES, default="certification")
     args = ap.parse_args()
     dest = os.path.join(DOWNLOADS_DIR, args.dest_name) if not os.path.isabs(args.dest_name) else args.dest_name

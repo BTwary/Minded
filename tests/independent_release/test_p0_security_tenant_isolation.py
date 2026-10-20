@@ -67,9 +67,21 @@ class TestSSRFSecurityProtection(unittest.TestCase):
         self.assertTrue(is_safe)
 
     def test_allows_legitimate_public_endpoints(self):
-        self.assertTrue(validate_network_endpoint("https://api.openai.com/v1")[0])
-        self.assertTrue(validate_network_endpoint("https://api.anthropic.com/v1")[0])
-        self.assertTrue(validate_network_endpoint("https://s3.amazonaws.com")[0])
+        # Hermetic: resolve to documentation-independent public addresses so the test does not
+        # depend on live DNS (the validator correctly fails closed when a name cannot resolve).
+        import socket
+        from unittest import mock
+        public = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.7.192", 443))]
+        with mock.patch("packages.analytics_core.src.security.ssrf.socket.getaddrinfo", return_value=public):
+            self.assertTrue(validate_network_endpoint("https://api.openai.com/v1")[0])
+            self.assertTrue(validate_network_endpoint("https://api.anthropic.com/v1")[0])
+            self.assertTrue(validate_network_endpoint("https://s3.amazonaws.com")[0])
+
+    def test_unresolvable_hostname_fails_closed(self):
+        import socket
+        from unittest import mock
+        with mock.patch("packages.analytics_core.src.security.ssrf.socket.getaddrinfo", side_effect=socket.gaierror("no dns")):
+            self.assertFalse(validate_network_endpoint("https://api.openai.com/v1")[0])
 
 
 class TestTenantIsolatedBackupAndMigration(unittest.TestCase):

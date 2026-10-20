@@ -237,8 +237,17 @@ def _aggregate_expr(expr: str, columns: set[str]) -> Optional[pl.Expr]:
     return None
 
 
+def _unquote_simple_identifiers(sql: str) -> str:
+    """Strip double quotes around plain identifiers ("revenue" -> revenue), leaving single-quoted
+    string literals untouched. The executor now emits safely quoted identifiers; this recompiler
+    only understands bare ones. Identifiers needing quotes (spaces, punctuation) are left quoted,
+    so those queries still fail closed instead of being mis-recomputed."""
+    parts = re.split(r"('(?:[^']|'')*')", sql)
+    return "".join(part if part.startswith("'") else re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r"\1", part) for part in parts)
+
+
 def execute_known_query(query_sql: str, pl_df: pl.DataFrame) -> Optional[pl.DataFrame]:
-    q = query_sql.strip().rstrip(";").strip()
+    q = _unquote_simple_identifiers(query_sql.strip().rstrip(";").strip())
     m = re.fullmatch(
         r"SELECT\s+(?P<select>.+?)\s+FROM\s+(?P<source>[A-Za-z_]\w*)"
         r"(?:\s+WHERE\s+(?P<where>.+?))?"

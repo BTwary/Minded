@@ -128,7 +128,7 @@ export interface InvestigationDecision {
 export interface ApiErrorBody {
   code?: string;
   message?: string;
-  detail?: string;
+  detail?: unknown;
   details?: unknown;
   request_id?: string;
 }
@@ -234,9 +234,15 @@ async function parseApiError(res: Response): Promise<AAOSApiError> {
     // Response may not contain JSON.
   }
 
+  const detail = body?.detail;
+  const detailMessage = typeof detail === "string"
+    ? detail
+    : detail && typeof detail === "object"
+      ? String((detail as { message?: unknown }).message || JSON.stringify(detail))
+      : "";
   const message =
     body?.message ||
-    body?.detail ||
+    detailMessage ||
     res.statusText ||
     `Request failed with HTTP ${res.status}`;
 
@@ -360,6 +366,7 @@ export async function uploadDatasetFile(formData: FormData) {
 export interface CreateInvestigationInput {
   question: string;
   project_id: string;
+  analysis_session_id?: string;
   dataset_ids?: string[];
   monitoring_event_id?: string;
   selected_metric?: string;
@@ -399,6 +406,8 @@ export interface PreAnalysisPlan {
   canonical_contract?: Record<string, unknown> | null;
   clarification_option_patches?: Array<{ label: string; patch: Record<string, unknown> }>;
   pending_intent_slot?: string | null;
+  /** Client-only copy of structured guidance used to produce this preview. */
+  guidance_context?: InterpretGuidance;
 }
 
 export interface CreateInvestigationResponse {
@@ -435,6 +444,7 @@ export interface InterpretGuidance {
 export async function interpretQuestion(input: {
   question: string;
   project_id: string;
+  analysis_session_id?: string;
   dataset_ids?: string[];
 } & InterpretGuidance): Promise<PreAnalysisPlan> {
   return authFetchJson<PreAnalysisPlan>(`${API_BASE}/investigations/interpret`, {
@@ -445,6 +455,7 @@ export async function interpretQuestion(input: {
     body: JSON.stringify({
       question: input.question.trim(),
       project_id: input.project_id,
+      analysis_session_id: input.analysis_session_id,
       dataset_ids: input.dataset_ids,
       selected_metric: input.selected_metric,
       selected_aggregation: input.selected_aggregation,
@@ -504,6 +515,7 @@ export async function createInvestigation(
     body: JSON.stringify({
       question: input.question.trim(),
       project_id: input.project_id,
+      analysis_session_id: input.analysis_session_id,
       dataset_ids: input.dataset_ids,
       monitoring_event_id: input.monitoring_event_id,
       selected_metric: input.selected_metric,
@@ -551,6 +563,87 @@ export async function listInvestigations(
   return authFetchJson<Investigation[]>(url);
 }
 
+export interface AnalysisSessionQuestion {
+  id: string;
+  question: string;
+  status: string;
+  verdict_type?: string | null;
+  direct_answer?: string | null;
+  main_finding?: string | null;
+  review_status?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  accepted_into_report?: boolean;
+}
+
+export interface AnalysisSession {
+  id: string;
+  project_id: string;
+  title: string;
+  status: "OPEN" | "CLOSED" | string;
+  dataset_ids: string[];
+  scope_filter?: string | null;
+  question_count: number;
+  accepted_question_count: number;
+  accepted_investigation_ids: string[];
+  report_revision: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+  closed_at?: string | null;
+  questions?: AnalysisSessionQuestion[];
+}
+
+export async function createAnalysisSession(input: {
+  project_id: string;
+  title?: string;
+  dataset_ids?: string[];
+  scope_filter?: string;
+}): Promise<AnalysisSession> {
+  return authFetchJson<AnalysisSession>(`${API_BASE}/analysis-sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchAnalysisSessions(projectId?: string, limit = 100): Promise<AnalysisSession[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (projectId) params.set("project_id", projectId);
+  const result = await authFetchJson<{ sessions: AnalysisSession[] }>(`${API_BASE}/analysis-sessions?${params.toString()}`, { cache: "no-store" });
+  return result.sessions || [];
+}
+
+export async function fetchAnalysisSession(sessionId: string): Promise<AnalysisSession> {
+  return authFetchJson<AnalysisSession>(`${API_BASE}/analysis-sessions/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+}
+
+export async function updateAnalysisSession(sessionId: string, input: { title?: string; scope_filter?: string }): Promise<AnalysisSession> {
+  return authFetchJson<AnalysisSession>(`${API_BASE}/analysis-sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function closeAnalysisSession(sessionId: string): Promise<{ status: string; session: AnalysisSession; export_url: string }> {
+  return authFetchJson(`${API_BASE}/analysis-sessions/${encodeURIComponent(sessionId)}/close`, { method: "POST" });
+}
+
+export async function downloadAnalysisSessionExport(sessionId: string, format: "pdf" | "docx"): Promise<Blob> {
+  const token = await getValidToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}/analysis-sessions/${encodeURIComponent(sessionId)}/export?format=${format}`, { headers });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`.trim();
+    try { const body = await res.clone().json(); if (typeof body?.detail === "string") detail = body.detail; } catch { /* retain status */ }
+    throw new Error(`Cumulative export failed: ${detail}`);
+  }
+  const blob = await res.blob();
+  if (!blob.size) throw new Error("The cumulative report service returned an empty file.");
+  return blob;
+}
+
 export async function fetchAnalysisHistory(limit = 100): Promise<AnalysisHistoryResponse> {
   return authFetchJson<AnalysisHistoryResponse>(
     `${API_BASE}/investigations/history?limit=${encodeURIComponent(String(limit))}`,
@@ -562,6 +655,7 @@ export async function clearAnalysisHistory(): Promise<{
   status: string;
   removed_investigations: number;
   removed_legacy_analyses: number;
+  removed_sessions?: number;
   projects_and_datasets_preserved: boolean;
 }> {
   return authFetchJson(`${API_BASE}/investigations/history`, {
@@ -624,9 +718,71 @@ export async function downloadInvestigationExport(
     { headers }
   );
   if (!res.ok) {
-    throw new Error(`Export failed with HTTP ${res.status}: ${res.statusText}`);
+    let detail = `${res.status} ${res.statusText}`.trim();
+    try {
+      const body = await res.clone().json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      // Keep the HTTP status when the service did not return JSON.
+    }
+    throw new Error(`Export failed: ${detail}`);
   }
-  return res.blob();
+  const blob = await res.blob();
+  if (blob.size === 0) throw new Error("The export service returned an empty file.");
+  return blob;
+}
+
+type DesktopExportSaveResult = {
+  saved?: boolean;
+  cancelled?: boolean;
+  path?: string;
+  error?: string;
+};
+
+type DesktopExportWindow = Window & {
+  pywebview?: {
+    api?: {
+      save_export_file?: (filename: string, base64Content: string) => Promise<DesktopExportSaveResult>;
+    };
+  };
+};
+
+/** Save through a native Save As dialog in MindEd's desktop shell; otherwise use a browser download. */
+export async function saveExportBlob(blob: Blob, filename: string): Promise<{ message: string; cancelled: boolean }> {
+  if (typeof window === "undefined") throw new Error("Export download is only available in the browser or desktop app.");
+
+  const desktopApi = (window as DesktopExportWindow).pywebview?.api;
+  if (typeof desktopApi?.save_export_file === "function") {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const chunks: string[] = [];
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const end = Math.min(offset + chunkSize, bytes.length);
+      const charCodes: number[] = [];
+      for (let index = offset; index < end; index += 1) {
+        charCodes.push(bytes[index]);
+      }
+      // Avoid spreading Uint8Array: the frontend targets ES5 and does not enable downlevelIteration.
+      chunks.push(String.fromCharCode.apply(null, charCodes));
+    }
+    const base64Content = window.btoa(chunks.join(""));
+    const result = await desktopApi.save_export_file(filename, base64Content);
+    if (result?.cancelled) return { message: "Save cancelled. No file was written.", cancelled: true };
+    if (!result?.saved || !result.path) throw new Error(result?.error || "MindEd could not save the export file.");
+    return { message: `Export saved to: ${result.path}`, cancelled: false };
+  }
+
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Do not revoke synchronously: embedded webviews may not have consumed the blob URL yet.
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 2000);
+  return { message: `Download requested: ${filename}. Check your browser's Downloads folder or download history.`, cancelled: false };
 }
 
 export async function cancelInvestigation(

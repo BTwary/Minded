@@ -198,3 +198,9 @@ def test_clause_aware_filter_and_grouping_parsing():
     assert res4["population_row_count"] == 2
     assert { (r["group"]["region"], r["value"]) for r in res4["records"] } == {("West", 200.0), ("South", 400.0)}
 
+    # The same exclusion must survive a comma that separates a clause from its grouping.
+    c5 = compile_canonical_question_contract("Show revenue by region, excluding East", df=frame)
+    assert c5.completeness == "COMPLETE"
+    assert c5.grouping_columns == ("region",)
+    assert { (f["column"], f["operator"], f["value"]) for f in c5.filter_conditions } == {("region", "!=", "East")}
+

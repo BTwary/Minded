@@ -70,11 +70,11 @@
     "plan_grouping": [
       "region"
     ],
-    "plan_time": "order_date",
+    "plan_time": null,
     "estimand_target": "annual_sales",
     "estimand_predictor": [],
     "estimand_comparison_dim": "region",
-    "estimand_time": "order_date",
+    "estimand_time": null,
     "problem_class": "COMPARATIVE",
     "selected_method_code": "comparison_group_effect",
     "experiment_sql": null

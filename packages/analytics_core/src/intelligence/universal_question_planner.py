@@ -271,7 +271,10 @@ class UniversalQuestionCompiler:
         # nothing downstream (seed, interpreter proposal, binding set) may re-supply its roles.
         enforced_refused = (
             getattr(c_contract, "family", "NONE") != "NONE"
-            and getattr(c_contract, "completeness", "NOT_ENFORCED") in ("INCOMPLETE", "AMBIGUOUS")
+            and (
+                getattr(c_contract, "completeness", "NOT_ENFORCED") in ("INCOMPLETE", "AMBIGUOUS")
+                or float(getattr(c_contract, "resolution_confidence", 0.0) or 0.0) < 0.70
+            )
         )
         task = cls._classify(ql)
         if c_contract.resolution_confidence >= 0.70 and c_contract.task_family != "GENERAL_EXPLORATION":

@@ -553,7 +553,17 @@ class MetricSemanticsResolver:
     ) -> str:
         """Build a SQL aggregation expression with safely quoted identifiers."""
         agg = metric_def.aggregation_type
-        col = quote_sql_identifier(metric_def.column, field="metric column")
+        # COUNT(*) and numerator/denominator rates do not reference a single
+        # metric column, so an empty column name must not abort compilation.
+        needs_column = not (
+            agg == AggregationType.COUNT
+            or (
+                agg in (AggregationType.RATE, AggregationType.RATIO, AggregationType.PROPORTION)
+                and metric_def.numerator_column
+                and metric_def.denominator_column
+            )
+        )
+        col = quote_sql_identifier(metric_def.column, field="metric column") if needs_column else ""
         alias_sql = quote_sql_identifier(alias, field="SQL alias")
 
         if agg == AggregationType.SUM:

@@ -23,3 +23,7 @@ The local backup/restore workflow is encrypted with AES-GCM using a user passphr
 ## Hosted demo
 
 The Hugging Face Space is a showcase environment only. It should not be treated as the privacy-equivalent of the local application.
+
+## Desktop release usage reporting
+
+The v1.0.0 desktop build does not transmit product-usage telemetry or crash reports. The developer cannot infer usage of a downloaded copy from the local app. Feedback is stored locally and is shared only when the user intentionally submits it through a separate channel. Do not send datasets or sensitive analysis output in bug reports. Any future remote analytics must be clearly disclosed and explicitly opt-in, and must not block or alter local analysis.

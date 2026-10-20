@@ -117,6 +117,18 @@ def _metric_enumeration_objectives(question: str) -> list[str] | None:
     return None
 
 
+_TASK_WORD_RE = re.compile(
+    rf"\b(?:{_TASK_LEAD_WORDS}|average|avg|mean|median|total|sum|count|number\s+of|maximum|minimum|highest|lowest|"
+    r"trend|correlat\w*|calculate|compute|show|list|give|report|return)\b",
+    re.I,
+)
+
+
+def _clause_has_task(clause: str) -> bool:
+    """True when a clause asks for something (a task/aggregation word) rather than only scoping."""
+    return bool(_TASK_WORD_RE.search(clause or ""))
+
+
 def _split_clauses(question: str) -> list[str]:
     q = " ".join((question or "").split()).strip()
     # Joint relationship/correlation requests are a single estimand. This check
@@ -149,7 +161,21 @@ def _split_clauses(question: str) -> list[str]:
     out: list[str] = []
     for piece in pieces:
         out.extend([p.strip(" ,") for p in _COMMA_CLAUSE_RE.split(piece) if p.strip(" ,")])
-    return out if out else [q]
+    # A leading clause that only sets the population ("Among Corporate orders that were delivered
+    # and not returned, which channel ...") is context for the clause after it, not a separate
+    # analytical objective. Merge it forward so the question stays a single operation.
+    merged: list[str] = []
+    carry = ""
+    for idx, clause in enumerate(out):
+        is_last = idx == len(out) - 1
+        if not is_last and not _clause_has_task(clause):
+            carry = f"{carry}, {clause}".strip(", ") if carry else clause
+            continue
+        merged.append(f"{carry}, {clause}" if carry else clause)
+        carry = ""
+    if carry:
+        merged.append(carry)
+    return merged if merged else [q]
 
 
 def plan_compound_question(question: str) -> CompoundObjectivePlan:

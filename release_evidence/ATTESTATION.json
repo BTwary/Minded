@@ -12,30 +12,33 @@
   "files": {
     "alembic.ini": "51ba04221b23920e495f297bb8be8a7608f9a1a48f8a51fc39cd6e724bc47658",
     "data/certification/checksums.sha256": "da639ea678230e406f08f358f0c2349570275fc6414da96c66f968fd557aa0e4",
-    "docs/AAOS_V40_RELEASE_STATUS.md": "5f87ca3d3d76b23a579e6626c14b9d687e2eb187dc696007bbf11a56427f01cb",
-    "real_stress_results_clean.json": "1e92da7dfe6cf7054aa2f977edf6bf2388061d230acf079825daa11fca836810",
-    "real_stress_results_raw.json": "df591a887e734e2489c5774d2fb5c1d24a43606eb169fd34d5c73a2e08eae333",
+    "docs/AAOS_V1_0_0_RELEASE_STATUS.md": "67ef6deeb3334a174190fde3704f559f299e0c4841737a364763e1ef745e8237",
+    "real_stress_results_clean.json": "4dce08bf973f8190a026f2ec2dd8553ae01fd7c46982377e380a62dec7edb420",
+    "real_stress_results_raw.json": "47ebf6b002c9f7a61ac7bcd1ea42df83520117308b3d153112e082a1b2f85610",
     "requirements-ai.txt": "906a3df835493fe52525254aed8a5bb89dee37ef375ab63629b4440ac0413936",
     "requirements-cloud.txt": "98095041c8046df46e951a34203b956c2d1bb9effc245af6df1472fabd51a20a",
     "requirements-demo.txt": "834f6a5f83618d00ff80803f043d0c73353711879eb6fd345d2dbe3427d6e685",
     "requirements-hf-space.txt": "4d8031406d04ab37ef69a1f82b2ee52471a7d3d59381c8693364fa3ab4e8d4e5",
-    "requirements-lock.txt": "88cbf26fb14f00f48aab75dd32cf243ba5c4a4db644c292c7a2aefae488a84dc",
+    "requirements-lock.txt": "46e08513b5f1c657ec391eb862e51a8ce32361c317963214ed8b6919794e057c",
     "requirements-server.txt": "0363bb5d6670e527a6eaabdfa83a8f7529c2f6af142ac833b80bd8ae1287addd",
     "requirements.txt": "4f6ab0eded583085c3788698cd198e9797276147f33982f07041821bad7b3dd4",
-    "tests/independent_release/manifest.toml": "afd6990243bea6a3f6e91997336d20ed6a1a04547b5a8e4fcc3e42a4a4677831"
+    "tests/independent_release/manifest.toml": "2d3bd5771435fc9337b549665cdd6d534726396e6d7c7c37281a29f81868b8e7"
   },
   "gate": {
     "check_results": {
-      "PASS": 36
+      "BLOCKED": 1,
+      "BLOCKED_ENVIRONMENT": 2,
+      "NOT_RUN": 1,
+      "PASS": 3
     },
-    "clean_room_verified": true,
-    "decision": "RELEASE-CANDIDATE",
+    "clean_room_verified": null,
+    "decision": "BLOCKED",
     "report_file": "release_evidence/GATE_REPORT.json",
-    "report_sha256": "c3d892e96a0df04bbafa7f6304e01d14ec4577621ad051ef7a4ae442ce2f33da"
+    "report_sha256": "d6e960c3ae9888ecae1857029acd7e9a6cb09f5e546f2645e0caa0bd518a6bbd"
   },
-  "platform": "Windows-11-10.0.26300-SP0",
-  "python": "3.14.5",
+  "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+  "python": "3.13.5",
   "schema": 1,
-  "source_files": 703,
-  "source_tree_sha256": "05909cf0ed9f6c6398dfa8e69a6ddff56c3ac7d79db2df24858a01e75a4ac3df"
+  "source_files": 720,
+  "source_tree_sha256": "c6816547614a37a9dd0d46bf7833570684e95be709fd205f2fa5abe84efd6aef"
 }

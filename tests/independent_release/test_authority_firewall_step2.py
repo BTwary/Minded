@@ -73,7 +73,7 @@ def test_total_by_region_keeps_grouping(df):
     [
         "What is the average flibbertigibbet?",  # no such column
         "What is the average region?",  # non-numeric measure
-        "What is the average revenue per order?",  # phrase does not resolve as a whole
+        "What is the total revenue per order?",  # "total ... per order" has no unambiguous meaning
     ],
 )
 def test_unresolvable_simple_aggregate_is_refused_and_final(df, question):
@@ -171,3 +171,17 @@ def test_comparison_wording_with_aggregate_word_is_not_vetoed(df, question):
     contract = compile_canonical_question_contract(question, df)
     assert contract.completeness != "INCOMPLETE"
     assert "authority_veto" not in _plan(question, df).semantics.semantic_evidence
+
+
+def test_average_per_order_resolves_only_when_order_grain_is_verified(df):
+    """"average revenue per order" is the mean over rows iff order_id is unique per row (the grain is
+    the order). With repeated order ids the grain is unverified and the question is not guessed."""
+    from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
+    ok = compile_canonical_question_contract("What is the average revenue per order?", df)
+    if df["order_id"].nunique() == len(df):
+        assert ok.completeness == "COMPLETE" and ok.target_column == "revenue" and not ok.grouping_columns
+        assert ok.resolution_evidence.get("row_grain", {}).get("identifier_column") == "order_id"
+    repeated = df.copy()
+    repeated["order_id"] = repeated["order_id"].iloc[0]
+    bad = compile_canonical_question_contract("What is the average revenue per order?", repeated)
+    assert not (bad.completeness == "COMPLETE" and not bad.grouping_columns and bad.target_column == "revenue" and "row_grain" in bad.resolution_evidence)

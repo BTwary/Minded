@@ -43,7 +43,7 @@ SINGLE_FILES = (
     "alembic.ini",
     "requirements-lock.txt",
     "tests/independent_release/manifest.toml",
-    "docs/AAOS_V40_RELEASE_STATUS.md",
+    "docs/AAOS_V1_0_0_RELEASE_STATUS.md",
     "data/certification/checksums.sha256",
     "real_stress_results_raw.json",
     "real_stress_results_clean.json",

@@ -42,6 +42,7 @@ _PATCH_ALIASES = {
     "analysis.denominator": "denominator_column",
     "numerator_column": "numerator_column",
     "analysis.numerator": "numerator_column",
+    "focus_objective": "focus_objective",
 }
 
 
@@ -77,6 +78,9 @@ def normalize_guidance_payload(payload: Optional[Mapping[str, Any]]) -> Dict[str
             if not value:
                 continue
         normalized[key] = value
+
+    if "selected_scope_filter" in normalized and "scope_filter" not in normalized:
+        normalized["scope_filter"] = normalized["selected_scope_filter"]
 
     if "intent_patch" in normalized:
         normalized["intent_patch"] = normalize_intent_patch(normalized["intent_patch"])
@@ -140,6 +144,26 @@ def _relative_time_range(
     # resolver first. This keeps preview/approval consistent with historical/offline datasets;
     # a 2022 dataset's "last quarter" must not silently mean a quarter in the current year.
     if frame is not None and time_column and time_column in frame.columns:
+        # Resolve explicit current-vs-prior calendar years as two periods, anchored to data.
+        if re.search(r"\b(?:this|current)\s+year\b", q) and re.search(r"\b(?:last|previous|prior)\s+year\b", q):
+            values = pd.to_datetime(frame[time_column], errors="coerce", utc=True).dropna()
+            if values.empty:
+                return {"type": "unresolved", "expression": q, "reason": "time_column_has_no_parseable_dates", "source": "dataset_temporal_resolver"}
+            max_dt = values.max()
+            year = int(max_dt.year)
+            is_partial_year = bool(max_dt.month < 12 or max_dt.day < 28)
+            warning_msg = (
+                f"Warning: Current year {year} is a partial period (data ends {max_dt.strftime('%Y-%m-%d')}); "
+                f"comparing partial current year against full prior year {year - 1}."
+            ) if is_partial_year else None
+            return {"type": "absolute", "expression": "this year and last year",
+                    "start": f"{year:04d}-01-01", "end": f"{year + 1:04d}-01-01",
+                    "baseline_start": f"{year - 1:04d}-01-01", "baseline_end": f"{year:04d}-01-01",
+                    "end_exclusive": True, "source": "dataset_calendar_year_comparison",
+                    "resolution_method": "dataset_anchored_current_vs_prior_year",
+                    "is_partial_period": is_partial_year,
+                    "data_end_date": max_dt.strftime("%Y-%m-%d"),
+                    "partial_period_warning": warning_msg}
         try:
             from packages.analytics_core.src.engines.temporal import TemporalResolver
             resolved = TemporalResolver.resolve(question, frame, time_column)
@@ -238,7 +262,57 @@ def _relative_time_range(
     return None
 
 
-def infer_intent_patch_from_answer(answer: str, pending_slot: str, frame: pd.DataFrame) -> Dict[str, Any]:
+def objective_statements(question: str, limit: int = 3) -> list[str]:
+    """The separate asks inside a genuinely multi-part question, for use as clarification options."""
+    try:
+        from packages.analytics_core.src.intelligence.complex_objective_planner import plan_compound_question
+        plan = plan_compound_question(question)
+        return [o.statement.strip(" ?.") + "?" for o in plan.objectives][:limit] if plan.is_compound else []
+    except Exception:
+        return []
+
+
+_IDENTIFIER_NAME_RE = re.compile(r"(?:^|_)(?:id|key|code|no|number|uuid)$", re.I)
+
+
+def compact_resolution_candidates(slot: str, frame: Optional[pd.DataFrame], question: str = "", limit: int = 3) -> tuple[str, ...]:
+    """At most ``limit`` columns that plausibly fill ``slot``, ranked by overlap with the question.
+
+    Replaces "every column in the table" as the clarification list: a person should never have
+    to scan 17 radio buttons to answer one question.
+    """
+    if frame is None or frame.empty:
+        return ()
+    words = set(re.findall(r"[a-z0-9]+", str(question or "").casefold()))
+    scored: list[tuple[float, str]] = []
+    for column in frame.columns:
+        name = str(column)
+        series = frame[column]
+        tokens = set(re.findall(r"[a-z0-9]+", name.casefold()))
+        score = float(len(tokens & words))
+        is_numeric = pd.api.types.is_numeric_dtype(series)
+        is_identifier = bool(_IDENTIFIER_NAME_RE.search(name)) or (
+            len(series) > 1 and series.nunique(dropna=False) == len(series) and not pd.api.types.is_float_dtype(series)
+        )
+        is_temporal = name in _temporal_columns(frame)
+        if slot in {"target_column", "numerator_column"}:
+            if not is_numeric or is_identifier:
+                continue
+        elif slot == "denominator_column":
+            if not is_identifier:
+                continue
+        elif slot in {"grouping_columns", "filter_conditions"}:
+            if is_numeric and series.nunique(dropna=True) > 20 or is_identifier or is_temporal:
+                continue
+        elif slot == "time_column":
+            if not is_temporal:
+                continue
+        scored.append((score, name))
+    scored.sort(key=lambda item: (-item[0], list(map(str, frame.columns)).index(item[1])))
+    return tuple(name for _, name in scored[:limit])
+
+
+def infer_intent_patch_from_answer(answer: str, pending_slot: str, frame: pd.DataFrame, question: str = "") -> Dict[str, Any]:
     """Turn a short freeform clarification answer into a schema-grounded slot patch.
 
     This deliberately supports only high-precision deterministic forms. When the answer does not
@@ -268,10 +342,30 @@ def infer_intent_patch_from_answer(answer: str, pending_slot: str, frame: pd.Dat
                 return longest[0]
         return None
 
+    if slot in {"operation_graph", "derived_metric_execution", "denominator_column_choice"}:
+        # The user either picked one of the proposed parts (by text or number) or typed one question.
+        objectives = objective_statements(question)
+        picked = None
+        if re.fullmatch(r"\d+", text) and 1 <= int(text) <= len(objectives):
+            picked = objectives[int(text) - 1]
+        else:
+            picked = next((o for o in objectives if normalize_phrase(o) == normalize_phrase(text)), None)
+        focus = picked or text
+        try:
+            from packages.analytics_core.src.intelligence.complex_objective_planner import plan_compound_question
+            if plan_compound_question(focus).is_compound:
+                raise ValueError("Please give one question at a time; choose one of the proposed parts.")
+        except ImportError:
+            pass
+        return {"focus_objective": focus}
+
     if slot in {"target_column", "numerator_column", "denominator_column", "time_column"}:
         answer_text = re.sub(r"^(?:use|choose|select|the|column|field)\s+", "", text, flags=re.I)
         answer_text = re.sub(r"\s+(?:as\s+)?(?:the\s+)?(?:time\s+)?(?:column|field)$", "", answer_text, flags=re.I)
         column = find_unique_column(answer_text)
+        if not column and slot == "denominator_column" and len(text.split()) >= 3:
+            # A typed sentence ("total sales for each customer") is a restated question, not a column.
+            return {"focus_objective": text}
         if not column:
             raise ValueError(f"Could not identify one unique dataset column from {text!r}. Enter the exact column name or choose a suggested option.")
         return {slot: column}
@@ -386,7 +480,25 @@ def infer_intent_patch_from_answer(answer: str, pending_slot: str, frame: pd.Dat
     raise ValueError(f"Freeform patching is not supported for the pending slot {slot!r}; choose a proposed option or clarify the field explicitly.")
 
 
-def _question_requirements(question: str, contract: Any) -> list[dict[str, Any]]:
+def _row_grain_column(entity: str, frame: Optional[pd.DataFrame]) -> Optional[str]:
+    """The identifier column whose values are unique on every row (e.g. order_id in an order-level
+    table), when ``entity`` ("order") names it. Then "per order" has one unambiguous meaning:
+    the per-row value."""
+    if frame is None or frame.empty:
+        return None
+    entity = re.sub(r"[^a-z0-9]+", "", str(entity or "").casefold())
+    if not entity:
+        return None
+    for column in frame.columns:
+        name = re.sub(r"[^a-z0-9]+", "", str(column).casefold())
+        if name in {entity, f"{entity}id", f"{entity}no", f"{entity}number", f"{entity}key", f"{entity}code"}:
+            series = frame[column]
+            if series.notna().all() and series.nunique(dropna=False) == len(series):
+                return str(column)
+    return None
+
+
+def _question_requirements(question: str, contract: Any, frame: Optional[pd.DataFrame] = None) -> list[dict[str, Any]]:
     """Find material language that is not represented by the current contract fields."""
     q = " ".join(str(question or "").split())
     ql = q.casefold()
@@ -437,8 +549,21 @@ def _question_requirements(question: str, contract: Any) -> list[dict[str, Any]]
 
     time_range = getattr(contract, "time_range", None)
     time_column = getattr(contract, "time_column", None)
+    # Temporal prepositions only imply a date scope when followed by a date/period
+    # expression. In particular, "After excluding returns and cancellations" is
+    # population-filter language, not a request for a time window. The former broad
+    # `\bafter\b` alternative falsely blocked this valid non-temporal question.
+    _date_or_period = (
+        r"(?:\d{4}(?:-\d{2}(?:-\d{2})?)?\b|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b|"
+        r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,?\s+\d{4})?\b|"
+        r"(?:last|past|previous|prior|this|current)\s+(?:\d+\s+)?(?:day|days|week|weeks|month|months|quarter|quarters|year|years)\b|"
+        r"the\s+(?:start|end|beginning)\s+of\s+(?:the\s+)?(?:day|week|month|quarter|year|\d{4})\b|"
+        r"q[1-4]\s*(?:of\s+)?\d{4}\b)"
+    )
     explicit_temporal = bool(re.search(
-        r"\b(last|past|previous|prior|this|current)\s+(?:\d+\s+)?(?:day|days|week|weeks|month|months|quarter|quarters|year|years)\b|\b(?:since|between|before|after)\b",
+        r"\b(?:last|past|previous|prior|this|current)\s+(?:\d+\s+)?(?:day|days|week|weeks|month|months|quarter|quarters|year|years)\b"
+        r"|\b(?:since|before|after)\s+(?:the\s+)?" + _date_or_period
+        + r"|\bbetween\s+(?:\d{4}\b|\d{1,2}[/-]\d|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|q[1-4]\b|the\s+(?:start|end|beginning)\b)",
         ql,
     ))
     if time_range and time_range.get("type") == "unresolved":
@@ -454,6 +579,34 @@ def _question_requirements(question: str, contract: Any) -> list[dict[str, Any]]
             "reason": "requested_time_scope_not_preserved",
             "text": re.search(r"\b(?:last|past|previous|prior|this|current)\s+(?:\d+\s+)?(?:day|days|week|weeks|month|months|quarter|quarters|year|years)\b|\b(?:since|between|before|after)\b", ql).group(0),
         })
+
+    # An explicit predicate on a field this dataset does not have ("where loyalty_tier = Gold") is a
+    # population restriction the user asked for. It must never disappear: running the unfiltered
+    # aggregate would answer a different question. Only identifier-shaped names (snake_case /
+    # camelCase) are treated as field references, so ordinary prose is not misread as a predicate.
+    if frame is not None:
+        _norm = lambda text: re.sub(r"[^a-z0-9]", "", str(text).casefold())
+        _known = {_norm(c) for c in frame.columns}
+        for _m in re.finditer(
+            r"(?<![\w.])(?P<field>[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+|[a-z]+[A-Z][A-Za-z0-9]*)\s*"
+            r"(?P<op>>=|<=|!=|<>|=|>|<|\bis\s+not\b|\bis\b|\bequals?\b)\s*(?P<value>\"[^\"]*\"|'[^']*'|[^\s,;?]+)",
+            q,
+        ):
+            _field = _m.group("field")
+            if _norm(_field) in _known or any(_norm(_field) == _norm(f.get("column", "")) for f in (getattr(contract, "filter_conditions", ()) or ())):
+                continue
+            requirements.append({
+                "slot": "filter_conditions", "status": "UNRESOLVED", "reason": "filter_column_unavailable",
+                "text": f"{_field} {_m.group('op').strip()} {_m.group('value').strip()}", "field": _field,
+            })
+            break
+
+    for _role in (getattr(contract, "unresolved_roles", ()) or ()):
+        if str(_role).startswith("filter_value_unmatched:"):
+            requirements.append({
+                "slot": "filter_conditions", "status": "UNRESOLVED", "reason": "unmatched_value",
+                "text": str(_role).split(":", 1)[1],
+            })
 
     if re.search(r"\b(?:exclude|excluding|without|ignore)\b", ql):
         if not any(str(item.get("operator", "")).upper() in {"!=", "NOT IN"} for item in (getattr(contract, "filter_conditions", ()) or ())):
@@ -497,8 +650,24 @@ def _question_requirements(question: str, contract: Any) -> list[dict[str, Any]]
         if not represented:
             requirements.append({"slot": "filter_conditions", "status": "UNRESOLVED", "reason": "population_qualifier_not_preserved"})
 
-    if re.search(r"\bper\s+(?:active\s+)?(?:customer|user|account|order|ticket|unit|employee|patient|product)\b", ql):
-        if not getattr(contract, "denominator_column", None):
+    per_match = re.search(r"\bper\s+(?:active\s+)?(customer|user|account|order|ticket|unit|employee|patient|product)\b", ql)
+    if per_match:
+        # "average X per order" over an order-level table (order_id unique on every row) is the
+        # mean of X across rows: the denominator is the row itself, so there is nothing to ask.
+        # Likewise, if the contract already groups by the matched entity (e.g. grouping_columns=('customer_id',)),
+        # the per-entity grouping is already satisfied.
+        entity_name = per_match.group(1).casefold()
+        grouped_by_entity = any(
+            re.sub(r"[^a-z0-9]+", "", str(g).casefold()) in {entity_name, f"{entity_name}id", f"{entity_name}key", f"{entity_name}code"}
+            for g in (getattr(contract, "grouping_columns", ()) or ())
+        )
+        grain_ok = (
+            str(getattr(contract, "requested_aggregation", "") or "").upper() in {"MEAN", "MEDIAN"}
+            and _row_grain_column(per_match.group(1), frame) is not None
+        )
+        if grain_ok or grouped_by_entity:
+            pass
+        elif not getattr(contract, "denominator_column", None):
             requirements.append({"slot": "denominator_column", "status": "UNRESOLVED", "reason": "derived_metric_denominator_not_resolved"})
         else:
             derived_evidence = dict(getattr(contract, "resolution_evidence", {}) or {}).get("derived_metric_patch", {})
@@ -550,6 +719,7 @@ def enrich_contract_intent_state(
         "time_range": getattr(contract, "time_range", None),
         "filter_conditions": list(getattr(contract, "filter_conditions", ()) or ()),
         "ranking_direction": getattr(contract, "ranking_direction", None),
+        "ranking_limit": getattr(contract, "ranking_limit", None),
         "comparison_operator": getattr(contract, "comparison_operator", None),
         "comparison_values": list(getattr(contract, "comparison_values", ()) or ()),
         "requested_outputs": list(getattr(contract, "requested_outputs", ()) or ()),
@@ -683,7 +853,7 @@ def enrich_contract_intent_state(
         filter_conditions=tuple(contract_filters),
         slot_provenance=provenance,
     )
-    requirements = _question_requirements(question, probe_contract)
+    requirements = _question_requirements(question, probe_contract, frame)
     if current_range and frame is not None and not contract_time_column and not temporal:
         requirements = [r for r in requirements if r.get("slot") != "time_range"]
         requirements.append({"slot": "time_column", "status": "UNRESOLVED", "reason": "no_temporal_column_available"})
@@ -749,7 +919,28 @@ def enrich_contract_intent_state(
         for column in temporal:
             options.append({"label": f"Use {column} as the time field", "patch": {"set": {"time_column": column}}})
     filter_requirement = any(r.get("slot") == "filter_conditions" for r in requirements)
-    if filter_requirement and frame is not None:
+    _unmatched = next((r for r in requirements if r.get("reason") == "unmatched_value"), None)
+    if _unmatched and frame is not None:
+        # One short question: which observed value did the person mean? Prefer the column the
+        # noun after the word points to ("Enterprise customers" -> customer_*), else any small category.
+        _noun = re.search(rf"{re.escape(str(_unmatched.get('text')))}\s+(\w+?)s?\b", str(question))
+        _stem = (_noun.group(1).lower() if _noun else "")
+        _cands = [
+            c for c in frame.columns
+            if not pd.api.types.is_numeric_dtype(frame[c]) and 2 <= frame[c].nunique(dropna=True) <= 12
+            and not str(c).lower().endswith("_id")
+        ]
+        _cands = [c for c in _cands if not re.search(r"month|date|band|quarter|year|reason|name", str(c).lower())]
+        _hint = lambda c: 0 if re.search(r"segment|type|tier|category|class|channel|region|status", str(c).lower()) else 1
+        _pref = sorted([c for c in _cands if _stem and _stem in str(c).lower()] or _cands, key=_hint)
+        for column in _pref[:2]:
+            for v in list(frame[column].dropna().unique())[:6]:
+                options.append({
+                    "label": f"{column} = {v}",
+                    "patch": {"set": {"add_filter_conditions": [{"column": str(column), "operator": "=", "value": str(v)}]}},
+                })
+        options = options[:6]
+    if filter_requirement and frame is not None and not _unmatched:
         ql = str(question).casefold()
         qualifiers = [term for term in ("active", "inactive", "eligible", "paid", "refunded", "cancelled", "canceled", "completed") if re.search(rf"\b{term}\b", ql)]
         for column in frame.columns:
@@ -770,7 +961,37 @@ def enrich_contract_intent_state(
                     "label": f"Filter {column} = {literal}",
                     "patch": {"set": {"add_filter_conditions": [{"column": str(column), "operator": "=", "value": literal}]}},
                 })
-    return updated, ledger, requirements, options
+    # Genuinely multi-part question: the options ARE the parts, in the user's own words.
+    if any(r.get("slot") == "operation_graph" for r in requirements):
+        for statement in objective_statements(question):
+            options.append({"label": statement, "patch": {"set": {"focus_objective": statement}}})
+    # "per <entity>" ratio whose denominator is not the row: two executable readings, not a column list.
+    if any(r.get("slot") in {"denominator_column", "derived_metric_execution"} for r in requirements) and frame is not None:
+        per = re.search(r"\bper\s+(?:active\s+)?(customer|user|account|order|ticket|unit|employee|patient|product)\b", str(question), re.I)
+        target = getattr(contract, "target_column", None)
+        _is_id = lambda c: bool(c and re.search(r"(?:^|[_\W])(id|key|uuid|guid|identifier)(?:$|[_\W])|(?:_id|_key|_uuid|_guid)$", str(c).casefold()))
+        if target and _is_id(target):
+            target = next((c for c in frame.columns if not _is_id(c) and pd.api.types.is_numeric_dtype(frame[c]) and re.search(r"(?:amount|revenue|sales|total|price|value)", str(c), re.I)), None)
+        entity_cols = [c for c in compact_resolution_candidates("denominator_column", frame, str(question)) if per and re.sub(r"[^a-z0-9]", "", per.group(1).casefold()) in re.sub(r"[^a-z0-9]", "", c.casefold())]
+        if per and target and not _is_id(target) and entity_cols:
+            ent = entity_cols[0]
+            options.append({"label": f"Total {target} for each {ent}", "patch": {"set": {"focus_objective": f"total {target} by {ent}"}}})
+            options.append({"label": f"Average {target} across all records", "patch": {"set": {"focus_objective": f"average {target}"}}})
+    # When a generic business metric maps to several similarly named physical columns, expose
+    # the candidate measures as typed patches. The choices do not guess or execute a measure;
+    # the human's selection becomes the canonical target-column assignment.
+    ambiguous_metric_candidates = list(
+        (getattr(updated, "resolution_evidence", {}) or {}).get("ambiguous_target_candidates", ()) or ()
+    )
+    if not getattr(updated, "target_column", None) and ambiguous_metric_candidates:
+        options = [
+            {"label": f"Use {column}", "patch": {"set": {"target_column": str(column)}}}
+            for column in ambiguous_metric_candidates[:3]
+        ]
+
+    # An unmatched population value gets its own short list of observed values (<=6); every other
+    # clarification is capped at 3 ranked options.
+    return updated, ledger, requirements, (options[:6] if _unmatched else options[:3])
 
 
 def apply_contract_intent_patch(contract: Any, patch: Mapping[str, Any], frame: pd.DataFrame, question: str) -> Any:
@@ -782,6 +1003,13 @@ def apply_contract_intent_patch(contract: Any, patch: Mapping[str, Any], frame: 
     """
     from dataclasses import replace
     values = dict(patch)
+    focus = values.pop("focus_objective", None)
+    if focus:
+        # The user chose which single question to answer. Recompile the contract from exactly that
+        # text (schema-grounded, deterministic); every other patched slot is applied on top of it.
+        from packages.analytics_core.src.intelligence.canonical_question_contract import compile_canonical_question_contract
+        contract = compile_canonical_question_contract(str(focus), frame)
+        question = str(focus)
     columns = {str(column) for column in frame.columns}
     updates: Dict[str, Any] = {}
     for field in ("target_column", "numerator_column", "denominator_column", "time_column"):
@@ -817,13 +1045,17 @@ def apply_contract_intent_patch(contract: Any, patch: Mapping[str, Any], frame: 
         raw_filters = values.pop("filter_conditions")
         if not isinstance(raw_filters, (list, tuple)):
             raise ValueError("filter_conditions intent patch must be a list.")
-        allowed_ops = {"=", "!=", "IN", "NOT IN", "IS NULL", "IS NOT NULL", ">", ">=", "<", "<="}
+        allowed_ops = {"=", "==", "!=", "<>", "IN", "NOT IN", "IS NULL", "IS NOT NULL", ">", ">=", "<", "<=", "BETWEEN"}
         clean = []
         for item in raw_filters:
             if not isinstance(item, Mapping):
                 raise ValueError("Each filter condition must be an object.")
             col = str(item.get("column", ""))
             op = str(item.get("operator", "")).upper()
+            if op in {"==", "IS"}:
+                op = "="
+            elif op in {"<>", "IS NOT"}:
+                op = "!="
             if col not in columns or op not in allowed_ops:
                 raise ValueError(f"Invalid filter condition for column/operator: {col!r}/{op!r}.")
             if op not in {"IS NULL", "IS NOT NULL"} and "value" not in item:
@@ -836,6 +1068,12 @@ def apply_contract_intent_patch(contract: Any, patch: Mapping[str, Any], frame: 
                         raise ValueError(f"Filter operator {op!r} requires a non-empty list of values.")
                     if any(not isinstance(item_value, (str, int, float, bool)) and item_value is not None for item_value in value):
                         raise ValueError("Filter values must be JSON scalars.")
+                    if any(item_value is None for item_value in value):
+                        raise ValueError("IN/NOT IN lists cannot contain NULL; use IS NULL or IS NOT NULL as a separate predicate.")
+                    value = list(value)
+                elif op == "BETWEEN":
+                    if not isinstance(value, (list, tuple)) or len(value) != 2:
+                        raise ValueError("Filter operator 'BETWEEN' requires a list of 2 values.")
                     value = list(value)
                 elif not isinstance(value, (str, int, float, bool)) and value is not None:
                     raise ValueError("Filter values must be JSON scalars.")
@@ -846,13 +1084,17 @@ def apply_contract_intent_patch(contract: Any, patch: Mapping[str, Any], frame: 
         raw_filters = values.pop("add_filter_conditions")
         if not isinstance(raw_filters, (list, tuple)):
             raise ValueError("add_filter_conditions intent patch must be a list.")
-        allowed_ops = {"=", "!=", "IN", "NOT IN", "IS NULL", "IS NOT NULL", ">", ">=", "<", "<="}
+        allowed_ops = {"=", "==", "!=", "<>", "IN", "NOT IN", "IS NULL", "IS NOT NULL", ">", ">=", "<", "<=", "BETWEEN"}
         existing = list(updates.get("filter_conditions", getattr(contract, "filter_conditions", ()) or ()))
         for item in raw_filters:
             if not isinstance(item, Mapping):
                 raise ValueError("Each added filter condition must be an object.")
             col = str(item.get("column", ""))
             op = str(item.get("operator", "")).upper()
+            if op in {"==", "IS"}:
+                op = "="
+            elif op in {"<>", "IS NOT"}:
+                op = "!="
             if col not in columns or op not in allowed_ops:
                 raise ValueError(f"Invalid filter condition for column/operator: {col!r}/{op!r}.")
             if op not in {"IS NULL", "IS NOT NULL"} and "value" not in item:
@@ -864,6 +1106,12 @@ def apply_contract_intent_patch(contract: Any, patch: Mapping[str, Any], frame: 
                 value = [v.item() if hasattr(v, "item") else v for v in value]
                 if any(not isinstance(v, (str, int, float, bool)) and v is not None for v in value):
                     raise ValueError("Filter values must be JSON scalars.")
+                if any(v is None for v in value):
+                    raise ValueError("IN/NOT IN lists cannot contain NULL; use IS NULL or IS NOT NULL as a separate predicate.")
+            elif op == "BETWEEN":
+                if not isinstance(value, (list, tuple)) or len(value) != 2:
+                    raise ValueError("Filter operator 'BETWEEN' requires a list of 2 values.")
+                value = list(value)
             elif op not in {"IS NULL", "IS NOT NULL"} and not isinstance(value, (str, int, float, bool)) and value is not None:
                 if hasattr(value, "item"):
                     value = value.item()
@@ -994,8 +1242,30 @@ def filter_condition_mask(series: pd.Series, operator: str, value: Any = None) -
     if op in {"IN", "NOT IN"}:
         if not isinstance(value, (list, tuple)) or not value:
             raise ValueError(f"Filter operator {op!r} requires a non-empty list of values.")
+        if any(item is None for item in value):
+            raise ValueError("IN/NOT IN lists cannot contain NULL; use IS NULL or IS NOT NULL as a separate predicate.")
         matches = equality_mask(list(value))
         return matches if op == "IN" else (series.notna() & ~matches)
+    if op == "BETWEEN":
+        if not isinstance(value, (list, tuple)) or len(value) != 2 or any(item is None for item in value):
+            raise ValueError("BETWEEN requires exactly two non-NULL boundary values.")
+        if pd.api.types.is_numeric_dtype(series):
+            bounds = pd.to_numeric(pd.Series(list(value)), errors="coerce")
+            if bounds.isna().any():
+                raise ValueError("BETWEEN boundary values must be numeric for a numeric field.")
+            left = pd.to_numeric(series, errors="coerce")
+            low, high = bounds.iloc[0], bounds.iloc[1]
+        else:
+            left = pd.to_datetime(series, errors="coerce", utc=True, format="mixed")
+            bounds = pd.to_datetime(pd.Series(list(value)), errors="coerce", utc=True, format="mixed")
+            nonnull = int(series.notna().sum())
+            valid = int(left.notna().sum())
+            if bounds.isna().any() or nonnull == 0 or valid / nonnull < 0.8:
+                raise ValueError("BETWEEN requires a numeric or consistently parseable temporal column.")
+            low, high = bounds.iloc[0], bounds.iloc[1]
+        if low > high:
+            raise ValueError("BETWEEN lower bound must not be greater than its upper bound.")
+        return series.notna() & left.ge(low) & left.le(high)
     if op not in {">", ">=", "<", "<="}:
         raise ValueError(f"Unsupported filter operator {op!r}.")
 

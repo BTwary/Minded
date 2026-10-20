@@ -12,8 +12,9 @@ import pandas as pd
 from packages.analytics_core.src.engines.analyst_answer import AnalystResult, _num
 from packages.analytics_core.src.relational.compiler import RelationalPlan
 from packages.analytics_core.src.relational.expressions import (
-    AggExpr, CountRows, ColumnRef, Comparison, IsNull, IsNotNull, Literal, Or,
+    AggExpr, And, CountRows, ColumnRef, Comparison, IsNull, IsNotNull, Literal, Or,
 )
+
 from packages.analytics_core.src.relational.plan_serialization import plan_to_dict
 
 
@@ -74,7 +75,15 @@ def compile_approved_aggregate(contract, frame: pd.DataFrame) -> ApprovedAggrega
             predicates.append(IsNull(ref) if operator == "IS NULL" else IsNotNull(ref))
         elif operator == "IN" and isinstance(value, (list, tuple)) and value:
             predicates.append(Or([Comparison(ref, "=", Literal(v)) for v in value]))
-        elif operator in {"=", "!=", "<", "<=", ">", ">="}:
+        elif operator in {"NOT IN", "<> ALL"} and isinstance(value, (list, tuple)) and value:
+            predicates.append(And([Comparison(ref, "!=", Literal(v)) for v in value]))
+        elif operator == "BETWEEN" and isinstance(value, (list, tuple)) and len(value) == 2:
+            predicates.append(And([Comparison(ref, ">=", Literal(value[0])), Comparison(ref, "<=", Literal(value[1]))]))
+        elif operator in {"=", "==", "IS"}:
+            predicates.append(Comparison(ref, "=", Literal(value)))
+        elif operator in {"!=", "<>", "IS NOT"}:
+            predicates.append(Comparison(ref, "!=", Literal(value)))
+        elif operator in {"<", "<=", ">", ">="}:
             predicates.append(Comparison(ref, operator, Literal(value)))
         else:
             raise ValueError(f"Approved filter operator {operator!r} is not supported by this executor.")
@@ -86,19 +95,29 @@ def compile_approved_aggregate(contract, frame: pd.DataFrame) -> ApprovedAggrega
         ColumnRef(g)
     if {"value", "n"}.intersection(groups):
         raise ValueError("Grouping column conflicts with a relational result alias.")
+    ranking_limit = getattr(contract, "ranking_limit", None)
+    if ranking_limit is not None and (not isinstance(ranking_limit, int) or isinstance(ranking_limit, bool) or not 1 <= ranking_limit <= 100):
+        raise ValueError("Approved ranking limit must be an integer from 1 to 100.")
+    if ranking_limit is not None and not groups:
+        raise ValueError("Top-N requires an approved grouping dimension.")
     plan = RelationalPlan(
         base_table="data_table", select_columns=groups, group_by=groups or None,
         aggregations={"value": CountRows() if op == "ROW_COUNT" else AggExpr("AVG" if op == "MEAN" else op, ColumnRef(target)), "n": CountRows()},
         filters=predicates, order_by=f"value {direction}" if groups else None,
+        limit=ranking_limit,
     )
     return ApprovedAggregate(plan, {
         "target_column": target, "aggregation": op, "grouping_columns": groups,
         "filters": conditions, "time_column": contract.time_column, "time_range": time_range,
         "share_of_total": contract.share_of_total, "requested_outputs": list(contract.requested_outputs),
         "comparison_values": comparisons, "ranking_direction": direction if contract.task_family == "RANKING" else None,
+        "ranking_limit": ranking_limit,
         "execution_specification": plan_to_dict(plan),
     })
 
+
+
+from packages.analytics_core.src.runtime.execution_reconciliation import reconcile_approved_execution
 
 def answer_from_execution(contract, binding: ApprovedAggregate, result_frame: pd.DataFrame, record: dict) -> AnalystResult:
     """Format the verified returned relation; never recalculate the metric."""
@@ -134,9 +153,27 @@ def answer_from_execution(contract, binding: ApprovedAggregate, result_frame: pd
         numbers["value"] = result_frame["value"].iloc[0].item()
         headline = _num(numbers["value"])
     kind = "RANKING" if contract.task_family == "RANKING" else "DESCRIPTIVE"
-    if kind == "RANKING":
+    details = [f"Executed {numbers['operation']} from the approved contract."]
+    # The user asked for an ordering ("which ... highest/lowest", "highest X by Y"): answer it first.
+    # The executor already ordered the verified relation by the approved direction, so the first
+    # row IS the answer; the full ranked table follows as supporting evidence, never instead of it.
+    asked_rank = groups and (kind == "RANKING" or contract.ranking_direction in {"ASC", "DESC"})
+    if asked_rank and numbers.get("table"):
         numbers["top"] = next(iter(numbers["table"]))
         numbers["top_value"] = numbers["table"][numbers["top"]]["value"]
-    return AnalystResult(kind, headline, [f"Executed {numbers['operation']} from the approved contract."],
+        values = [row["value"] for row in numbers["table"].values()]
+        leaders = [label for label, row in numbers["table"].items() if row["value"] == values[0]]
+        order = "lowest" if (contract.ranking_direction or "DESC") == "ASC" else "highest"
+        word = {"SUM": "total", "MEAN": "average", "MIN": "minimum", "MAX": "maximum",
+                "ROW_COUNT": "row count of"}.get(numbers["operation"], "")
+        measure = f"{word} {contract.target_column}".strip() if contract.target_column else "row count"
+        if len(leaders) > 1:
+            lead = f"{' and '.join(leaders[:3])} are tied for the {order} {measure}: {_num(values[0])}"
+        else:
+            lead = f"{numbers['top']} has the {order} {measure}: {_num(values[0])} (n={numbers['table'][numbers['top']]['n']:,})"
+        details.append(lead + ".")
+        numbers["ranking_direction_answered"] = "ASC" if order == "lowest" else "DESC"
+        numbers["leaders"] = leaders
+    return AnalystResult(kind, headline, details,
                          caveats=["Descriptive calculation; statistical significance, power, robustness and causation were not assessed."],
                          numbers=numbers, descriptive=True, finding="ranking" if kind == "RANKING" else "distribution")

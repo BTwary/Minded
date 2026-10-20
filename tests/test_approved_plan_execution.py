@@ -375,18 +375,36 @@ def test_history_reopens_source_identity_from_actual_execution_receipt(sales):
     from apps.api.src.api.v1.investigations import list_analysis_history
     from apps.api.src.models.entities import User, Dataset
     run = run_plan(sales, "What is the total revenue by region?")
+    prior_dataset_state = None
     with SessionLocal() as db:
-        user = db.get(User, "default-user")
-        if user is None:
-            user = User(id="default-user", email="approved-history@example.test", full_name="Approved History", hashed_password="unused", is_active=True)
-            db.add(user)
-        db.merge(Dataset(id="sales", project_id="proj-default", name="sales", current_version=1, row_count=5, column_count=4))
-        db.commit()
-        result = list_analysis_history(limit=1000, current_user=user, db=db)
-        record = next(r for r in result["records"] if r["id"] == run["id"])
-        source = record["source_datasets"][0]
-        assert source["name"] == "sales"
-        assert source["dataset_id"] == "sales"
-        assert source["dataset_version"] == 1
-        assert source["available"] is True
-        assert record["verification_status"] == "VERIFIED"
+        existing = db.get(Dataset, "sales")
+        if existing is not None:
+            prior_dataset_state = {col.name: getattr(existing, col.name) for col in Dataset.__table__.columns}
+    try:
+        with SessionLocal() as db:
+            user = db.get(User, "default-user")
+            if user is None:
+                user = User(id="default-user", email="approved-history@example.test", full_name="Approved History", hashed_password="unused", is_active=True)
+                db.add(user)
+            db.merge(Dataset(id="sales", project_id="proj-default", name="sales", current_version=1, row_count=5, column_count=4))
+            db.commit()
+            result = list_analysis_history(limit=1000, current_user=user, db=db)
+            record = next(r for r in result["records"] if r["id"] == run["id"])
+            source = record["source_datasets"][0]
+            assert source["name"] == "sales"
+            assert source["dataset_id"] == "sales"
+            assert source["dataset_version"] == 1
+            assert source["available"] is True
+            assert record["verification_status"] == "VERIFIED"
+    finally:
+        with SessionLocal() as db:
+            current = db.get(Dataset, "sales")
+            if prior_dataset_state is not None:
+                if current is None:
+                    db.add(Dataset(**prior_dataset_state))
+                else:
+                    for k, v in prior_dataset_state.items():
+                        setattr(current, k, v)
+            elif current is not None:
+                db.delete(current)
+            db.commit()

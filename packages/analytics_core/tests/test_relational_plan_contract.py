@@ -45,8 +45,8 @@ class TestExpressionSql(unittest.TestCase):
                     Literal(bad)
 
     def test_aggregates_and_distinct_count(self):
-        self.assertEqual(to_sql(AggExpr("sum", ColumnRef("revenue"))), "SUM(revenue)")
-        self.assertEqual(to_sql(DistinctCount(ColumnRef("customer_id"))), "COUNT(DISTINCT customer_id)")
+        self.assertEqual(to_sql(AggExpr("sum", ColumnRef("revenue"))), 'SUM("revenue")')
+        self.assertEqual(to_sql(DistinctCount(ColumnRef("customer_id"))), 'COUNT(DISTINCT "customer_id")')
 
     def test_division_zero_denominator(self):
         expr = DivExpr(
@@ -55,7 +55,7 @@ class TestExpressionSql(unittest.TestCase):
         )
         self.assertEqual(
             to_sql(expr),
-            "(SUM(revenue) / NULLIF(COUNT(DISTINCT customer_id), 0))",
+            '(SUM("revenue") / NULLIF(COUNT(DISTINCT "customer_id"), 0))',
         )
         with self.assertRaises(TypeError):
             DivExpr(
@@ -117,8 +117,8 @@ class TestRelationalPlanContract(unittest.TestCase):
 
     def test_alias_is_declared_and_preserved(self):
         sql = self._plan().to_sql()
-        self.assertIn("SUM(orders.revenue) AS sum_orders_revenue", sql)
-        self.assertIn("(customers.segment = 'Enterprise')", sql)
+        self.assertIn('SUM("orders"."revenue") AS sum_orders_revenue', sql)
+        self.assertIn('("customers"."segment" = \'Enterprise\')', sql)
 
     def test_invalid_alias_rejected(self):
         plan = RelationalPlan(

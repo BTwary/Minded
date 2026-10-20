@@ -1,3 +1,5 @@
+> **SUPERSEDED 2026-10-17.** The benchmark claims below did not reproduce in an independent re-run (21/32 raw, 19/32 clean before fixes). See `docs/AAOS_V1_0_0_RELEASE_STATUS.md`.
+
 # Current Release Certification Record
 
 **Date:** 2026-09-30  
