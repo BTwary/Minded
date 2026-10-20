@@ -85,6 +85,11 @@ function saveSaved(question: string, value: { metric?: string; aggregation?: str
   }
 }
 
+function isStructuredMultiCalculationSpec(value: string): boolean {
+  return /^\s*Tables\s*:/im.test(value) &&
+    /^\s*(?:Metric(?:\s*\/\s*parameter)?|Metrics|Measure|Measures)\s*:/im.test(value);
+}
+
 type CanonicalFilterCondition = {
   column?: string;
   operator?: string;
@@ -232,6 +237,10 @@ export default function ProposedAnalysisPanel({
   const saved = useMemo(() => (typeof window === "undefined" ? {} : loadSaved(plan.question || "")), [plan.question]);
   const contract = (plan.canonical_contract || {}) as Record<string, any>;
   const retainedGuidance = plan.guidance_context || {};
+  const requestedMeasureMissing = Boolean(contract.resolution_evidence?.requested_measure_not_found);
+  // Do not revive a previously selected rate/ratio when the current contract says the
+  // requested amount measure is absent. The blank metric is deliberate and must stay unresolved.
+  const retainedMetric = requestedMeasureMissing ? undefined : retainedGuidance.selected_metric;
   const contractMetric = typeof contract.target_column === "string" ? contract.target_column : undefined;
   const contractGroup = Array.isArray(contract.grouping_columns) ? contract.grouping_columns[0] : undefined;
   const contractAggRaw = String(contract.requested_aggregation || "").toUpperCase();
@@ -243,21 +252,21 @@ export default function ProposedAnalysisPanel({
   const savedAggregation = canRestoreSavedParameters ? saved.aggregation : undefined;
   const savedGroup = canRestoreSavedParameters ? saved.group : undefined;
   const [selectedMetric, setSelectedMetric] = useState<string>(
-    retainedGuidance.selected_metric ?? contractMetric ?? plan.target_metric ?? savedMetric ?? ""
+    contractMetric ?? plan.target_metric ?? retainedMetric ?? savedMetric ?? ""
   );
   const initialAgg = useMemo(() => inferAggregation(plan.question || ""), [plan.question]);
   const hasExplicitAggregation = /\b(total|sum|average|avg|mean|median|minimum|min|maximum|max|count|distinct|unique)\b/i.test(plan.question || "");
 
   const [selectedAggregation, setSelectedAggregation] = useState<string>(
-    retainedGuidance.selected_aggregation ?? (contractAgg || (!hasExplicitAggregation ? savedAggregation : undefined) || initialAgg)
+    contractAgg || (hasExplicitAggregation ? initialAgg : retainedGuidance.selected_aggregation ?? savedAggregation ?? initialAgg)
   );
   const [selectedGroup, setSelectedGroup] = useState<string>(
-    retainedGuidance.selected_group_dimension ?? contractGroup ?? plan.group_dimension ?? savedGroup ?? ""
+    contractGroup ?? plan.group_dimension ?? retainedGuidance.selected_group_dimension ?? savedGroup ?? ""
   );
   // A prior edit may be restored only when the current canonical preview has no resolved
   // value for that slot. Resolved question intent must win over sessionStorage from an older run.
   const [metricTouched, setMetricTouched] = useState(
-    Boolean(retainedGuidance.selected_metric) || (!contractMetric && !plan.target_metric && canRestoreSavedParameters && saved.metric !== undefined)
+    Boolean(retainedMetric) || (!contractMetric && !plan.target_metric && !requestedMeasureMissing && canRestoreSavedParameters && saved.metric !== undefined)
   );
   const [aggregationTouched, setAggregationTouched] = useState(
     Boolean(retainedGuidance.selected_aggregation) || (!contractAgg && !hasExplicitAggregation && canRestoreSavedParameters && saved.aggregation !== undefined)
@@ -354,6 +363,14 @@ export default function ProposedAnalysisPanel({
   // If the analyst edits the plan, keep every question-derived predicate in the displayed
   // calculation and add custom scope as an additional AND condition (the resolver does the same).
   const derivedCalculation = useMemo(() => {
+    if (isStructuredMultiCalculationSpec(customInstruction)) {
+      return [
+        "STRUCTURED MULTI-CALCULATION PLAN (preview only)",
+        customInstruction.trim(),
+        "Execution will validate every table, join, metric, aggregation and filter against selected data.",
+        "Each Calculation block is executed independently to preserve metric grain and population.",
+      ].join("\n\n");
+    }
     const hasParameterEdits = metricTouched || aggregationTouched || groupTouched;
     if (!hasParameterEdits && selectedScope !== "CUSTOM" && plan.planned_calculation) {
       return plan.planned_calculation;
@@ -383,10 +400,19 @@ export default function ProposedAnalysisPanel({
       return `SELECT ${groupSql}, ${selectExpr}\nFROM data\n${filterClause ? filterClause + "\n" : ""}GROUP BY ${groupSql}\nORDER BY ${orderCol} DESC;`;
     }
     return `SELECT ${selectExpr}\nFROM data${filterClause ? "\n" + filterClause : ""};`;
-  }, [selectedMetric, selectedAggregation, selectedGroup, selectedScope, activeCustomFilter, metricTouched, aggregationTouched, groupTouched, questionFilters, plan.planned_calculation]);
+  }, [selectedMetric, selectedAggregation, selectedGroup, selectedScope, activeCustomFilter, metricTouched, aggregationTouched, groupTouched, questionFilters, plan.planned_calculation, customInstruction]);
 
   // Dynamically derive the active assumptions
   const derivedAssumptions = useMemo(() => {
+    if (isStructuredMultiCalculationSpec(customInstruction)) {
+      const count = (customInstruction.match(/^\s*Calculation\s*:/gim) || []).length;
+      return [
+        `Structured calculation bundle: ${count || 1} calculation block(s)`,
+        "Each calculation's source tables, metric, aggregation, grouping and filters are validated independently.",
+        "Join paths and metric-grain fanout are checked before execution.",
+        "The whole bundle is accepted only if every requested calculation independently verifies.",
+      ];
+    }
     const list: string[] = [];
     const metric = selectedMetric.trim();
     const group = selectedGroup.trim();
@@ -424,7 +450,7 @@ export default function ProposedAnalysisPanel({
       }
     }
     return list;
-  }, [selectedMetric, selectedAggregation, selectedGroup, selectedScope, activeCustomFilter, plan.assumptions, questionFilters]);
+  }, [selectedMetric, selectedAggregation, selectedGroup, selectedScope, activeCustomFilter, plan.assumptions, questionFilters, customInstruction]);
 
   const retainedConfirmedAssumptions = Array.isArray(retainedGuidance.confirmed_assumptions)
     ? retainedGuidance.confirmed_assumptions
@@ -562,22 +588,24 @@ export default function ProposedAnalysisPanel({
         </div>
       </div>
 
-      {availableDatasets.length > 1 && (
-        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4 space-y-2 text-xs">
-          <label htmlFor="guidance-dataset" className="text-[10px] font-bold uppercase text-slate-400">
-            Dataset for this analysis
-          </label>
-          <select
-            id="guidance-dataset"
-            value={selectedDataset}
-            onChange={(event) => setSelectedDataset(event.target.value)}
-            className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-          >
-            <option value="">Let the contract resolver decide</option>
+      {availableDatasets.length > 0 && (
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 space-y-1.5 text-xs">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Target Datasets ({availableDatasets.length} in scope)
+          </div>
+          <div className="flex flex-wrap gap-1.5">
             {availableDatasets.map((dataset) => (
-              <option key={dataset.id} value={dataset.name}>{dataset.name}</option>
+              <span
+                key={dataset.id}
+                className="inline-flex items-center rounded-md border border-cyan-500/30 bg-cyan-950/40 px-2 py-1 font-mono text-[11px] text-cyan-200"
+              >
+                {dataset.name}
+              </span>
             ))}
-          </select>
+          </div>
+          <div className="text-[10px] text-slate-500">
+            This analysis automatically executes across all {availableDatasets.length} selected dataset(s) with multi-table join resolution.
+          </div>
         </div>
       )}
 
@@ -604,7 +632,7 @@ export default function ProposedAnalysisPanel({
 
           {plan.clarification_options.length > 0 && (
             <div className="space-y-1.5 pt-1">
-              <div className="text-[10px] uppercase font-bold text-amber-400">Choose the intended direction:</div>
+              <div className="text-[10px] uppercase font-bold text-amber-400">Choose an option to resolve this question:</div>
               <div className="flex flex-col gap-2">
                 {plan.clarification_options.map((opt, idx) => (
                   <label
@@ -887,15 +915,18 @@ export default function ProposedAnalysisPanel({
         {/* Free-text instruction / guidance */}
         <div className="pt-2 border-t border-slate-800/80 space-y-1">
           <label className="text-[10px] font-bold uppercase text-slate-400">
-            Optional specific instruction / question adjustment
+            Optional instruction or structured multi-calculation plan
           </label>
-          <input
-            type="text"
+          <textarea
             value={customInstruction}
             onChange={(e) => setCustomInstruction(e.target.value)}
-            placeholder="e.g. 'Exclude returns and zero-dollar orders' or 'Also report row counts per segment'"
-            className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+            rows={isStructuredMultiCalculationSpec(customInstruction) ? 12 : 3}
+            placeholder={"For a complete analysis, add one Calculation block per calculation.\n\nTables: orders + order_items\nCalculation: Completed category revenue\nMetric/parameter: order_items.net_revenue\nAggregation: SUM\nGrouping dimension: order_items.product_category\nFilter: orders.order_status = Completed\n\nCalculation: Average completed order total\nTables: orders\nMetric/parameter: orders.order_total\nAggregation: AVG\nFilter: orders.order_status = Completed"}
+            className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono"
           />
+          <p className="text-[10px] leading-relaxed text-slate-500">
+            Use one <code>Calculation:</code> block per result. Each block can have its own tables, metric(s), aggregation(s), grouping dimensions and filters. Table-qualify fields when using multiple tables.
+          </p>
         </div>
       </div>
 

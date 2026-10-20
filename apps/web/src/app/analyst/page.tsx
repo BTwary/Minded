@@ -87,6 +87,7 @@ export default function AnalystPage() {
   const [dispatchRetryId, setDispatchRetryId] = useState<string | null>(null);
   const [recordSampleRows, setRecordSampleRows] = useState<any[]>([]);
   const [recordSampleCols, setRecordSampleCols] = useState<string[]>([]);
+  const [multiDatasetCols, setMultiDatasetCols] = useState<Record<string, string[]>>({});
   const [totalRecordCount, setTotalRecordCount] = useState<number>(0);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
@@ -204,20 +205,36 @@ export default function AnalystPage() {
     let cancelled = false;
     setRecordSampleRows([]);
     setRecordSampleCols([]);
+    setMultiDatasetCols({});
     setTotalRecordCount(0);
     setPreviewError(null);
-    const targetId = selectedDatasetIds[0];
-    if (!targetId) return;
-    fetchDatasetData(targetId).then((data: any) => {
+    if (!selectedDatasetIds.length) return;
+
+    Promise.all(
+      selectedDatasetIds.map(async (id) => {
+        const ds = datasets.find((d) => d.id === id);
+        try {
+          const data: any = await fetchDatasetData(id);
+          const cols: string[] = data.columns?.length ? data.columns : Object.keys(data.rows?.[0] || {});
+          return { id, name: ds?.name || id, cols, rows: data.rows || [], total: data.total_rows || data.row_count || data.rows?.length || 0 };
+        } catch {
+          return { id, name: ds?.name || id, cols: [], rows: [], total: 0 };
+        }
+      })
+    ).then((results) => {
       if (cancelled) return;
-      setRecordSampleRows(data.rows || []);
-      setRecordSampleCols(data.columns?.length ? data.columns : Object.keys(data.rows?.[0] || {}));
-      setTotalRecordCount(data.total_rows || data.row_count || data.rows?.length || 0);
+      const combinedCols = Array.from(new Set(results.flatMap((r) => r.cols)));
+      const colsByTable: Record<string, string[]> = {};
+      results.forEach((r) => { colsByTable[r.name] = r.cols; });
+      setMultiDatasetCols(colsByTable);
+      setRecordSampleCols(combinedCols);
+      setRecordSampleRows(results[0]?.rows || []);
+      setTotalRecordCount(results.reduce((sum, r) => sum + r.total, 0));
     }).catch((cause) => {
       if (!cancelled) setPreviewError(cause instanceof Error ? cause.message : "Dataset preview unavailable.");
     });
     return () => { cancelled = true; };
-  }, [selectedDatasetIds]);
+  }, [selectedDatasetIds, datasets]);
 
   const ensureOpenAnalysisSession = async (): Promise<AnalysisSession> => {
     const current = analysisSessionRef.current;
@@ -775,14 +792,15 @@ export default function AnalystPage() {
 
       <AnalyticsDataStarter projectId={projectId} disabled={isLoading || isPlanning || loadingDatasets}
         onBusyChange={setIsUploading}
-        onUploaded={async (id, sample) => {
+        onUploaded={async (ids, sample) => {
           const refreshed = await fetchDatasets(projectId);
           setDatasets(refreshed);
-          const ids = Array.isArray(id) ? id : [id];
-          const found = ids.filter((target) => refreshed.some((dataset) => dataset.id === target));
-          if (found.length === 0) throw new Error("Upload finished, but the dataset list could not be refreshed. Reload the page to select it.");
-          const changed = await changeDatasetScope(found);
-          if (!changed) return;
+          const availableIds = ids.filter((id) => refreshed.some((dataset) => dataset.id === id));
+          if (availableIds.length !== ids.length) {
+            throw new Error(`Uploaded ${ids.length} file(s), but only ${availableIds.length} appeared in the refreshed dataset catalog. Reload the page to verify the missing dataset(s).`);
+          }
+          const changed = await changeDatasetScope(availableIds);
+          if (!changed) throw new Error("The files were uploaded, but the active analysis scope was left unchanged because the scope change was cancelled.");
           if (sample) setQuestion("What is the total revenue by region?");
         }} />
 
@@ -838,7 +856,23 @@ export default function AnalystPage() {
         {loadingDatasets && <p role="status" className="mt-3 text-xs text-slate-400">Loading your workspace…</p>}
         {!loadingDatasets && !datasets.length && <p className="mt-3 text-sm text-slate-400">No datasets yet. Upload your CSV or try the sample above.</p>}
         {previewError && <p role="alert" className="mt-3 text-xs text-amber-300">Preview unavailable: {previewError}</p>}
-        {selectedDatasetIds.length > 0 && recordSampleCols.length > 0 && <p className="mt-3 text-xs text-slate-400">Available columns: {recordSampleCols.join(", ")}</p>}
+        {selectedDatasetIds.length > 1 ? (
+          <div className="mt-3 text-xs text-slate-400 space-y-1.5 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+            <div className="text-[11px] font-semibold text-slate-300">Available columns across all {selectedDatasetIds.length} selected tables:</div>
+            <div className="flex flex-col gap-1.5">
+              {Object.entries(multiDatasetCols).map(([tableName, cols]) => (
+                <div key={tableName} className="text-[11px] leading-relaxed">
+                  <span className="font-mono text-cyan-300 font-bold">{tableName}:</span>{" "}
+                  <span className="text-slate-400">{cols.join(", ")}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          selectedDatasetIds.length === 1 && recordSampleCols.length > 0 && (
+            <p className="mt-3 text-xs text-slate-400">Available columns: {recordSampleCols.join(", ")}</p>
+          )
+        )}
       </section>
 
       {/* One analysis session owns many question runs and one cumulative report. */}
@@ -926,23 +960,36 @@ export default function AnalystPage() {
       {/* Query Input Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl focus-within:border-cyan-500/50 transition-all">
         <label htmlFor="business-question" className="block text-base font-semibold text-white mb-2">2. Ask a business question</label>
-        <p className="text-xs text-slate-400 mb-3">Use the column names above. Next, you’ll review what will be calculated before approving the run.</p>
+        <p className="text-xs text-slate-400 mb-3">Use table-qualified column names. You can enter a batch here, or add separate <code>Calculation:</code> blocks in the review panel for calculations with different filters or groupings. MindEd previews every metric, aggregation, filter and source table before approval.</p>
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handlePlanQuestion(question);
           }}
-          className="flex items-center gap-3"
+          className="flex flex-col md:flex-row md:items-start gap-3"
         >
-          <div className="relative flex-1">
-            <input
+          <div className="relative flex-1 min-w-0">
+            <textarea
               id="business-question"
-              type="text"
-              placeholder="Ask an analytical question (e.g. 'Which region has the highest revenue?', 'Does discount_pct affect quantity?', 'Why did revenue change?')..."
+              rows={5}
+              placeholder={`Ask a question, or submit a multi-calculation batch:
+Tables: orders + order_items
+
+Calculation: Net revenue by category
+Metric/parameter: order_items.net_revenue
+Aggregation: SUM
+Group by: order_items.product_category
+Filter: orders.order_status = Completed
+
+Calculation: Average completed order total
+Tables: orders
+Metric/parameter: orders.order_total
+Aggregation: AVG
+Filter: orders.order_status = Completed`}
               value={question}
               onChange={(e) => { setQuestion(e.target.value); setProposedPlan(null); setPlanNotice(null); setPreviewedGuidanceKey(""); }}
               disabled={busy || analysisSession?.status === "CLOSED"}
-              className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 font-sans"
+              className="w-full min-h-36 resize-y bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-sm leading-6 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 font-mono"
             />
           </div>
 
@@ -985,7 +1032,11 @@ export default function AnalystPage() {
         <ProposedAnalysisPanel
           key={`${clarificationInvestigationId || "new"}-${proposedPlan.question}-${proposedPlan.plan_hash || "no-hash"}`}
           plan={proposedPlan}
-          availableDatasets={datasets.map((dataset) => ({ id: dataset.id, name: dataset.name }))}
+          availableDatasets={
+            selectedDatasetIds.length > 0
+              ? datasets.filter((dataset) => selectedDatasetIds.includes(dataset.id)).map((dataset) => ({ id: dataset.id, name: dataset.name }))
+              : datasets.map((dataset) => ({ id: dataset.id, name: dataset.name }))
+          }
           availableColumns={recordSampleCols}
           availableNumericCols={recordSampleCols.filter((c) => {
             const sample = recordSampleRows.find((row) => row?.[c] !== null && row?.[c] !== undefined)?.[c];
