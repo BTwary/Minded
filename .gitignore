@@ -26,6 +26,8 @@ apps/web/out/
 *.bak
 *.bak*
 *.log
+*.exe
+*.zip
 artifacts/
 run_full_analysis.py
 scripts/update_multi_upload.py
