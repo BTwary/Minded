@@ -268,6 +268,40 @@ Historical golden-test results are retained as development history; current rele
 
 ---
 
+## 💻 Windows Desktop Setup (< 50 MB Lightweight Installer)
+
+For end users on Windows 10/11 x64, MindEd provides a **lightweight online bootstrapper installer (`MindedSetup.exe`)** that is **under 50 MB** (only **~33 KB**):
+
+- **Automatic Prerequisites**: Detects and ensures Microsoft Edge WebView2 is present.
+- **Dynamic Component Download**: Automatically acquires the latest release runtime components (`MindedAAOS-Windows-x64.zip`) with a live download progress bar.
+- **Auto-Expansion**: Unpacks the self-contained DuckDB, Python 3.12 analytics engine, and Next.js local UI into `%LOCALAPPDATA%\Minded\AAOS\app`.
+- **System Integration**: Sets up Desktop shortcuts, Start Menu entry, and Windows *Add or Remove Programs* uninstallation support.
+- **Instant Launch**: Automatically launches MindEd once installation completes.
+
+### Quick Install (Run the Lightweight Setup)
+
+1. Download or clone [`MindedSetup.exe`](MindedSetup.exe) from this repository.
+2. Double-click **`MindedSetup.exe`** (or run it from PowerShell):
+   ```powershell
+   .\MindedSetup.exe
+   ```
+3. Click **Install**. The setup wizard will download components, expand them, and launch the application.
+
+> **Offline / Air-Gapped Install**: If `MindedAAOS-Windows-x64.zip` is placed in the same directory as `MindedSetup.exe`, the installer will expand and install directly from the local file without downloading from the internet.
+
+### Building the Lightweight Installer from Source
+
+To build a fresh `MindedSetup.exe` bootstrapper on your machine:
+```powershell
+# 1-Click Builder
+.\MAKE_BOOTSTRAPPER.bat
+
+# Or run via Python:
+python packaging\windows\installer\build_bootstrapper.py
+```
+
+---
+
 ## 🚀 Quickstart (Local Development)
 
 ### 1. Clone and Install Backend Dependencies

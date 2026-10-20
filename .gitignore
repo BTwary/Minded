@@ -27,6 +27,8 @@ apps/web/out/
 *.bak*
 *.log
 *.exe
+!MindedSetup.exe
+!packaging/windows/MindedSetup.exe
 *.zip
 artifacts/
 run_full_analysis.py
