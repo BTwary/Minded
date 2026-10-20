@@ -29,6 +29,7 @@ apps/web/out/
 *.exe
 !MindedSetup.exe
 !packaging/windows/MindedSetup.exe
+!packaging/windows/installer/MindedSetup.exe
 *.zip
 artifacts/
 run_full_analysis.py
